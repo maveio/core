@@ -1,0 +1,238 @@
+/* See the Tailwind configuration guide for advanced usage
+   https://tailwindcss.com/docs/configuration */
+
+@import "tailwindcss" source(none);
+
+/* System fonts by default. Deployments can provide /css/fonts.css and
+   override --font-sans to use their own font family. */
+:root {
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+@source "../css";
+@source "../js";
+@source "../../lib/mave_core_web";
+
+/* A Tailwind plugin that makes "hero-#{ICON}" classes available.
+   The heroicons installation itself is managed by your mix.exs */
+@plugin "../vendor/heroicons";
+
+/* daisyUI Tailwind Plugin. You can update this file by fetching the latest version with:
+   curl -sLO https://github.com/saadeghi/daisyui/releases/latest/download/daisyui.js
+   Make sure to look at the daisyUI changelog: https://daisyui.com/docs/changelog/ */
+@plugin "../vendor/daisyui" {
+  themes: false;
+}
+
+/* Custom Mave Light Theme - stone colors with blue accent
+   Based on the ManageUI aesthetic from the legacy mave dashboard */
+@plugin "../vendor/daisyui-theme" {
+  name: "mave";
+  default: true;
+  prefersdark: false;
+  color-scheme: "light";
+
+  /* Base colors - stone palette for neutral backgrounds */
+  --color-base-100: oklch(98.5% 0.002 75);
+  /* ~stone-50 */
+  --color-base-200: oklch(96% 0.003 75);
+  /* ~stone-100 */
+  --color-base-300: oklch(92% 0.004 75);
+  /* ~stone-200 */
+  --color-base-content: oklch(28% 0.006 75);
+  /* ~stone-800 */
+
+  /* Primary - blue accent (matching ManageUI blue-500/600) */
+  --color-primary: oklch(63% 0.2 255);
+  /* ~blue-500 */
+  --color-primary-content: oklch(100% 0 0);
+
+  /* Secondary - stone for secondary actions */
+  --color-secondary: oklch(55% 0.01 75);
+  /* ~stone-500 */
+  --color-secondary-content: oklch(100% 0 0);
+
+  /* Accent - lighter blue for hover states */
+  --color-accent: oklch(68% 0.18 255);
+  /* ~blue-400 */
+  --color-accent-content: oklch(100% 0 0);
+
+  /* Neutral - dark stone for sidebar/chrome */
+  --color-neutral: oklch(22% 0.01 75);
+  /* ~stone-900 */
+  --color-neutral-content: oklch(70% 0.01 75);
+  /* ~stone-400 */
+
+  /* Semantic colors */
+  --color-info: oklch(62% 0.214 259.815);
+  --color-info-content: oklch(97% 0.014 254.604);
+  --color-success: oklch(70% 0.14 182.503);
+  --color-success-content: oklch(98% 0.014 180.72);
+  --color-warning: oklch(66% 0.179 58.318);
+  --color-warning-content: oklch(98% 0.022 95.277);
+  --color-error: oklch(58% 0.253 17.585);
+  --color-error-content: oklch(96% 0.015 12.422);
+
+  /* Border radius - matching rounded-md (6px) */
+  --radius-selector: 0.375rem;
+  --radius-field: 0.375rem;
+  --radius-box: 0.5rem;
+
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 1;
+  --noise: 0;
+}
+
+/* Custom Mave Dark Theme (for sidebar and dark mode) */
+@plugin "../vendor/daisyui-theme" {
+  name: "mave-dark";
+  default: false;
+  prefersdark: true;
+  color-scheme: "dark";
+
+  --color-base-100: oklch(22% 0.01 75);
+  /* stone-900 */
+  --color-base-200: oklch(18% 0.008 75);
+  --color-base-300: oklch(15% 0.006 75);
+  --color-base-content: oklch(70% 0.01 75);
+  /* stone-400 */
+
+  --color-primary: oklch(63% 0.2 255);
+  --color-primary-content: oklch(100% 0 0);
+  --color-secondary: oklch(55% 0.01 75);
+  --color-secondary-content: oklch(100% 0 0);
+  --color-accent: oklch(68% 0.18 255);
+  --color-accent-content: oklch(100% 0 0);
+  --color-neutral: oklch(15% 0.006 75);
+  --color-neutral-content: oklch(70% 0.01 75);
+
+  --color-info: oklch(62% 0.214 259.815);
+  --color-info-content: oklch(97% 0.014 254.604);
+  --color-success: oklch(70% 0.14 182.503);
+  --color-success-content: oklch(98% 0.014 180.72);
+  --color-warning: oklch(66% 0.179 58.318);
+  --color-warning-content: oklch(98% 0.022 95.277);
+  --color-error: oklch(58% 0.253 17.585);
+  --color-error-content: oklch(96% 0.015 12.422);
+
+  --radius-selector: 0.375rem;
+  --radius-field: 0.375rem;
+  --radius-box: 0.5rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 1;
+  --noise: 0;
+}
+
+/* Add variants based on LiveView classes */
+@custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
+@custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
+@custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
+
+/* Use the data attribute for dark mode  */
+@custom-variant dark (&:where([data-theme=mave-dark], [data-theme=mave-dark] *));
+
+/* Make LiveView wrapper divs transparent for layout */
+[data-phx-session],
+[data-phx-teleported-src] {
+  display: contents
+}
+
+/* Shared shimmer used by analytics placeholders while LiveView fetches data. */
+.data-loading-skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: rgb(245 245 244 / 0.9);
+}
+
+.data-loading-skeleton::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(
+    100deg,
+    transparent 20%,
+    rgb(255 255 255 / 0.78) 48%,
+    transparent 76%
+  );
+  transform: translateX(-110%);
+  animation: data-skeleton-shimmer 1.7s ease-in-out infinite;
+}
+
+@keyframes data-skeleton-shimmer {
+  to {
+    transform: translateX(110%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .data-loading-skeleton::after {
+    animation: none;
+  }
+}
+
+/* Hide number input spin buttons (Safari/Chrome/Firefox) */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type=number] {
+  -moz-appearance: textfield;
+}
+
+/* Purpose-built highlighting for dashboard embed snippets. */
+.mave-snippet {
+  color: #d6d3d1;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.mave-snippet-tag {
+  color: #38bdf8;
+}
+
+.mave-snippet-attr {
+  color: #93c5fd;
+}
+
+.mave-snippet-value {
+  color: #f8fafc;
+}
+
+.mave-snippet-punct {
+  color: #d6d3d1;
+}
+
+/* Syntax highlighting for dashboard embed snippets. */
+.highlight {
+  color: #d6d3d1;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* This file is for your main application CSS */
+
+.dashboard-upload .dashboard-upload-default {
+  background:
+    radial-gradient(circle at top, rgb(248 113 113 / 0.08), transparent 52%),
+    rgb(28 25 23);
+}
+
+.dashboard-upload[drag-over] .dashboard-upload-default {
+  opacity: 0;
+}
+
+.dashboard-upload[drag-over] .dashboard-upload-dragover {
+  opacity: 1;
+}
+
+.dashboard-upload[drag-over] .dashboard-upload-dragover-frame {
+  background:
+    radial-gradient(circle at top, rgb(59 130 246 / 0.12), transparent 56%),
+    rgb(28 25 23 / 0.96);
+}

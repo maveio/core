@@ -1,0 +1,20 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public synthetic TLS key used only by the local Kubernetes TLS regression server"
+paths = ['''^test/fixtures/k8s_tls/server-key\.pem$''']
+
+[[allowlists]]
+description = "Public Phoenix development cookie key; production requires a runtime secret"
+condition = "AND"
+paths = ['''^config/dev\.exs$''']
+regexTarget = "secret"
+regexes = ['''^m7NQl01Q9Lmr11JjowpF/zfLc5xYQedPWEajVBp9FBwbOq/8KlCqu72Ng83WN8jm$''']
+
+[[allowlists]]
+description = "Public Phoenix test cookie key; never used by production configuration"
+condition = "AND"
+paths = ['''^config/test\.exs$''']
+regexTarget = "secret"
+regexes = ['''^KSQxa3MJqwaXHPZnVxc7hZ1iuprxl/VsWLTl6FtT250m6EjHif609Qh2ryHpr9ar$''']

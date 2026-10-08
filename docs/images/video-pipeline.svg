@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="580" viewBox="0 0 1080 580" role="img" aria-labelledby="title description">
+  <title id="title">Mave Core — from upload to playback</title>
+  <desc id="description">Manage videos from the dashboard or API. Resumable uploads start a versioned processing graph: inspect the source, encode video and audio, generate posters, and package the results. Publish to S3-compatible storage for the player. Playback events feed ClickHouse analytics back into the dashboard. This is a simplified product architecture, not an exact preset graph.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9" fill="none" stroke="#8ec5ff" stroke-width="1.6"/>
+    </marker>
+    <marker id="return-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9" fill="none" stroke="#8ec5ff" stroke-width="1.6"/>
+    </marker>
+  </defs>
+  <rect width="1080" height="580" rx="24" fill="#fafaf9"/>
+  <g font-family="Figtree, Arial, sans-serif">
+    <text x="44" y="52" fill="#155dfb" font-size="15" font-weight="500" letter-spacing="2">MAVE CORE</text>
+    <text x="44" y="99" fill="#1c1917" font-size="34" font-weight="500">One video workflow. Storage you control.</text>
+    <text x="44" y="132" fill="#78716c" font-size="18">Manage, process, publish, and understand your videos.</text>
+
+    <rect x="44" y="204" width="184" height="114" rx="16" fill="#ffffff" stroke="#e7e5e4"/>
+    <text x="62" y="235" fill="#1c1917" font-size="19" font-weight="500">Dashboard / API</text>
+    <text x="62" y="266" fill="#57534e" font-size="16">Your video library</text>
+    <text x="62" y="291" fill="#57534e" font-size="16">Resumable uploads</text>
+
+    <path d="M228 261 H290" stroke="#8ec5ff" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+    <rect x="294" y="177" width="448" height="206" rx="24" fill="#ffffff" stroke="#e7e5e4"/>
+    <text x="314" y="210" fill="#1c1917" font-size="19" font-weight="500">Versioned encoding graph</text>
+    <text x="314" y="235" fill="#57534e" font-size="15">FFmpeg steps · dependencies · retries</text>
+
+    <g stroke="#8ec5ff" stroke-width="1.6" fill="none" marker-end="url(#arrow)">
+      <path d="M410 303 H435 V266 H462"/>
+      <path d="M410 303 H462"/>
+      <path d="M410 303 H435 V342 H462"/>
+      <path d="M570 266 H595 V303 H622"/>
+      <path d="M570 303 H622"/>
+      <path d="M570 342 H595 V303 H622"/>
+    </g>
+    <g fill="#eff6ff">
+      <rect x="314" y="283" width="96" height="40" rx="8"/>
+      <rect x="466" y="249" width="104" height="34" rx="8"/>
+      <rect x="466" y="286" width="104" height="34" rx="8"/>
+      <rect x="466" y="325" width="104" height="34" rx="8"/>
+      <rect x="626" y="278" width="96" height="50" rx="8"/>
+    </g>
+    <g text-anchor="middle" fill="#1c1917" font-size="16">
+      <text x="362" y="309">Inspect</text>
+      <text x="518" y="272">Video</text>
+      <text x="518" y="309">Audio</text>
+      <text x="518" y="348">Posters</text>
+      <text x="674" y="309">Package</text>
+    </g>
+
+    <path d="M742 303 H802" stroke="#8ec5ff" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+    <rect x="806" y="248" width="230" height="114" rx="16" fill="#ffffff" stroke="#e7e5e4"/>
+    <text x="824" y="279" fill="#1c1917" font-size="19" font-weight="500">S3-compatible storage</text>
+    <text x="824" y="309" fill="#57534e" font-size="16">Versioned media + HLS</text>
+    <text x="824" y="334" fill="#57534e" font-size="16">Player manifest</text>
+
+    <path d="M921 362 V421" stroke="#8ec5ff" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+    <rect x="806" y="426" width="230" height="76" rx="16" fill="#ffffff" stroke="#e7e5e4"/>
+    <text x="824" y="457" fill="#1c1917" font-size="19" font-weight="500">Embeddable player</text>
+    <text x="824" y="484" fill="#57534e" font-size="16">On your website</text>
+
+    <path d="M806 465 H649" stroke="#8ec5ff" stroke-width="2" fill="none" marker-end="url(#return-arrow)"/>
+    <text x="673" y="446" fill="#57534e" font-size="15">Playback events</text>
+    <rect x="390" y="426" width="254" height="76" rx="16" fill="#ffffff" stroke="#e7e5e4"/>
+    <text x="410" y="457" fill="#1c1917" font-size="19" font-weight="500">Viewing analytics</text>
+    <text x="410" y="484" fill="#57534e" font-size="16">Core + ClickHouse</text>
+    <path d="M390 465 H136 V323" stroke="#8ec5ff" stroke-width="2" fill="none" marker-end="url(#return-arrow)"/>
+    <text x="177" y="446" fill="#57534e" font-size="15">Back to your dashboard</text>
+
+    <text x="44" y="548" fill="#78716c" font-size="15">Simplified workflow · Start on one host with Docker Compose</text>
+  </g>
+</svg>

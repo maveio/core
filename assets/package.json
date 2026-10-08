@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@lottiefiles/lottie-player": "^2.0.12",
+    "chart.js": "^4.5.1"
+  }
+}

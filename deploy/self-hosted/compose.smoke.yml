@@ -1,0 +1,17 @@
+# Only used by smoke.sh, with a fresh project, private .env and owned network.
+services:
+  minio:
+    build:
+      context: ./minio
+    ports: !reset []
+  storage-init:
+    build:
+      context: ./minio
+  caddy:
+    ports: !reset []
+
+networks:
+  default:
+    external: true
+    name: ${MAVE_SMOKE_RUN_ID:?Run this through smoke.sh}
+    ipam: !reset {}

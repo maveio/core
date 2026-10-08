@@ -1,0 +1,88 @@
+name: Release Core
+run-name: Release Core (${{ inputs.bump }})
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version increase (first release uses the current version)
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: core-release
+  cancel-in-progress: false
+jobs:
+  version:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BUMP: ${{ inputs.bump }}
+        run: python3 .github/scripts/release.py plan --bump "$RELEASE_BUMP"
+  checks:
+    needs: version
+    uses: ./.github/workflows/security.yml
+    with:
+      release_version: ${{ needs.version.outputs.version }}
+  self-hosted:
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Test a fresh installation from a source archive
+        env:
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          source_dir="$RUNNER_TEMP/core-source"
+          mkdir "$source_dir"
+          git archive HEAD | tar -x -C "$source_dir"
+          python3 "$source_dir/.github/scripts/release.py" apply
+          "$source_dir/deploy/self-hosted/smoke.sh"
+      - name: Show redacted installation diagnostics
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          for directory in Path('/tmp').glob('mave-core-smoke.*'):
+              env = directory / '.env'
+              values = [line.partition('=')[2] for line in env.read_text().splitlines()
+                        if re.search(r'PASSWORD|SECRET|KEY|COOKIE', line.partition('=')[0])] if env.exists() else []
+              for name in ('build.log', 'start.log', 'ready.log'):
+                  path = directory / name
+                  if not path.exists():
+                      continue
+                  text = '\n'.join(path.read_text(errors='replace').splitlines()[-60:])
+                  for value in values:
+                      if value:
+                          text = text.replace(value, '[REDACTED]')
+                  print(f'::group::{name}\n{text}\n::endgroup::')
+          PY
+  release:
+    needs: [version, checks, self-hosted]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Publish tested version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: python3 .github/scripts/release.py publish

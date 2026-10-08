@@ -1,0 +1,28 @@
+{
+  "audio_tracks": [],
+  "created_at": 1700000000,
+  "id": "ubg50LeDE9v86ye",
+  "metrics_key": "AAAAAAAAAAAAAAAAAAAAAA==",
+  "name": "Sample video",
+  "poster": {
+    "image_src": "https://image.mave.io/ubg50LeDE9v86ye.webp",
+    "initial_frame_src": "https://image.mave.io/ubg50LeDE9v86ye.webp?time=0",
+    "renditions": [],
+    "type": null,
+    "video_src": null
+  },
+  "settings": {
+    "aspect_ratio": "16 / 9"
+  },
+  "space_id": "ubg50",
+  "subtitles": [],
+  "video": {
+    "aspect_ratio": "16 / 9",
+    "duration": 10.0,
+    "filetype": "mp4",
+    "id": "1111111111111111111111",
+    "renditions": [],
+    "size": 1000000,
+    "version": 8
+  }
+}

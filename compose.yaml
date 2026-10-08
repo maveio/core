@@ -1,0 +1,7 @@
+# Zero-configuration standalone Core. The first run builds the release image.
+# Open http://localhost:4000 and complete the one-time setup.
+name: mave-core-standalone
+include:
+  - path:
+      - ./deploy/self-hosted/compose.yml
+      - ./deploy/self-hosted/compose.quickstart.yml

@@ -1,0 +1,32 @@
+/* Storybook stylesheet - pure Tailwind CSS matching mave_core */
+@import "tailwindcss" source(none);
+@source "../css";
+@source "../js";
+@source "../../lib/mave_core_web/**/*.ex";
+@source "../../lib/mave_core_web/**/*.heex";
+@source "../../storybook/**/*.exs";
+
+/* Heroicons */
+@plugin "../vendor/heroicons";
+
+/* Add variants based on LiveView classes */
+@custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
+@custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
+@custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
+
+/* Make LiveView wrapper divs transparent for layout */
+[data-phx-session],
+[data-phx-teleported-src] {
+  display: contents
+}
+
+/* Match the dashboard's system-font default; deployments can override --font-sans. */
+:root {
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* Storybook sandbox styling - apply the configured font */
+.mave-core {
+  font-family: var(--font-sans);
+  text-rendering: geometricPrecision;
+}

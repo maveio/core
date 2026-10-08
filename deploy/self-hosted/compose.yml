@@ -1,0 +1,226 @@
+name: mave-core
+
+x-core-environment: &core-environment
+  RELEASE_NODE: mave_core@127.0.0.1
+  DATABASE_URL: ecto://mave_core:${POSTGRES_PASSWORD:-}@postgres/mave_core
+  POOL_SIZE: "10"
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_USER: mave_core
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+  CLICKHOUSE_DATABASE: mave_metrics
+  CLICKHOUSE_POOL_SIZE: "5"
+  SECRET_KEY_BASE: ${SECRET_KEY_BASE:-}
+  MAVE_CORE_INTERNAL_SECRET: ${MAVE_CORE_INTERNAL_SECRET:-}
+  MAVE_DOMAIN: ${MAVE_BASE_URL:-http://localhost:4000}
+  MAVE_IMAGE_BASE_URL: ${MAVE_BASE_URL:-http://localhost:4000}
+  MAVE_PUBLIC_CDN_BASE_URL: ${MAVE_BASE_URL:-http://localhost:4000}/storage
+  MAVE_PUBLIC_CDN_MODE: path
+  MAVE_DEFAULT_STORAGE_PROFILE: default
+  MAVE_UPLOAD_ENDPOINT: ${MAVE_BASE_URL:-http://localhost:4000}/files
+  MAVE_UPLOAD_BUCKET: mave-upload
+  MAVE_UPLOAD_SOURCE_BASE_URL: http://minio:9000
+  MAVE_UPLOAD_SOURCE_REGION: us-east-1
+  MAVE_UPLOAD_HOOK_SECRET: ${MAVE_UPLOAD_HOOK_SECRET:-}
+  MAVE_UPLOAD_OBJECT_ACL: "false"
+  MAVE_UPLOAD_TEMPLATE: publish_default
+  MAVE_TRUSTED_PROXY_CIDRS: ${MAVE_CADDY_INTERNAL_IP:-172.30.0.254}/32
+  MAVE_FLOW_DIRECT_STORAGE_FFMPEG_INPUT: "true"
+  S3_ENDPOINT: http://minio:9000
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+  S3_REGION: us-east-1
+  BUCKET_PREFIX: space-
+  MAVE_MAILER_ADAPTER: ${MAVE_MAILER_ADAPTER:-none}
+  MAVE_EMAIL_FROM_NAME: ${MAVE_EMAIL_FROM_NAME:-Mave}
+  MAVE_EMAIL_FROM_ADDRESS: ${MAVE_EMAIL_FROM_ADDRESS:-noreply@localhost}
+  SMTP_RELAY: ${SMTP_RELAY:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_TLS: ${SMTP_TLS:-always}
+  SMTP_SSL: ${SMTP_SSL:-false}
+
+x-core-service: &core-service
+  image: ${MAVE_CORE_IMAGE:-mave-core:local}
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: ${MAVE_CORE_PIDS_LIMIT:-2048}
+  mem_limit: ${MAVE_CORE_MEMORY_LIMIT:-8g}
+  cpus: ${MAVE_CORE_CPU_LIMIT:-4}
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,noexec,size=${MAVE_CORE_SCRATCH_BYTES:-8589934592},mode=1777
+  env_file:
+    - path: .env
+      required: false
+  environment: *core-environment
+
+services:
+  postgres:
+    image: postgres:17.11-alpine3.23
+    environment:
+      POSTGRES_USER: mave_core
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_DB: mave_core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mave_core -d mave_core"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8.33-alpine
+    environment:
+      CLICKHOUSE_USER: mave_core
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DB: mave_metrics
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "clickhouse-client --user mave_core --password \"$$CLICKHOUSE_PASSWORD\" --query 'SELECT 1'",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+
+  minio:
+    build:
+      context: ../minio
+      target: server
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "127.0.0.1:${MAVE_MINIO_CONSOLE_PORT:-9001}:9001"
+    restart: unless-stopped
+    volumes:
+      - minio_data:/data
+
+  storage-init:
+    build:
+      context: ../minio
+      target: client
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+    entrypoint: /bin/sh
+    command:
+      - -eu
+      - -c
+      - |
+        mc alias set mave http://minio:9000 "$${S3_ACCESS_KEY:-}" "$${S3_SECRET_KEY:-}"
+        mc mb --ignore-existing mave/mave-upload
+        mc anonymous set none mave/mave-upload
+    restart: "no"
+
+  migrate:
+    <<: *core-service
+    command: /app/bin/migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    <<: *core-service
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      storage-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  upload:
+    image: tusproject/tusd:v2.5.0
+    command:
+      - -port=1080
+      - -behind-proxy=true
+      - -disable-download=true
+      - -expose-metrics=false
+      - -show-greeting=false
+      - -verbose=false
+      - -max-size=${MAVE_MEDIA_INPUT_MAX_BYTES:-21474836480}
+      - -s3-bucket=mave-upload
+      - -s3-endpoint=http://minio:9000
+      - -hooks-http=http://app:4000/internal/upload-hooks/tusd?secret=${MAVE_UPLOAD_HOOK_SECRET:-}
+      - -hooks-enabled-events=pre-create,post-receive,post-finish
+      - -progress-hooks-interval=20s
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-}
+      AWS_REGION: us-east-1
+    depends_on:
+      app:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    environment:
+      MAVE_CADDY_ADDRESS: ${MAVE_CADDY_ADDRESS:-:80}
+    ports:
+      - "${MAVE_HTTP_PORT:-4000}:80"
+      - "${MAVE_HTTPS_PORT:-4443}:443"
+      - "${MAVE_HTTPS_PORT:-4443}:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      upload:
+        condition: service_started
+    networks:
+      default:
+        ipv4_address: ${MAVE_CADDY_INTERNAL_IP:-172.30.0.254}
+    restart: unless-stopped
+
+  bootstrap:
+    <<: *core-service
+    profiles: [tools]
+    command: /app/bin/bootstrap
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+volumes:
+  caddy_config:
+  caddy_data:
+  clickhouse_data:
+  minio_data:
+  postgres_data:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${MAVE_DOCKER_SUBNET:-172.30.0.0/24}

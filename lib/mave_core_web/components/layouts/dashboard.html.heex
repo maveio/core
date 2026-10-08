@@ -1,0 +1,44 @@
+<div class="w-full h-full flex bg-white">
+  <!-- Sidebar -->
+  <div
+    id="sidebar"
+    class="w-56 relative flex-none flex flex-col bg-stone-900 z-50 overflow-hidden"
+  >
+    <.logo />
+    <.menu
+      current_user={assigns[:current_user] || %{email: ""}}
+      current_space={assigns[:current_space] || %{id: nil}}
+    />
+    <.sidebar_usage usage={assigns[:sidebar_usage]} />
+    <.spacepicker
+      current_user={assigns[:current_user] || %{id: nil}}
+      current_space={assigns[:current_space] || %{id: nil, domains: []}}
+      spaces={assigns[:spaces] || []}
+      allow_creation={assigns[:can_create_space] || false}
+    />
+  </div>
+
+  <!-- Top Bar & Content -->
+  <div class="flex-1 flex flex-col min-w-0 relative">
+    <.bar
+      user_email={Map.get(assigns[:current_user] || %{}, :email, "")}
+      route={nil}
+      suggests={assigns[:suggests] || []}
+      extra_padding={assigns[:settings_open] || false}
+    />
+
+    <!-- Main Content -->
+    <main class="flex-1 overflow-hidden bg-white relative">
+      <.flash_group flash={@flash} />
+      <MaveCoreWeb.UserLiveAuth.create_space_modal
+        show={assigns[:show_create_space_modal] || false}
+        form={
+          assigns[:create_space_form] ||
+            to_form(MaveCore.SpaceCreation.change_form(%{}), as: :space)
+        }
+        owner_space_options={assigns[:create_space_owner_space_options] || []}
+      />
+      {@inner_content}
+    </main>
+  </div>
+</div>

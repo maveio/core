@@ -1,0 +1,138 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mave_core_dev
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  minio:
+    build:
+      context: ./deploy/minio
+      target: server
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    ports:
+      - "127.0.0.1:9010:9000"
+      - "127.0.0.1:9011:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    volumes:
+      - minio_data:/data
+
+  clickhouse:
+    image: clickhouse/clickhouse-server
+    environment:
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=password
+      - CLICKHOUSE_DB=mave_metrics
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9002:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    command: >
+      /bin/bash -c "
+      if [ -f .envrc ]; then set -a && . ./.envrc && set +a; fi &&
+      mix deps.get &&
+      mix ecto.create -r MaveCore.Repo &&
+      mix ecto.migrate -r MaveCore.Repo &&
+      echo 'Waiting for ClickHouse...' &&
+      until (echo > /dev/tcp/clickhouse/8123) >/dev/null 2>&1; do sleep 1; done &&
+      mix ecto.create -r MaveCore.ClickHouseRepo &&
+      mix ecto.migrate -r MaveCore.ClickHouseRepo &&
+      mix phx.server
+      "
+    ports:
+      - "127.0.0.1:4001:4000"
+    volumes:
+      - .:/app
+    environment:
+      - S3_ENDPOINT=http://minio:9000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_REGION=us-east-1
+      - POSTGRES_HOST=postgres
+      - CLICKHOUSE_HOST=clickhouse
+      - MIX_ENV=dev
+      - MAVE_CORE_INTERNAL_SECRET=abc123
+      - MAVE_UPLOAD_ENDPOINT=http://upload:1080/files
+      - MAVE_UPLOAD_SOURCE_BASE_URL=http://minio:9000
+      - MAVE_UPLOAD_HOOK_SECRET=abc123
+      - MAVE_UPLOAD_TEMPLATE=publish_default
+    depends_on:
+      minio:
+        condition: service_healthy
+      postgres:
+        condition: service_started
+      clickhouse:
+        condition: service_started
+
+  upload:
+    image: tusproject/tusd:v2.5.0
+    command:
+      - "-port=1080"
+      - "-behind-proxy=true"
+      - "-disable-download=true"
+      - "-expose-metrics=false"
+      - "-show-greeting=true"
+      - "-verbose=false"
+      - "-max-size=${MAVE_MEDIA_INPUT_MAX_BYTES:-21474836480}"
+      - "-upload-dir=/upload"
+      - "-s3-bucket=mave-upload"
+      - "-s3-endpoint=http://minio:9000"
+      - "-hooks-http=http://app:4000/internal/upload-hooks/tusd?secret=abc123"
+      - "-hooks-enabled-events=pre-create,post-receive,post-finish"
+      - "-progress-hooks-interval=20s"
+    environment:
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_REGION=us-east-1
+    ports:
+      - "127.0.0.1:1080:1080"
+    depends_on:
+      minio:
+        condition: service_healthy
+      app:
+        condition: service_started
+
+  # Helper to create default buckets
+  createbuckets:
+    build:
+      context: ./deploy/minio
+      target: client
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin; do echo 'Waiting for MinIO...'; sleep 1; done;
+      /usr/bin/mc mb --ignore-existing myminio/space-ubg50;
+      /usr/bin/mc mb --ignore-existing myminio/mave-upload;
+      /usr/bin/mc anonymous set public myminio/space-ubg50;
+      /usr/bin/mc anonymous set public myminio/mave-upload;
+      exit 0;
+      "
+
+volumes:
+  postgres_data:
+  minio_data:
+  clickhouse_data:

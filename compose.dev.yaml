@@ -1,0 +1,8 @@
+# Standalone development with source reload and a local email inbox.
+# docker compose -f compose.dev.yaml up
+name: mave-core-development
+include:
+  - path:
+      - ./deploy/self-hosted/compose.yml
+      - ./deploy/self-hosted/compose.quickstart.yml
+      - ./deploy/self-hosted/compose.development.yml

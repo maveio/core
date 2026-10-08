@@ -1,0 +1,213 @@
+<!-- modal begin -->
+<div
+  class="fixed top-0 left-0 w-screen h-screen bg-stone-100 z-50 flex items-center justify-center"
+  style="font-family: var(--font-sans); color-scheme: light;"
+>
+  <%= if @live_action == :signup do %>
+    <div class="fixed md:flex top-0 opacity-0 md:opacity-100 pointer-events-none md:pointer-events-auto left-0 w-80 h-screen bg-blue-700 2xl:z-10 flex-col justify-center z-50">
+      <div
+        class="absolute w-full h-full pointer-events-none"
+        style="background-image: url(/images/noise.png); background-size: 15%;"
+      >
+      </div>
+      <div class="absolute w-full h-full bg-gradient-to-t from-red-500 pointer-events-none"></div>
+      <div class="w-24 h-24 mb-8 z-10">
+        <.animated_icon
+          name="stars"
+          class="w-full h-full mx-4 opacity-40"
+          speed="0.7"
+        />
+      </div>
+      <div class="z-10 text-rose-100">
+        <div class="text-2xl font-medium px-12 opacity-100">Create your account</div>
+        <div class="text-sm px-12 pt-6 text-light opacity-80">
+          Thank you for signing up! We are excited to have you as a part of our community.
+        </div>
+        <div class="text-sm px-12 pt-6 pb-2 text-light opacity-80">
+          Please fill in your e-mail to create an account, we will send you a link to login.
+        </div>
+        <div class="text-sm px-12 pt-4 pb-8 text-right opacity-50">
+          {@signup_policy.product_name}
+        </div>
+      </div>
+    </div>
+  <% end %>
+
+  <div class={"fixed z-10 bg-stone-50 w-80 ring-1 ring-stone-300 border border-white border-opacity-50 ring-opacity-50 rounded-md shadow-sm shadow-stone-200 flex flex-col items-center py-2 px-12 transition-[height] #{if @live_action == :signup, do: "md:ml-80"}"}>
+    <div class="mx-auto mt-9 mb-1 w-28 h-28 bg-white ring-1 ring-stone-300 ring-opacity-40 rounded-full transition hover:scale-105 hover:shadow-md hover:shadow-stone-200">
+      <.animated_icon
+        name="avatar_light"
+        class="w-full h-full p-2 opacity-20"
+        speed="1.2"
+      />
+    </div>
+    <%= if is_nil(@message) do %>
+      <.form id="login_form" for={@form} phx-submit={@live_action} novalidate>
+        <div class="mx-auto mt-8 mb-8">
+          <.dash_input
+            field={@form[:email]}
+            type="email"
+            placeholder="Email"
+            phx-mounted={JS.focus()}
+          />
+        </div>
+        <%= if @live_action == :signup do %>
+          <%= if @signup_country_options != [] do %>
+            <div class="-mt-4 mb-6 flex items-center">
+              <div
+                :if={@signup_policy.country_description}
+                class="text-xs text-stone-400 text-opacity-70 text-center"
+              >
+                {@signup_policy.country_description}
+              </div>
+            </div>
+            <div class="mx-auto mb-6 w-full">
+              <.dash_select
+                field={@form[:country]}
+                options={@signup_country_options}
+                prompt="Company location"
+              />
+            </div>
+          <% end %>
+          <%= if @signup_policy.terms_required do %>
+            <div id="terms-error" class="-mt-4 ml-[0.175rem] mb-2.5">
+              <.error_tag field={@form[:terms]} />
+            </div>
+            <div
+              id="terms-field"
+              class="ml-4 mb-4 flex items-center [&_.fieldset]:contents [&_.fieldset>label]:contents [&_.label]:contents"
+            >
+              <%!-- Keep validation feedback in the dedicated error tag above the checkbox. --%>
+              <.input
+                type="checkbox"
+                id="terms"
+                name={@form[:terms].name}
+                value={@form[:terms].value}
+                class="w-4 h-3 scale-125"
+                style="accent-color: #3b82f6; color-scheme: light;"
+              />
+              <label
+                for="terms"
+                class="text-xs text-stone-400 text-opacity-70 ml-2.5 text-center mr-7"
+              >
+                I hereby accept the
+                <a
+                  :if={@signup_policy.terms_url}
+                  class="underline"
+                  href={@signup_policy.terms_url}
+                >
+                  Terms of Service
+                </a>
+                <span :if={!@signup_policy.terms_url}>Terms of Service</span>
+                and
+                <a
+                  :if={@signup_policy.privacy_url}
+                  class="underline"
+                  href={@signup_policy.privacy_url}
+                >
+                  Privacy Policy
+                </a>
+                <span :if={!@signup_policy.privacy_url}>Privacy Policy</span>
+              </label>
+            </div>
+          <% end %>
+        <% end %>
+      </.form>
+      <div class="mx-auto mb-7 flex justify-center">
+        <.dash_button form="login_form" type="submit" variant="primary">
+          {if @live_action == :signup, do: "Create account", else: "Login to account"}
+        </.dash_button>
+      </div>
+      <%= if @google_oauth_enabled do %>
+        <div class="flex items-center w-full">
+          <div class="w-full h-[1px] bg-stone-200 bg-opacity-70"></div>
+          <div class="uppercase text-stone-400 text-opacity-70 text-xs px-2">or</div>
+          <div class="w-full h-[1px] bg-stone-200 bg-opacity-70"></div>
+        </div>
+        <div class="mx-auto mt-6 mb-6">
+          <.link
+            href={~p"/auth/google"}
+            class="transform-gpu transition ease-out duration-150 hover:scale-110 flex items-center pt-2.5 pb-2 pl-3 pr-3 bg-white rounded-md text-sm text-stone-600 hover:text-stone-700 border border-stone-100"
+          >
+            <div class="mr-2.5 mb-0.5">
+              <svg
+                width="16px"
+                height="16px"
+                viewBox="-3 0 262 262"
+                xmlns="http://www.w3.org/2000/svg"
+                preserveAspectRatio="xMidYMid"
+              >
+                <path
+                  d="M255.878 133.451c0-10.734-.871-18.567-2.756-26.69H130.55v48.448h71.947c-1.45 12.04-9.283 30.172-26.69 42.356l-.244 1.622 38.755 30.023 2.685.268c24.659-22.774 38.875-56.282 38.875-96.027"
+                  fill="#4285F4"
+                /><path
+                  d="M130.55 261.1c35.248 0 64.839-11.605 86.453-31.622l-41.196-31.913c-11.024 7.688-25.82 13.055-45.257 13.055-34.523 0-63.824-22.773-74.269-54.25l-1.531.13-40.298 31.187-.527 1.465C35.393 231.798 79.49 261.1 130.55 261.1"
+                  fill="#34A853"
+                /><path
+                  d="M56.281 156.37c-2.756-8.123-4.351-16.827-4.351-25.82 0-8.994 1.595-17.697 4.206-25.82l-.073-1.73L15.26 71.312l-1.335.635C5.077 89.644 0 109.517 0 130.55s5.077 40.905 13.925 58.602l42.356-32.782"
+                  fill="#FBBC05"
+                /><path
+                  d="M130.55 50.479c24.514 0 41.05 10.589 50.479 19.438l36.844-35.974C195.245 12.91 165.798 0 130.55 0 79.49 0 35.393 29.301 13.925 71.947l42.211 32.783c10.59-31.477 39.891-54.251 74.414-54.251"
+                  fill="#EB4335"
+                />
+              </svg>
+            </div>
+            <div class="mb-0.5">Continue with Google</div>
+          </.link>
+        </div>
+      <% end %>
+      <%= if @live_action == :login and @public_registration_enabled do %>
+        <div class="mb-6 flex items-center">
+          <div class="text-xs text-stone-400 text-opacity-70 text-center leading-[1.25rem]">
+            Don't have an account yet?<br />
+            <.link href={~p"/signup"} class="text-blue-400">Sign up here</.link>
+          </div>
+        </div>
+      <% end %>
+    <% else %>
+      <div class="mx-auto my-8">
+        <p class="text-center text-sm text-gray-400 w-40 break-word">
+          {@message}
+        </p>
+        <div
+          :if={@local_mailbox?}
+          id="local-mailbox-help"
+          class="mt-5 text-center text-xs text-stone-500"
+        >
+          <p>Development emails stay in your local inbox.</p>
+          <.link
+            href="/dev/mailbox"
+            target="_blank"
+            rel="noopener"
+            class="mt-2 inline-block text-blue-500 underline"
+          >
+            Open local mailbox
+          </.link>
+        </div>
+        <%!-- go back --%>
+        <div class="flex justify-center mt-6 text-xs text-stone-400 text-opacity-70 text-center leading-[1.25rem]">
+          <.link
+            href={if @live_action == :signup, do: ~p"/signup", else: ~p"/login"}
+            class="text-blue-400"
+          >
+            Go back
+          </.link>
+        </div>
+      </div>
+    <% end %>
+  </div>
+  <div class="fixed -bottom-28 max-w-screen-xl w-full mx-auto h-72 pt-0">
+    <div class="hidden xl:flex absolute z-10 bg-opacity-50 w-full h-full">
+      <div class="w-72 h-full bg-gradient-to-r from-stone-100"></div>
+      <div class="flex-grow"></div>
+      <div class="w-72 h-full bg-gradient-to-l from-stone-100"></div>
+    </div>
+    <.animated_icon
+      name="waves"
+      class="w-full h-full grayscale opacity-10 contrast-200 rotate-180"
+      speed="0.5"
+      loop
+    />
+  </div>
+</div>
+<!-- modal end -->

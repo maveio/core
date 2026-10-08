@@ -1,0 +1,45 @@
+name: Image security
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: core
+            dockerfile: Dockerfile
+            context: .
+          - name: cpu-encoder
+            dockerfile: deploy/encoding-booster/encoder/Dockerfile
+            context: deploy/encoding-booster/encoder
+          - name: gpu-encoder
+            dockerfile: deploy/encoding-booster/encoder/Dockerfile.gpu
+            context: deploy/encoding-booster/encoder
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build local image without publishing
+        env:
+          IMAGE_NAME: ${{ matrix.name }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          BUILD_CONTEXT: ${{ matrix.context }}
+        run: docker build --pull --file "$DOCKERFILE" --tag "mave-scan:$IMAGE_NAME" "$BUILD_CONTEXT"
+      - uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297
+        with:
+          image-ref: mave-scan:${{ matrix.name }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+          timeout: 15m

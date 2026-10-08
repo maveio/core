@@ -1,0 +1,19 @@
+# Optional: enable Google login only after configuring your own OAuth application.
+# export GOOGLE_CLIENT_ID="your-google-client-id.apps.googleusercontent.com"
+# export GOOGLE_CLIENT_SECRET="your-google-client-secret"
+
+# Optional: base domain used in magic-link emails
+export MAVE_DOMAIN="http://localhost:4000"
+
+# Optional: local/public CDN wiring for player iframes and snippets
+export MAVE_PUBLIC_CDN_SCHEME="http"
+export MAVE_PUBLIC_CDN_HOST="orb.local"
+
+# Optional: point dashboard preview/snippets/player shell to a self-hosted components bundle
+# export MAVE_COMPONENTS_BASE_URL="https://components.example.com"
+
+# Optional: exact components entrypoint override; usually not needed when base URL is set
+# export MAVE_COMPONENTS_SRC="https://cdn.example.com/npm/@maveio/components/+esm"
+
+# Optional: override poster/image base URL in local environments
+export MAVE_IMAGE_BASE_URL="http://image.orb.local"

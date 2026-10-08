@@ -1,0 +1,45 @@
+x-development: &development
+  image: mave-core:development
+  build:
+    context: ../..
+    target: development
+  working_dir: /app
+  read_only: false
+  # Tailwind's Bun runtime extracts native build modules in /tmp. Only the
+  # development toolchain needs executable temporary files.
+  tmpfs: !override
+    - /tmp:rw,exec,nosuid,nodev,size=8589934592,mode=1777
+  entrypoint: [/bin/sh, /bootstrap/run.sh]
+  environment:
+    MIX_ENV: dev
+    POSTGRES_HOST: postgres
+    POSTGRES_USER: mave_core
+    CLICKHOUSE_HOST: clickhouse
+    MAVE_MEDIA_SANDBOX: required
+  volumes:
+    - ../..:/app
+    - dev_deps:/app/deps
+    - dev_build:/app/_build
+    - dev_node_modules:/app/assets/node_modules
+
+services:
+  welcome:
+    environment:
+      MAVE_DEVELOPMENT: "true"
+  migrate:
+    <<: *development
+    command: [/bin/sh, /bootstrap/develop.sh]
+  app:
+    <<: *development
+    command: [mix, phx.server]
+    healthcheck:
+      test: [CMD-SHELL, 'bash -c "echo > /dev/tcp/localhost/4000"']
+      start_period: 60s
+  bootstrap:
+    <<: *development
+    command: [mix, run, -e, 'MaveCore.Release.bootstrap_owner_from_env!()']
+
+volumes:
+  dev_deps:
+  dev_build:
+  dev_node_modules:

@@ -1,0 +1,114 @@
+# The root compose.yaml includes this overlay. The scripted installer continues
+# using compose.yml alone and retains its existing .env-based behavior.
+x-setup-volumes: &setup-volumes
+  - setup_data:/setup:ro
+  - ./quickstart:/bootstrap:ro
+
+x-release: &release
+  pull_policy: build
+  build:
+    context: ../..
+    target: final
+  entrypoint: [/bin/sh, /bootstrap/run.sh, /usr/bin/tini, --]
+  command: /app/bin/server
+  volumes: *setup-volumes
+  env_file: !override
+    - path: ../../.env
+      required: false
+  environment:
+    MAVE_INSTALLATION_SETUP: "true"
+    MAVE_SETUP_CODE_FILE: /setup/code
+  depends_on:
+    config-init:
+      condition: service_completed_successfully
+
+services:
+  config-init:
+    image: alpine:3.23
+    entrypoint: [/bin/sh, /bootstrap/init.sh]
+    volumes:
+      - setup_data:/setup
+      - ./quickstart:/bootstrap:ro
+    restart: "no"
+
+  welcome:
+    image: alpine:3.23
+    entrypoint: [/bin/sh, /bootstrap/welcome.sh]
+    environment:
+      MAVE_BASE_URL: ${MAVE_BASE_URL:-http://localhost:4000}
+    volumes: *setup-volumes
+    depends_on:
+      app:
+        condition: service_healthy
+      caddy:
+        condition: service_started
+    restart: "no"
+
+  postgres:
+    entrypoint: [/bin/sh, /bootstrap/run.sh, docker-entrypoint.sh]
+    command: postgres
+    volumes: *setup-volumes
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+
+  clickhouse:
+    entrypoint: [/bin/sh, /bootstrap/run.sh, /entrypoint.sh]
+    volumes: *setup-volumes
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD-SHELL, '. /setup/environment.sh; clickhouse-client --user mave_core --password "$$CLICKHOUSE_PASSWORD" --query "SELECT 1"']
+
+  minio:
+    entrypoint: [/bin/sh, /bootstrap/run.sh, /usr/bin/minio]
+    volumes: *setup-volumes
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+
+  storage-init:
+    entrypoint: [/bin/sh, /bootstrap/run.sh, /bin/sh]
+    volumes: *setup-volumes
+
+  migrate:
+    <<: *release
+    command: /app/bin/migrate
+
+  app:
+    <<: *release
+    healthcheck:
+      test: [CMD, /bin/sh, /bootstrap/run.sh, /app/bin/ready]
+
+  upload:
+    entrypoint: [/bin/sh, /bootstrap/run.sh, upload]
+    volumes: *setup-volumes
+    # Commands replace, rather than append to, the base Compose command.
+    command:
+      - -port=1080
+      - -behind-proxy=true
+      - -disable-download=true
+      - -expose-metrics=false
+      - -show-greeting=false
+      - -verbose=false
+      - -max-size=${MAVE_MEDIA_INPUT_MAX_BYTES:-21474836480}
+      - -s3-bucket=mave-upload
+      - -s3-endpoint=http://minio:9000
+      - -hooks-enabled-events=pre-create,post-receive,post-finish
+      - -progress-hooks-interval=20s
+
+  caddy:
+    ports: !override
+      - "${MAVE_BIND_ADDRESS:-127.0.0.1}:${MAVE_HTTP_PORT:-4000}:80"
+      - "${MAVE_BIND_ADDRESS:-127.0.0.1}:${MAVE_HTTPS_PORT:-4443}:443"
+      - "${MAVE_BIND_ADDRESS:-127.0.0.1}:${MAVE_HTTPS_PORT:-4443}:443/udp"
+    environment:
+      MAVE_CADDY_ADDRESS: ${MAVE_CADDY_ADDRESS:-:80}
+
+  bootstrap:
+    <<: *release
+    command: /app/bin/bootstrap
+
+volumes:
+  setup_data:

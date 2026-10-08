@@ -1,0 +1,9 @@
+Matomo Device Detector 6.5.0
+Project: Matomo Device Detector, maintained by the Matomo contributors.
+Source: https://github.com/matomo-org/device-detector/tree/6.5.0
+Licence: GNU Lesser General Public License, version 3 or later.
+
+UAInspector downloads the unmodified parser data used by Core. The YAML source
+files are included in the release under lib/mave_core-*/priv/ua_inspector/.
+LICENSE contains the LGPL-3.0 terms; COPYING contains the GPL-3.0 terms they
+incorporate and is copied from the FFmpeg source tree when building the image.

@@ -1,0 +1,137 @@
+<main id="installation-setup" class="min-h-screen px-5 py-8 sm:px-8 text-stone-800">
+  <div class="mx-auto max-w-5xl">
+    <a
+      href="/setup"
+      class="inline-flex items-center gap-3 text-xl font-semibold tracking-tight"
+      aria-label="Mave Core setup"
+    >
+      <img src={~p"/images/glyph.svg"} class="size-8 opacity-60" alt="" /> Mave Core
+    </a>
+    <div class="mt-8 grid gap-8 lg:grid-cols-2 lg:gap-16">
+      <section class="min-w-0" aria-labelledby="setup-heading">
+        <p class="text-xs font-semibold uppercase tracking-widest text-blue-500">
+          Mave is ready
+        </p>
+        <h1 id="setup-heading" class="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">
+          Your videos.<br />Your space.
+        </h1>
+        <p class="mt-5 max-w-md text-base leading-7 text-stone-600">
+          Your installation is ready. Create your workspace, then upload your first video.
+          You can invite your team later.
+        </p>
+        <ul class="mt-8 space-y-5 text-sm">
+          <li class="flex gap-3">
+            <.icon name="hero-circle-stack" class="size-5 shrink-0 text-blue-500" /><span><strong class="block font-medium">Storage included</strong><span class="text-stone-500">Your videos stay in this installation.</span></span>
+          </li>
+          <li class="flex gap-3">
+            <.icon name="hero-film" class="size-5 shrink-0 text-blue-500" /><span><strong class="block font-medium">Ready to process</strong><span class="text-stone-500">Upload a video and Mave prepares it for playback.</span></span>
+          </li>
+          <li class="flex gap-3">
+            <.icon name="hero-chart-bar" class="size-5 shrink-0 text-blue-500" /><span><strong class="block font-medium">Analytics built in</strong><span class="text-stone-500">See how people watch, right in your dashboard.</span></span>
+          </li>
+        </ul>
+        <div class="mt-8 rounded-md bg-stone-50 p-4 text-sm ring-1 ring-inset ring-stone-200/70">
+          <p class="font-medium">Your installation address</p>
+          <p id="setup-origin" class="mt-1 break-all text-stone-600">{@origin}</p>
+          <p class="mt-2 text-xs leading-5 text-stone-500">
+            Trying Mave locally? This address is ready to use. For a public server, set your domain and HTTPS before inviting your team.
+          </p>
+        </div>
+      </section>
+      <section
+        class="min-w-0 rounded-md border border-white bg-stone-50 p-6 shadow-sm shadow-stone-200 ring-1 ring-stone-300/50"
+        aria-labelledby="setup-account-heading"
+      >
+        <div class="mb-4 h-16 w-16 rounded-full bg-white shadow-sm shadow-stone-200 ring-1 ring-stone-300/40">
+          <.animated_icon name="avatar_light" class="h-full w-full p-2 opacity-20" speed="1.2" />
+        </div>
+        <h2 id="setup-account-heading" class="text-xl font-semibold">Start publishing videos</h2>
+        <p class="mt-2 text-sm leading-6 text-stone-500">
+          Just one account to get started. You can invite your team later.
+        </p>
+        <.form for={@form} action={~p"/setup"} id="setup-form" class="mt-6 space-y-6">
+          <div>
+            <label for={@form[:email].id} class="mb-2 block text-sm text-stone-500">Your email address</label>
+            <.dash_input
+              field={@form[:email]}
+              type="email"
+              placeholder="you@example.com"
+              autocomplete="email"
+              rest={%{required: true, maxlength: 160}}
+            />
+            <p class="mt-2 text-xs leading-5 text-stone-500">
+              This will be the owner of your first workspace. No password to remember.
+            </p>
+          </div>
+          <div
+            id="setup-link-received"
+            hidden
+            class="rounded-md bg-white p-3 text-sm text-stone-500"
+            role="status"
+          >
+            <p class="font-medium text-stone-700">Setup link received</p>
+            <p class="mt-1">Your code is filled in. Just add your email above.</p>
+            <button
+              id="setup-change-code"
+              type="button"
+              class="mt-2 text-xs text-blue-500 underline"
+            >
+              Enter a different code
+            </button>
+          </div>
+          <div id="setup-manual-code">
+            <label for={@form[:code].id} class="mb-2 block text-sm text-stone-500">Setup code</label>
+            <.dash_input
+              field={@form[:code]}
+              type="password"
+              autocomplete="off"
+              rest={%{required: true, maxlength: 256}}
+              aria-describedby="setup-code-help"
+            />
+            <div id="setup-code-help" class="mt-2 text-xs leading-5 text-stone-500">
+              <p>
+                Open the setup link in your terminal to fill this in automatically, or paste the code here.
+              </p>
+              <p class="mt-2">
+                It appears in the “Mave is ready” message. Missed it? Run:
+              </p>
+              <code class="mt-2 block overflow-x-auto rounded-lg bg-stone-100 p-3 text-stone-700">{@compose_command} logs welcome</code>
+              <p class="mt-2">
+                Paste the result above. The code stops working as soon as setup is complete.
+              </p>
+            </div>
+          </div>
+          <div
+            id="setup-login-help"
+            class="text-sm leading-6"
+          >
+            <.info_box>
+              <span class="font-medium text-stone-500">Signing in next time</span>
+              <p :if={@local_mail?}>
+                Request a login link on the login page, then open <a
+                  href="/dev/mailbox"
+                  target="_blank"
+                  rel="noopener"
+                  class="underline"
+                >your local mailbox</a>. No email service is needed for development.
+              </p>
+              <p :if={@mail_enabled? and not @local_mail?}>
+                Mave sends sign-in links by email. Make sure email delivery works before signing out or inviting your team.
+              </p>
+              <div :if={not @mail_enabled?}>
+                <p>
+                  You will be signed in immediately. Email delivery is not configured yet. Before signing out, configure SMTP or use this recovery command with your email:
+                </p>
+                <code class="mt-2 block overflow-x-auto rounded bg-white/70 p-2 text-xs">{@compose_command} run --rm -e MAVE_BOOTSTRAP_EMAIL=you@example.com bootstrap</code>
+              </div>
+            </.info_box>
+          </div>
+          <.dash_button id="setup-submit" type="submit" variant="primary" class="w-full">
+            Create my workspace
+          </.dash_button>
+          <p class="text-center text-xs text-stone-400">One-time setup · Your data stays here</p>
+        </.form>
+      </section>
+    </div>
+  </div>
+</main>

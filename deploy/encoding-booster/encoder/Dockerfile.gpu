@@ -1,0 +1,87 @@
+FROM golang:1.25.13-alpine3.23 AS app-build
+
+WORKDIR /src
+COPY go.mod *.go ./
+COPY assets/play.png ./assets/play.png
+RUN go test ./... \
+    && CGO_ENABLED=0 GOOS=linux go build \
+      -trimpath -ldflags="-s -w -buildid=" -o /out/encoder .
+
+FROM app-build AS broker-build
+COPY sandbox/broker /broker
+WORKDIR /broker
+RUN go test ./... && CGO_ENABLED=0 go build -trimpath -o /mave-media-broker .
+
+FROM ubuntu:24.04 AS sandbox-build
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential libseccomp-dev
+COPY sandbox/media_sandbox.c /src/media_sandbox.c
+COPY sandbox/network.c /src/network.c
+RUN cc -O2 -Wall -Wextra -Werror -D_FORTIFY_SOURCE=2 -fstack-protector-strong \
+      /src/media_sandbox.c -lseccomp -o /mave-media-sandbox \
+    && cc -O2 -Wall -Wextra -Werror -fPIC -shared /src/network.c -pthread -o /mave-media-network.so
+
+FROM ubuntu:24.04 AS ffmpeg-build
+ARG FFMPEG_VERSION=9.0.2
+ARG FFMPEG_SHA256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
+# Keep Ubuntu 24.04's NVIDIA SDK headers so the driver baseline does not change.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates curl libdav1d-dev libffmpeg-nvenc-dev \
+      libgnutls28-dev libmp3lame-dev libopus-dev libsvtav1enc-dev libwebp-dev \
+      libx264-dev libx265-dev nasm pkg-config xz-utils zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src/ffmpeg
+RUN curl -fsSLo /tmp/ffmpeg.tar.xz \
+      "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
+    && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
+    && tar -xJf /tmp/ffmpeg.tar.xz --strip-components=1 \
+    && ./configure \
+      --prefix=/opt/ffmpeg \
+      --disable-debug --disable-doc --disable-ffplay \
+      --enable-gpl --enable-gnutls --enable-ffnvcodec --enable-nvenc \
+      --enable-libdav1d --enable-libmp3lame --enable-libopus --enable-libsvtav1 \
+      --enable-libwebp --enable-libx264 --enable-libx265 \
+    && make -j"$(getconf _NPROCESSORS_ONLN)" \
+    && make install \
+    && mkdir -p /opt/ffmpeg/share/licenses /opt/ffmpeg/share/source \
+    && cp COPYING* LICENSE.md /opt/ffmpeg/share/licenses/ \
+    && cp /tmp/ffmpeg.tar.xz /opt/ffmpeg/share/source/ \
+    && cp ffbuild/config.mak config.h /opt/ffmpeg/share/source/
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PATH="/opt/ffmpeg/bin:${PATH}" \
+    ENCODER_BACKEND=nvenc \
+    NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+    NVIDIA_VISIBLE_DEVICES=all
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates libdav1d7 libgnutls30t64 libmp3lame0 libopus0 libseccomp2 \
+      libsvtav1enc1d1 libwebp7 libwebpmux3 libx264-164 libx265-199 zlib1g \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+COPY --from=ffmpeg-build /opt/ffmpeg /opt/ffmpeg
+RUN ffmpeg -version | grep 'ffmpeg version 9.0.2' \
+    && ffprobe -version | grep 'ffprobe version 9.0.2' \
+    && ffmpeg -hide_banner -encoders 2>&1 | grep -q h264_nvenc \
+    && ffmpeg -hide_banner -encoders 2>&1 | grep -q hevc_nvenc \
+    && ffmpeg -hide_banner -encoders 2>&1 | grep -q av1_nvenc \
+    && ffmpeg -hide_banner -encoders 2>&1 | grep -q libsvtav1 \
+    && ffmpeg -hide_banner -encoders 2>&1 | grep -q libmp3lame \
+    && ffmpeg -hide_banner -encoders 2>&1 | grep -q libopus \
+    && ffmpeg -hide_banner -encoders 2>&1 | grep -q libwebp \
+    && ffmpeg -hide_banner -loglevel error \
+      -f lavfi -i color=c=black:s=16x16:d=0.04 -frames:v 1 -c:v libwebp -f null -
+
+COPY --from=sandbox-build /mave-media-sandbox /usr/local/bin/mave-media-sandbox
+COPY --from=sandbox-build /mave-media-network.so /usr/local/lib/mave-media-network.so
+COPY --from=broker-build /mave-media-broker /usr/local/bin/mave-media-broker
+ENV MAVE_MEDIA_SANDBOX=required MAVE_MEDIA_SANDBOX_GPU=true
+COPY --from=app-build /out/encoder /encoder
+
+USER 65534:65534
+EXPOSE 8080
+ENTRYPOINT ["/encoder"]

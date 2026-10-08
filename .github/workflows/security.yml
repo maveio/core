@@ -1,0 +1,190 @@
+name: Security and tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_version:
+        type: string
+        default: ''
+        required: false
+  schedule:
+    - cron: "23 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  media-sandbox:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install sandbox test dependencies
+        run: sudo apt-get update && sudo apt-get install --yes build-essential libseccomp-dev ffmpeg python3
+      - name: Build and test the shared streaming broker
+        run: |
+          artifacts=$(mktemp -d)
+          trap 'sudo rm -rf "$artifacts"' EXIT
+          docker run --rm \
+            -v "$PWD/deploy/encoding-booster/encoder/sandbox/broker:/src:ro" \
+            -v "$artifacts:/out" -w /src golang:1.25.13-alpine3.23 \
+            sh -c 'go test ./... && go vet ./... && CGO_ENABLED=0 go build -trimpath -o /out/mave-media-broker .'
+          cc -O2 -Wall -Wextra -Werror deploy/encoding-booster/encoder/sandbox/media_sandbox.c \
+            -lseccomp -o "$artifacts/mave-media-sandbox"
+          cc -O2 -Wall -Wextra -Werror -fPIC -shared deploy/encoding-booster/encoder/sandbox/network.c \
+            -pthread -o "$artifacts/mave-media-network.so"
+          sudo install -m 755 "$artifacts/mave-media-broker" "$artifacts/mave-media-sandbox" /usr/local/bin/
+          sudo install -m 644 "$artifacts/mave-media-network.so" /usr/local/lib/
+      - name: Exercise confinement and real codecs without root or capabilities
+        run: |
+          # GitHub's checkout parents are not traversable by nobody.
+          sandbox_sources=$(mktemp -d)
+          trap 'rm -rf "$sandbox_sources"' EXIT
+          cp deploy/encoding-booster/encoder/sandbox/{media_sandbox.c,probe.c,test.sh,broker_probe.c,broker_test.sh,stream_test.py} "$sandbox_sources/"
+          chmod -R a+rX "$sandbox_sources"
+          sudo setpriv --reuid=65534 --regid=65534 --clear-groups \
+            --bounding-set=-all --no-new-privs \
+            sh "$sandbox_sources/test.sh"
+          sudo setpriv --reuid=65534 --regid=65534 --clear-groups \
+            --bounding-set=-all --no-new-privs sh "$sandbox_sources/broker_test.sh"
+          # Only this disposable runner: allow creation of unprivileged namespaces
+          # so the second backend can be exercised without root/capabilities.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo env MAVE_MEDIA_SANDBOX_BACKEND=namespace \
+            setpriv --reuid=65534 --regid=65534 --clear-groups --bounding-set=-all --no-new-privs \
+            sh "$sandbox_sources/test.sh"
+          sudo env MAVE_MEDIA_SANDBOX_BACKEND=namespace \
+            setpriv --reuid=65534 --regid=65534 --clear-groups --bounding-set=-all --no-new-privs \
+            sh "$sandbox_sources/broker_test.sh"
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      MIX_ENV: test
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5433"
+      CLICKHOUSE_HOST: localhost
+      S3_ENDPOINT: http://localhost:9010
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: us-east-1
+    services:
+      postgres:
+        image: postgres:17.11-alpine3.23
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5433:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+      clickhouse:
+        image: clickhouse/clickhouse-server:25.8.33-alpine
+        env:
+          CLICKHOUSE_USER: default
+          CLICKHOUSE_PASSWORD: password
+        ports: ["8123:8123"]
+        options: --health-cmd "clickhouse-client --password password --query 'SELECT 1'" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare release version
+        if: inputs.release_version != ''
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: python3 .github/scripts/release.py apply
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        with:
+          otp-version: "28.2"
+          elixir-version: "1.19.4"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            deps
+            _build
+            priv/ua_inspector
+          key: test-${{ runner.os }}-otp28.2-elixir1.19.4-${{ hashFiles('mix.lock') }}
+      - name: Prepare disposable media dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg build-essential
+          docker build --pull --target server --tag mave-ci-minio deploy/minio
+          docker run --detach --name mave-ci-minio --publish 127.0.0.1:9010:9000 \
+            --env MINIO_ROOT_USER=minioadmin --env MINIO_ROOT_PASSWORD=minioadmin \
+            mave-ci-minio server /data
+          curl --fail --retry 20 --retry-all-errors --retry-delay 1 --max-time 5 --retry-max-time 90 http://localhost:9010/minio/health/live
+      - name: Install locked dependencies and assets
+        run: |
+          mix deps.get --check-locked
+          mix assets.setup
+          mix assets.build
+          mix ua_inspector.download --force
+      - name: Compile and lint
+        run: |
+          mix compile --warnings-as-errors
+          mix format --check-formatted --force
+          mix credo --strict
+          mix audit
+      - name: Run complete test suite
+        run: mix test
+      - name: Test release tooling
+        run: python3 -m unittest discover -s .github/scripts -v
+
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Prepare release version
+        if: inputs.release_version != ''
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: python3 .github/scripts/release.py apply
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        with:
+          otp-version: "28.2"
+          elixir-version: "1.19.4"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+      - run: mix deps.get --check-locked
+      - run: mix security.enforce
+      - run: npm audit --prefix assets --audit-level=high
+      - name: Install verified Gitleaks binary
+        run: |
+          curl --fail --location --output /tmp/gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          printf '%s  %s\n' 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb /tmp/gitleaks.tar.gz | sha256sum --check
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+      - name: Scan committed changes for secrets
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && "$BASE_SHA" != 0000000000000000000000000000000000000000 ]]; then
+            /tmp/gitleaks git --redact --log-opts="$BASE_SHA..$HEAD_SHA"
+          else
+            scan_dir=$(mktemp -d /tmp/mave-secret-scan.XXXXXX)
+            git archive HEAD | tar -x -C "$scan_dir"
+            (cd "$scan_dir" && /tmp/gitleaks dir --redact --config .gitleaks.toml .)
+          fi

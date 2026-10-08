@@ -1,0 +1,400 @@
+<div class={["h-full flex flex-col", @settings_open && @mode == :video && "mr-56"]}>
+  <%= if @mode == :collection do %>
+    <.title
+      title={@folder.name}
+      contenteditable
+      change="rename"
+      form_id="folder-title-form"
+      contenteditable_id="folder-title"
+    >
+      <div class="flex items-center gap-4">
+        <div
+          :if={@video_creation_notice}
+          id="folder-create-video-limit-notice"
+          class="flex-none mr-6 text-stone-400 text-opacity-70 text-sm cursor-default flex items-center"
+        >
+          <div>{@video_creation_notice}</div>
+          <.info_hover position="left">
+            {@video_creation_help}
+          </.info_hover>
+        </div>
+
+        <button
+          id="folder-delete-button"
+          type="button"
+          phx-click="delete"
+          class="flex items-center ring-inset ring-1 ring-stone-200 rounded-md cursor-pointer bg-white hover:ring-blue-500 active:bg-blue-500 active:text-white transition ease-out duration-150 hover:scale-110 hover:shadow text-stone-500 select-none font-medium text-sm"
+        >
+          <div class="pl-2.5 pr-1.5 py-2 text-red-600">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="w-5 h-5 border-transparent border"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </div>
+          <div class="pr-4 pt-2 pb-2.5">{gettext("delete")}</div>
+        </button>
+
+        <.dropdown_button id="folder-create-actions">
+          <:trigger>
+            <button
+              type="button"
+              phx-click={Phoenix.LiveView.JS.toggle_class("opacity-0 scale-95 pointer-events-none", to: "#folder-create-actions")}
+              class="flex items-center ring-inset ring-1 ring-stone-200 rounded-md cursor-pointer bg-white hover:ring-blue-500 active:bg-blue-500 active:text-white transform-gpu transition ease-out duration-150 hover:scale-110 hover:shadow text-stone-500 select-none font-medium text-sm"
+            >
+              <div class="pl-3.5 pr-2 pt-2 pb-2.5">{gettext("create")}</div>
+              <div class="pr-2.5 py-2 text-stone-400">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  class="w-4 h-4"
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M6 9l6 6 6-6"></path>
+                </svg>
+              </div>
+            </button>
+          </:trigger>
+          <:item
+            id="folder-create-video"
+            icon="video"
+            phx-click="create_video"
+            disabled={!@can_create_video}
+            title={@video_creation_help}
+          >
+            {gettext("video") |> String.capitalize()}
+          </:item>
+          <:item id="folder-create-folder" icon="folder" phx-click="create_folder">
+            {gettext("folder") |> String.capitalize()}
+          </:item>
+        </.dropdown_button>
+      </div>
+    </.title>
+
+    <.breadcrumb_bar>
+      <:item
+        id="videos-root-breadcrumb"
+        hook="breadcrumb"
+        drop_to=""
+        navigate={videos_path(@current_space, @current_tab, @route_scope)}
+        label={gettext("Videos")}
+      />
+      <:item
+        :for={path <- @folder_paths}
+        id={"folder-path-#{path.id}"}
+        hook="breadcrumb"
+        drop_to={path.drop_to}
+        navigate={path.navigate}
+        label={path.label}
+      />
+      <:item label={@folder.name}>
+        <span>{@folder.name}</span>
+        <span class="relative ml-1 text-blue-300 cursor-pointer group">
+          <span
+            class="flex-none hover:scale-125 cursor-pointer transition duration-150 ease-out"
+            phx-click={Phoenix.LiveView.JS.dispatch("mave:clipcopy", to: "#folder-id")}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="w-4 h-4 transform-gpu"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2">
+              </path>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+            </svg>
+          </span>
+          <span class="absolute w-56 top-7 transition-all duration-150 ease-out scale-75 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-active:opacity-100 group-hover:scale-100 group-active:scale-100 px-3 py-2.5 rounded-md bg-stone-50 text-stone-400 shadow-sm text-sm mb-8 ring-1 ring-inset ring-stone-200/70 z-10">
+            {gettext("click to copy collection id")} (<span id="folder-id">{@folder.public_id}</span>)
+          </span>
+        </span>
+      </:item>
+    </.breadcrumb_bar>
+
+    <div class="flex-1 overflow-y-auto">
+      <div class="max-w-screen-xl mx-auto px-16 w-full relative mt-8">
+        <%= if @folders == [] and @videos == [] do %>
+          <div class="flex flex-col items-center justify-center h-[calc(100vh-20rem)]">
+            <div class="w-24 h-24 mt-16">
+              <.animated_icon
+                name="upload"
+                class="w-24 h-24 opacity-30 invert grayscale"
+                speed="1"
+              />
+            </div>
+            <div class="text-stone-300 text-2xl mt-5 select-none cursor-default">
+              {gettext("This folder is empty")}
+            </div>
+            <div class="w-12 mt-16 mb-12 mx-auto border-t border-stone-100"></div>
+          </div>
+        <% else %>
+          <div id="folders" phx-update="replace">
+            <%= for folder <- @folders do %>
+              <.media_item
+                id={"folder-row-#{folder.uuid}"}
+                type={:folder}
+                name={folder.name}
+                navigate={video_path(@current_space, folder.id, @current_tab, @route_scope)}
+                draggable
+                class="_folder"
+                phx-hook="folder"
+                data-embed-id={folder.uuid}
+                data-target-folder-id={folder.uuid}
+              >
+                <:badges>
+                  <.media_badge>
+                    {folder.video_count} {ngettext("video", "videos", folder.video_count)}
+                  </.media_badge>
+                </:badges>
+              </.media_item>
+            <% end %>
+          </div>
+
+          <div id="videos" phx-update="replace">
+            <%= for video <- @videos do %>
+              <.media_item
+                id={"video-row-#{video.uuid}"}
+                type={:video}
+                name={video.name}
+                thumbnail={video.thumb}
+                empty={video.empty}
+                date={video.inserted_at}
+                navigate={video_path(@current_space, video.id, @current_tab, @route_scope)}
+                draggable
+                phx-hook="draggable"
+                data-embed-id={video.uuid}
+              >
+                <:badges>
+                  <%= if video.state do %>
+                    <.media_badge>{video_state_label(video.state)}</.media_badge>
+                  <% end %>
+                  <%= if is_nil(video.state) && video.resolution do %>
+                    <.media_badge>{video.resolution}</.media_badge>
+                  <% end %>
+                  <%= if is_nil(video.state) && video.fps do %>
+                    <.media_badge>{video.fps}fps</.media_badge>
+                  <% end %>
+                </:badges>
+              </.media_item>
+            <% end %>
+          </div>
+        <% end %>
+      </div>
+    </div>
+  <% else %>
+    <div
+      id="video-components-loader"
+      phx-hook="component_loader"
+      data-component-config-src={@video.component_config_src}
+      data-component-src={@component_src}
+      data-component-config={@video.component_config_json}
+    >
+    </div>
+
+    <.title
+      title={if @video, do: @video.name, else: video_name(@resource_embed)}
+      contenteditable={@video_ready or @video_processing or @replace_mode}
+      change="rename"
+      form_id="video-title-form"
+      contenteditable_id="video-title"
+    >
+      <div class="flex items-center gap-4">
+        <div class="text-xs ring-1 ring-inset ring-stone-200/80 rounded-md flex items-center overflow-hidden">
+          <div class="h-8 border-r border-stone-200 pl-2.5 pr-2 flex items-center font-medium text-stone-300">
+            ID
+          </div>
+          <div class="font-mono pl-2 pr-2.5 text-stone-400/50">{@video.public_id}</div>
+        </div>
+
+        <.dropdown_button id="video-actions">
+          <:item :if={@video_ready or @replace_mode} icon="replace" phx-click={if @replace_mode, do: "cancel_replace", else: "replace"}>
+            {if @replace_mode, do: gettext("cancel replace"), else: gettext("replace")}
+          </:item>
+          <:item icon="archive" phx-click="archive">
+            {if @resource_embed.archived, do: gettext("unarchive"), else: gettext("archive")}
+          </:item>
+          <:item icon="delete" danger phx-click="delete">{gettext("delete")}</:item>
+        </.dropdown_button>
+      </div>
+    </.title>
+
+    <div class="flex-1 overflow-y-auto">
+      <div class="max-w-screen-xl mx-auto px-16 pt-8 pb-24">
+        <.video_embed_panel
+          player_dom_id={@player_dom_id}
+          audio_only={match?(%{original: %{audio_only: true}}, @video) and !@replace_mode}
+          tabs={code_tabs(@code_preview, @video)}
+          snippet={snippet_string(@code_preview, @video)}
+          line_numbers={line_numbers(@code_preview, @video)}
+        >
+          <:player>
+            <%= if @replace_mode do %>
+              <.video_upload_panel token={@upload_token} dom_id="video-upload-bridge-detail" />
+            <% else %>
+              <%= if @video_ready do %>
+                <.dynamic_tag
+                  tag_name={dashboard_player_tag(@video)}
+                  {Map.new(dashboard_player_attributes(@video)) |> Map.merge(%{"embed" => @video.public_id, "style" => player_shell_style(@video)})}
+                />
+              <% else %>
+                <%= if @video_processing do %>
+                  <%= if @video.processing_player_ready do %>
+                    <.dynamic_tag
+                      tag_name={dashboard_player_tag(@video)}
+                      {Map.new(dashboard_player_attributes(@video)) |> Map.merge(%{"embed" => @video.public_id, "style" => player_shell_style(@video)})}
+                    />
+                  <% else %>
+                    <.video_processing_panel audio_only={
+                      match?(%{original: %{audio_only: true}}, @video)
+                    } />
+                  <% end %>
+                <% else %>
+                  <.video_upload_panel token={@upload_token} dom_id="video-upload-bridge-detail" />
+                <% end %>
+              <% end %>
+            <% end %>
+          </:player>
+        </.video_embed_panel>
+
+        <div class="w-12 my-8 mx-auto border-t border-stone-100"></div>
+
+        <div class="grid grid-cols-3 gap-4">
+          <.video_metric_card label={gettext("today")} value={format_number(@video.views_today)} />
+          <.video_metric_card
+            label={gettext("this month")}
+            value={format_number(@video.views_month)}
+          />
+          <.video_metric_card
+            label={gettext("this year")}
+            value={format_number(@video.views_year)}
+          />
+        </div>
+
+        <div class="w-12 my-8 mx-auto border-t border-stone-100"></div>
+
+        <.video_data_section label={gettext("drop off")}>
+          <%= if @video_ready and @engagement != "[]" do %>
+            <div class="w-full relative h-28 overflow-hidden pointer-events-none">
+              <div class="relative w-full h-28 overflow-hidden mt-3">
+                <div
+                  id="chart"
+                  phx-hook="chart"
+                  data-views={@engagement}
+                  class="w-full h-full pb-2 absolute top-2 px-3"
+                >
+                </div>
+              </div>
+            </div>
+          <% else %>
+            <div class="w-full h-28 flex flex-col items-center justify-center text-stone-400">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                class="h-6 w-6 mb-2 opacity-50"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.5"
+                  d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"
+                />
+              </svg>
+              <div class="text-sm font-medium">{gettext("Not enough data yet")}</div>
+              <div class="text-xs opacity-75 mt-0.5">
+                {gettext("Wait for more views to see the dropoff graph")}
+              </div>
+            </div>
+          <% end %>
+        </.video_data_section>
+
+        <div class="w-12 my-8 mx-auto border-t border-stone-100"></div>
+
+        <.video_data_section label={gettext("pages") |> String.capitalize()}>
+          <%= if @video.sources == [] do %>
+            <div class="flex flex-col items-center justify-center py-8 text-stone-400">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                class="h-6 w-6 mb-2 opacity-50"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.5"
+                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                />
+              </svg>
+              <div class="text-sm font-medium">{gettext("No pages linked yet")}</div>
+            </div>
+          <% else %>
+            <div
+              :for={source <- @video.sources}
+              class="flex px-3 py-2.5 border-b border-stone-100 last:border-none hover:bg-stone-50 active:bg-blue-50"
+            >
+              <div class="grow text-sm text-stone-400">{source.path}</div>
+              <div class="text-sm text-stone-400">{source.percentage}%</div>
+            </div>
+          <% end %>
+        </.video_data_section>
+
+        <div class="w-12 my-8 mx-auto border-t border-stone-100"></div>
+      </div>
+    </div>
+  <% end %>
+
+  <.live_component
+    :if={@settings_open and not is_nil(@video) and @mode == :video}
+    module={VideoSettingsComponent}
+    id="video-settings"
+    embed={@resource_embed}
+    current_user={@current_user}
+    current_space={@current_space}
+    space_access_context={@space_access_context}
+    video={@video}
+    persisted_settings={@persisted_settings}
+    uploading_poster={match?(%{stage: :processing}, @poster_upload)}
+    processing_uploaded_audio_track={@processing_uploaded_audio_track}
+    processing_uploaded_subtitle={@processing_uploaded_subtitle}
+  />
+
+  <.dialog
+    show={@confirmation_needed}
+    on_confirm={JS.push("confirm")}
+    on_cancel={JS.push("cancel")}
+    loading_on_confirm
+  >
+    {confirmation_message(@pending_action, @resource_embed)}
+  </.dialog>
+  <%= if @mode == :collection and (@folders != [] or @videos != []) do %>
+    <.footer page={@page} total_pages={@total_pages} />
+  <% else %>
+    <.footer extra_padding={@settings_open and @mode == :video} />
+  <% end %>
+</div>
