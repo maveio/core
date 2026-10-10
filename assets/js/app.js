@@ -254,9 +254,49 @@ const ComponentLoaderHook = {
       }
 
       await window.__maveComponentImports[src]
+      this.applyPlaybackSession()
     } catch (error) {
       console.error("Failed to load mave components bundle", error)
     }
+  },
+
+  destroyed() {
+    clearTimeout(this.playbackRenewal)
+    this.playbackDestroyed = true
+  },
+
+  applyPlaybackSession() {
+    const key = `${this.el.dataset.playbackEmbed}:${this.el.dataset.playbackStatus}`
+    if (!this.el.dataset.playbackEmbed || this.playbackDestroyed) return
+
+    const apply = ({ session, embed }) => {
+      document.querySelectorAll("mave-player, mave-clip, mave-audio").forEach((element) => {
+        if (element.embed === embed) element.token = session?.token || ""
+      })
+    }
+    if (this.playbackKey === key && this.playbackData &&
+        (!this.playbackData.session || this.playbackData.session.expires_at * 1000 > Date.now() + 60000)) {
+      apply(this.playbackData)
+      return
+    }
+    if (this.playbackPending) return
+    this.playbackPending = true
+    this.pushEvent("playback_session", {}, (data) => {
+      this.playbackPending = false
+      if (this.playbackDestroyed) return
+      if (key !== `${this.el.dataset.playbackEmbed}:${this.el.dataset.playbackStatus}`) {
+        this.applyPlaybackSession()
+        return
+      }
+      this.playbackKey = key
+      this.playbackData = data
+      apply(data)
+      clearTimeout(this.playbackRenewal)
+      if (data.session) {
+        this.playbackRenewal = setTimeout(() => this.applyPlaybackSession(),
+          Math.max(1000, data.session.expires_at * 1000 - Date.now() - 60000))
+      }
+    })
   },
 }
 

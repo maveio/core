@@ -16,6 +16,7 @@ defmodule MaveCoreWeb.Api.LegacyEmbedController do
     with {:ok, %{space_hash: space_hash, embed_hash: embed_hash}} <-
            EmbedId.split(String.trim(embed_id || "")),
          %Embed{type: :video} = embed <- Embeds.get_embed_by_hashes(space_hash, embed_hash),
+         false <- MaveCore.Playback.protected?(embed),
          {:ok, manifest} <- ManifestPublisher.current(embed) do
       json(conn, manifest)
     else
@@ -43,6 +44,13 @@ defmodule MaveCoreWeb.Api.LegacyEmbedController do
 
       _error ->
         conn |> put_status(:bad_request) |> json(%{error: @invalid_jwt_error})
+    end
+  end
+
+  def collection(conn, params) do
+    case get_req_header(conn, "authorization") do
+      ["Bearer " <> token] -> collection(conn, Map.put(params, "token", token))
+      _ -> send_resp(conn, 401, "Authorization required")
     end
   end
 

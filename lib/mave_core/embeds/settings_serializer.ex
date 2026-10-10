@@ -4,6 +4,7 @@ defmodule MaveCore.Embeds.SettingsSerializer do
   alias MaveCore.Assets.Video
   alias MaveCore.Embeds.{Embed, EmbedSettings}
   alias MaveCore.Media.Storage
+  alias MaveCore.Playback.URLs
   alias MaveCore.Spaces.Space
 
   @upload_bucket "mave-upload"
@@ -47,7 +48,10 @@ defmodule MaveCore.Embeds.SettingsSerializer do
   def component_runtime_config do
     %{
       "api" => %{"endpoint" => api_endpoint()},
-      "cdn" => %{"endpoint" => cdn_component_endpoint()},
+      "cdn" => %{
+        "endpoint" => cdn_component_endpoint(),
+        "playback_endpoint" => URLs.endpoint(api_endpoint())
+      },
       "metrics" => %{"endpoint" => metrics_endpoint()},
       "upload" => %{
         "endpoint" => upload_endpoint(),
@@ -60,7 +64,11 @@ defmodule MaveCore.Embeds.SettingsSerializer do
   def default_component_runtime_config do
     %{
       "api" => %{"endpoint" => "https://api.mave.io/api/v1"},
-      "cdn" => %{"endpoint" => @default_component_cdn_endpoint},
+      "cdn" => %{
+        "endpoint" => @default_component_cdn_endpoint,
+        "playback_endpoint" =>
+          "https://space-${this.spaceId}.signed.video-dns.com/${this.embedId}"
+      },
       "metrics" => %{"endpoint" => "https://metrics.video-dns.com/v1/events"},
       "upload" => %{
         "endpoint" => "https://upload.mave.io/files",
@@ -577,7 +585,7 @@ defmodule MaveCore.Embeds.SettingsSerializer do
        when cdn_endpoint in @default_component_cdn_endpoint_aliases do
     default = default_component_runtime_config()
 
-    Map.put(config, "cdn", default["cdn"]) == default
+    put_in(config, ["cdn", "endpoint"], default["cdn"]["endpoint"]) == default
   end
 
   defp default_component_runtime_config?(_config), do: false

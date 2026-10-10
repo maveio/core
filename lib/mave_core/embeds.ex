@@ -16,6 +16,7 @@ defmodule MaveCore.Embeds do
   alias MaveCore.LegacyShortUUID
   alias MaveCore.Media.RenditionSizing
   alias MaveCore.Media.Storage
+  alias MaveCore.Playback.Media, as: PlaybackMedia
   alias MaveCore.Repo
   alias MaveCore.Spaces
   alias MaveCore.Spaces.Space
@@ -83,12 +84,14 @@ defmodule MaveCore.Embeds do
       end
 
     name = Map.get(attrs, :name) || Map.get(attrs, "name")
+    visibility = Map.get(attrs, :visibility, Map.get(attrs, "visibility", :public))
 
     parent_folder_id = parent_folder_id(attrs)
 
     Repo.transaction(fn ->
       with {:ok, current_space} <- lock_active_space(space.id),
            :ok <- UsageLimits.can_create_video_embed?(current_space),
+           :ok <- MaveCore.Playback.validate_visibility(current_space, visibility),
            {:ok, asset} <-
              %Asset{}
              |> Asset.changeset(%{space_id: current_space.id, name: name})
@@ -104,6 +107,7 @@ defmodule MaveCore.Embeds do
                archived: archived
              })
              |> Repo.insert(),
+           {:ok, embed} <- MaveCore.Playback.initialize_visibility(embed, visibility),
            :ok <- maybe_attach_to_parent(embed, current_space.id, parent_folder_id) do
         preload_embed(embed)
       else
@@ -1435,9 +1439,13 @@ defmodule MaveCore.Embeds do
          cache_buster
        )
        when is_binary(space_hash) and is_binary(embed_hash) do
-    space
-    |> snippet_object_url(embed, "thumbnail.jpg")
-    |> with_cache_buster(cache_buster)
+    url = snippet_object_url(space, embed, "thumbnail.jpg")
+
+    if is_binary(url) and MaveCore.Playback.protected?(embed) do
+      PlaybackMedia.dashboard_thumbnail_url(space, embed, cache_buster)
+    else
+      with_cache_buster(url, cache_buster)
+    end
   end
 
   defp thumbnail_url(%Space{}, %Embed{}, _cache_buster) do

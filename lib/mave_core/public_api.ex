@@ -9,6 +9,9 @@ defmodule MaveCore.PublicApi do
   alias MaveCore.Embeds.{Embed, Events, SettingsSerializer}
   alias MaveCore.Flow
   alias MaveCore.Languages
+  alias MaveCore.Media.Storage
+  alias MaveCore.Playback.Media, as: PlaybackMedia
+  alias MaveCore.Playback.URLs
   alias MaveCore.PublicHttpUrl
   alias MaveCore.Repo
   alias MaveCore.Spaces.Space
@@ -141,6 +144,9 @@ defmodule MaveCore.PublicApi do
     if embed.version == 2 do
       %{
         id: public_embed_id(space, embed),
+        visibility: embed.playback_visibility,
+        visibility_status: embed.playback_status,
+        sources: playback_sources(space, embed, current_video),
         name: embed_name(embed),
         duration: current_video && current_video.duration,
         width: current_video && current_video.max_width,
@@ -157,6 +163,9 @@ defmodule MaveCore.PublicApi do
     else
       %{
         id: public_embed_id(space, embed),
+        visibility: embed.playback_visibility,
+        visibility_status: embed.playback_status,
+        sources: playback_sources(space, embed, current_video),
         embed_url: embed_url(space, embed),
         poster_image: poster_image(space, embed),
         object: "video",
@@ -474,7 +483,55 @@ defmodule MaveCore.PublicApi do
   end
 
   defp poster_image(%Space{} = space, %Embed{} = embed) do
-    SettingsSerializer.preview_poster_url(space, embed, embed.settings)
+    if MaveCore.Playback.protected?(embed),
+      do: playback_source_url(space, embed, "thumbnail.jpg"),
+      else: SettingsSerializer.preview_poster_url(space, embed, embed.settings)
+  end
+
+  defp playback_sources(_space, _embed, nil), do: []
+
+  defp playback_sources(space, embed, %Video{id: video_id}) do
+    renditions =
+      from(r in "renditions",
+        where: r.video_id == type(^video_id, MaveCore.Ecto.LegacyShortUUID),
+        where: r.type == "video" and r.progress >= 100,
+        where: r.container in ["hls", "mp4", "webm"],
+        order_by: [r.container, r.size, r.codec],
+        select: %{container: r.container, key: r.rendition_key}
+      )
+      |> Repo.all()
+
+    hls =
+      if Enum.any?(renditions, &(&1.container == "hls")),
+        do: [
+          %{
+            type: "application/x-mpegURL",
+            src: playback_source_url(space, embed, "playlist.m3u8")
+          }
+        ],
+        else: []
+
+    files =
+      for %{container: container, key: key} <- renditions,
+          container in ["mp4", "webm"],
+          is_binary(key),
+          String.starts_with?(key, embed.hash <> "/"),
+          path = String.replace_prefix(key, embed.hash <> "/", ""),
+          PlaybackMedia.valid_path(path) == :ok do
+        %{type: "video/" <> container, src: playback_source_url(space, embed, path)}
+      end
+
+    Enum.uniq(hls ++ files)
+  end
+
+  defp playback_source_url(space, embed, path) do
+    if MaveCore.Playback.protected?(embed) do
+      endpoint = SettingsSerializer.component_runtime_config()["cdn"]["playback_endpoint"]
+      URLs.media_url(endpoint, space.hash, embed.hash, path)
+    else
+      bucket = Storage.bucket_for_space(space.hash, space.region)
+      SettingsSerializer.storage_object_url(bucket, embed.hash <> "/" <> path)
+    end
   end
 
   defp video_renditions(nil), do: []
