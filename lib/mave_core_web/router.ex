@@ -126,8 +126,6 @@ defmodule MaveCoreWeb.Router do
       post "/cli/authorizations", Api.CliAuthorizationsController, :create
       post "/cli/authorizations/token", Api.CliAuthorizationsController, :exchange
 
-      options "/collection", Api.LegacyEmbedController, :collection, log: false
-      get "/collection", Api.LegacyEmbedController, :collection, log: false
       options "/collection/:token", Api.LegacyEmbedController, :collection
       get "/collection/:token", Api.LegacyEmbedController, :collection
 
@@ -145,8 +143,6 @@ defmodule MaveCoreWeb.Router do
       post "/cli/authorizations", Api.CliAuthorizationsController, :create
       post "/cli/authorizations/token", Api.CliAuthorizationsController, :exchange
 
-      options "/collection", Api.LegacyEmbedController, :collection, log: false
-      get "/collection", Api.LegacyEmbedController, :collection, log: false
       options "/collection/:token", Api.LegacyEmbedController, :collection
       get "/collection/:token", Api.LegacyEmbedController, :collection
 
