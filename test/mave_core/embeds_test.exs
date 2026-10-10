@@ -2064,6 +2064,23 @@ defmodule MaveCore.EmbedsTest do
              "https://cdn.video-dns.com/space-${this.spaceId}"
 
     refute SettingsSerializer.component_config_required?()
+
+    for entry <- ["+esm", "dist/index.js"], version <- ["0.0.197", "0.0.198-beta.0"] do
+      Application.put_env(
+        :mave_core,
+        :components_src,
+        "https://cdn.video-dns.com/npm/@maveio/components@#{version}/#{entry}"
+      )
+
+      refute SettingsSerializer.component_config_required?()
+    end
+
+    Application.put_env(:mave_core, :playback_origin, "https://signed.example.test")
+    assert SettingsSerializer.component_config_required?()
+
+    Application.put_env(:mave_core, :playback_origin, "https://signed.video-dns.com")
+    Application.put_env(:mave_core, :components_src, "https://components.example.test/index.js")
+    assert SettingsSerializer.component_config_required?()
   end
 
   test "settings serializer uses path-style public object urls for local saas" do
