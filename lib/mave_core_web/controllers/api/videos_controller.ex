@@ -41,7 +41,9 @@ defmodule MaveCoreWeb.Api.VideosController do
   def show(%{assigns: %{current_space: %Space{} = space}} = conn, %{"hash" => hash}) do
     case PublicApi.get_embed(space, hash) do
       %Embeds.Embed{type: :video} = embed ->
-        json(conn, PublicApi.video_response(space, embed))
+        conn
+        |> put_visibility_response_status(embed)
+        |> json(PublicApi.video_response(space, embed))
 
       nil ->
         conn |> put_status(:not_found) |> json(%{error: "This video embed does not exist."})
@@ -103,7 +105,10 @@ defmodule MaveCoreWeb.Api.VideosController do
              {:ok, embed} <- maybe_move(space, embed, params),
              {:ok, embed} <- maybe_playback_visibility(embed, params) do
           embed = PublicApi.get_embed(space, hash) || embed
-          json(conn, PublicApi.video_response(space, embed))
+
+          conn
+          |> maybe_put_visibility_response_status(params, embed)
+          |> json(PublicApi.video_response(space, embed))
         else
           {:error, error} ->
             conn |> put_status(:bad_request) |> json(%{error: format_error(error)})
@@ -140,6 +145,17 @@ defmodule MaveCoreWeb.Api.VideosController do
     do: PublicApi.collection_response(space, embed)
 
   defp serialize_embed(space, %Embeds.Embed{} = embed), do: PublicApi.video_response(space, embed)
+
+  defp maybe_put_visibility_response_status(conn, %{"visibility" => _}, embed),
+    do: put_visibility_response_status(conn, embed)
+
+  defp maybe_put_visibility_response_status(conn, _params, _embed), do: conn
+
+  defp put_visibility_response_status(conn, %{playback_status: status})
+       when status in [:protecting, :publishing],
+       do: put_status(conn, :accepted)
+
+  defp put_visibility_response_status(conn, _embed), do: conn
 
   defp maybe_playback_visibility(embed, %{"visibility" => "private"}),
     do: MaveCore.Playback.request_visibility(embed, :private)

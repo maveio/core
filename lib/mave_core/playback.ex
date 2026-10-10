@@ -70,19 +70,22 @@ defmodule MaveCore.Playback do
         Repo.rollback(:playback_unavailable)
       end
 
-      updated =
+      if current.playback_status == visibility do
         current
-        |> Ecto.Changeset.change(
-          playback_visibility: visibility,
-          playback_status: if(visibility == :private, do: :protecting, else: :publishing)
-        )
-        |> Repo.update!()
+      else
+        updated =
+          current
+          |> Ecto.Changeset.change(
+            playback_status: if(visibility == :private, do: :protecting, else: :publishing)
+          )
+          |> Repo.update!()
 
-      %{embed_id: updated.id}
-      |> PlaybackVisibilityWorker.new()
-      |> Oban.insert!()
+        %{embed_id: updated.id}
+        |> PlaybackVisibilityWorker.new()
+        |> Oban.insert!()
 
-      updated
+        updated
+      end
     end)
   end
 

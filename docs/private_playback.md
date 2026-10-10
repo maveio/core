@@ -1,8 +1,12 @@
 # Private playback
 
 Videos are public by default. A configured playback adapter enables the dashboard
-access menu and the API `visibility` field. Changing access runs in the background;
-`visibility_status` remains pending until storage synchronization succeeds.
+access menu and the API `visibility` field (`"public"` or `"private"`). The response
+reports the last visibility confirmed by storage synchronization. Changing access
+runs in the background: `PUT /api/v1/videos/:id` returns `202 Accepted` while the
+change is pending. Poll `GET /api/v1/videos/:id` until it returns `200 OK` with the
+requested visibility; it also returns `202` while pending, including on retries.
+Creation, ordinary updates and already confirmed visibility retain `200 OK`.
 
 ## Using tokens
 
@@ -16,8 +20,10 @@ Without `exp`, the JWT remains valid until its signing key is revoked.
 <mave-player embed="YOUR_EMBED_ID" token="YOUR_PLAYBACK_TOKEN"></mave-player>
 ```
 
-For a custom player, append `?token=YOUR_PLAYBACK_TOKEN` to the API's returned
-`sources` URL. Media routes also accept `Authorization: Bearer YOUR_PLAYBACK_TOKEN`.
+For a custom player, use
+`/api/v1/playback/media/{public_embed_id}/playlist.m3u8?token=YOUR_PLAYBACK_TOKEN`,
+or the optional media hostname below. Other media files use the same base path.
+Media routes also accept `Authorization: Bearer YOUR_PLAYBACK_TOKEN`.
 Playlists, captions, storyboards and images use the same authorization. Child
 playlists retain the JWT; media files use temporary signed storage URLs, valid
 for at most 24 hours and no longer than the token's remaining lifetime.
@@ -51,7 +57,7 @@ https://space-{space_hash}.signed.example.com/{embed_hash}/playlist.m3u8?token=J
 ```
 
 Point wildcard DNS at the application and use TLS for `*.signed.example.com`.
-This host serves only media GET/HEAD and CORS preflight requests. API sources and
-component `cdn.playback_endpoint` settings use it automatically. Leaving it unset
+This host serves only media GET/HEAD and CORS preflight requests. The API’s existing
+`poster_image` field and component `cdn.playback_endpoint` settings use it automatically. Leaving it unset
 uses `/api/v1/playback/media/{public_embed_id}/...`; those routes remain available
 when a media hostname is configured. Do not enable shared caching on these routes.

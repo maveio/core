@@ -17,6 +17,8 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
 
   def object_info(_bucket, _path, _region), do: {:ok, %{size_bytes: 100}}
 
+  def put_public(_bucket, _path, _body, _content_type, _region), do: {:ok, %{}}
+
   def get(_bucket, path, _region) do
     cond do
       String.ends_with?(path, ".json") ->
@@ -80,9 +82,7 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
 
     assert %{
              "id" => id,
-             "visibility" => "private",
-             "visibility_status" => "private",
-             "sources" => []
+             "visibility" => "private"
            } = json_response(conn, 200)
 
     embed = PublicApi.get_embed(context.space, id)
@@ -121,32 +121,71 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
     assert %{"visibility" => "public"} = json_response(conn, 200)
   end
 
-  test "visibility stays protecting until storage synchronization succeeds", context do
+  test "visibility changes only after storage synchronization succeeds", context do
     {:ok, embed} = Embeds.create_video_embed(context.space)
-    Process.put(:playback_storage_result, {:error, :cache_purge_timeout})
-
-    Oban.Testing.with_testing_mode(:manual, fn ->
-      conn = api(context.key) |> put("/api/v1/videos/#{embed.hash}", %{visibility: "private"})
-      assert %{"visibility_status" => "protecting"} = json_response(conn, 200)
-    end)
-
+    path = "/api/v1/videos/#{embed.hash}"
     job = %Oban.Job{args: %{"embed_id" => embed.id}}
 
-    for reason <- [:cache_purge_timeout, :cache_purge_failed, :cache_pipeline_missing] do
-      Process.put(:playback_storage_result, {:error, reason})
+    for {previous, target} <- [{"public", "private"}, {"private", "public"}] do
+      Oban.Testing.with_testing_mode(:manual, fn ->
+        conn = api(context.key) |> put(path, %{visibility: target})
+        response = json_response(conn, 202)
+        assert response["visibility"] == previous
+        refute Map.has_key?(response, "visibility_status")
+      end)
 
-      assert {:error, :playback_storage_sync_failed} =
-               PlaybackVisibilityWorker.perform(job)
+      for reason <- [:cache_purge_timeout, :cache_purge_failed, :cache_pipeline_missing] do
+        Process.put(:playback_storage_result, {:error, reason})
 
-      assert PublicApi.get_embed(context.space, embed.hash).playback_status == :protecting
+        assert {:error, :playback_storage_sync_failed} = PlaybackVisibilityWorker.perform(job)
+        conn = api(context.read_key) |> get(path)
+        assert json_response(conn, 202)["visibility"] == previous
+        assert MaveCore.Playback.protected?(PublicApi.get_embed(context.space, embed.hash))
+      end
+
+      Process.put(:playback_storage_result, :ok)
+      assert :ok = PlaybackVisibilityWorker.perform(job)
+      conn = api(context.read_key) |> get(path)
+      assert json_response(conn, 200)["visibility"] == target
     end
-
-    Process.put(:playback_storage_result, :ok)
-    assert :ok = PlaybackVisibilityWorker.perform(job)
-    assert PublicApi.get_embed(context.space, embed.hash).playback_status == :private
   end
 
-  test "API sources play with the original JWT, including child playlists and files", context do
+  test "reversing a pending change retains the last confirmed visibility", context do
+    {:ok, embed} = Embeds.create_video_embed(context.space)
+    path = "/api/v1/videos/#{embed.hash}"
+
+    Oban.Testing.with_testing_mode(:manual, fn ->
+      for target <- ["private", "public"] do
+        conn = api(context.key) |> put(path, %{visibility: target})
+        assert json_response(conn, 202)["visibility"] == "public"
+      end
+
+      conn = api(context.read_key) |> get(path)
+      assert json_response(conn, 202)["visibility"] == "public"
+    end)
+
+    assert :ok = PlaybackVisibilityWorker.perform(%Oban.Job{args: %{"embed_id" => embed.id}})
+    assert_receive {:storage_visibility, _, :public}
+    conn = api(context.read_key) |> get(path)
+    assert json_response(conn, 200)["visibility"] == "public"
+  end
+
+  test "ordinary updates and already confirmed visibility keep HTTP 200", context do
+    {:ok, embed} = Embeds.create_video_embed(context.space)
+    path = "/api/v1/videos/#{embed.hash}"
+
+    Oban.Testing.with_testing_mode(:manual, fn ->
+      conn = api(context.key) |> put(path, %{visibility: "public"})
+      assert json_response(conn, 200)["visibility"] == "public"
+
+      conn = api(context.key) |> put(path, %{visibility: "private"})
+      assert conn.status == 202
+      conn = api(context.key) |> put(path, %{name: "Renamed"})
+      assert json_response(conn, 200)["visibility"] == "public"
+    end)
+  end
+
+  test "media URLs play with the original JWT, including child playlists and files", context do
     {:ok, embed} = Embeds.create_video_embed(context.space, %{visibility: :private})
 
     {:ok, embed} =
@@ -175,11 +214,9 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
     end
 
     conn = api(context.read_key) |> get("/api/v1/videos/#{embed.hash}")
-    assert %{"sources" => sources} = json_response(conn, 200)
-    assert length(sources) == 2
-    hls = Enum.find(sources, &(&1["type"] == "application/x-mpegURL"))
-    path = URI.parse(hls["src"]).path
-    assert path == "/api/v1/playback/media/#{context.space.hash}#{embed.hash}/playlist.m3u8"
+    refute Map.has_key?(json_response(conn, 200), "sources")
+    base = "/api/v1/playback/media/#{context.space.hash}#{embed.hash}"
+    path = base <> "/playlist.m3u8"
 
     token =
       sign(context.read_key, %{
@@ -194,12 +231,10 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
     assert URI.decode_query(URI.parse(child).query)["token"] == token
     assert response(get(build_conn(), child), 200) =~ "https://storage.example.test/"
 
-    mp4 = Enum.find(sources, &(&1["type"] == "video/mp4"))
-
     conn =
       build_conn()
       |> put_req_header("authorization", "Bearer " <> token)
-      |> get(URI.parse(mp4["src"]).path)
+      |> get(base <> "/v1/h264_hd.mp4")
 
     assert conn.status == 302
     assert hd(get_resp_header(conn, "location")) =~ "v1/h264_hd.mp4"
@@ -209,6 +244,25 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
     assert get(build_conn(), path <> "?" <> URI.encode_query(%{token: wrong})).status == 401
     {:ok, _} = Spaces.delete_key(context.read_key)
     assert get(build_conn(), path <> "?" <> URI.encode_query(%{token: token})).status == 401
+  end
+
+  test "video responses do not add a sources field to either format", context do
+    {:ok, embed} = Embeds.create_video_embed(context.space)
+
+    for version <- [1, 2], visibility <- [:public, :private] do
+      response =
+        PublicApi.video_response(context.space, %{
+          embed
+          | version: version,
+            playback_visibility: visibility,
+            playback_status: visibility
+        })
+
+      refute Map.has_key?(response, :sources)
+      refute Map.has_key?(response, :visibility_status)
+      assert response.visibility == visibility
+      assert Map.has_key?(response, :poster_image)
+    end
   end
 
   test "space, collection and video database IDs constrain JWT scope", context do

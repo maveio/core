@@ -2232,6 +2232,32 @@ defmodule MaveCore.EmbedsTest do
              "https://space-#{space.hash}.s3.fr-par.scw.cloud/#{video.hash}/thumbnail_4.jpg",
              "https://space-#{space.hash}.s3.fr-par.scw.cloud/#{video.hash}/thumbnail_5.jpg"
            ]
+
+    private_video =
+      video
+      |> Ecto.Changeset.change(playback_visibility: :private, playback_status: :private)
+      |> Repo.update!()
+
+    preview = Embeds.get_video_dashboard_payload(space, private_video).thumbnail_preview
+    playlist = URI.parse(preview.preferred_src)
+    token = URI.decode_query(playlist.query)["token"]
+    assert is_binary(token)
+
+    assert String.ends_with?(playlist.path, "/#{video.hash}/h264_sd_hls/playlist.m3u8") or
+             String.ends_with?(
+               playlist.path,
+               "/#{space.hash}#{video.hash}/h264_sd_hls/playlist.m3u8"
+             )
+
+    assert {:ok, _expires_at} = MaveCore.Playback.authorize(token, private_video)
+
+    for src <- [preview.fallback_src | Enum.map(preview.frame_srcs, & &1.src)] do
+      uri = URI.parse(src)
+      query = URI.decode_query(uri.query)
+      assert query["X-Amz-Signature"]
+      assert query["X-Amz-Expires"] == "86400"
+      assert String.contains?(uri.path, "/#{video.hash}/")
+    end
   end
 
   test "settings serializer omits default controls from player attrs but keeps manifest default" do

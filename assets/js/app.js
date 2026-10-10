@@ -441,6 +441,14 @@ const ThumbnailPreviewHook = {
 
     this.eventsBound = true
 
+    this.video.addEventListener("error", () => {
+      const preferredSrc = this.el.dataset.previewSrc
+      if (this.currentSource === preferredSrc && this.el.dataset.fallbackSrc !== preferredSrc) {
+        this.failedPreferredSrc = preferredSrc
+        this.loadVideoSource()
+      }
+    })
+
     this.scrubArea.addEventListener("mousedown", (event) => {
       this.scrubStart(event)
     })
@@ -478,7 +486,10 @@ const ThumbnailPreviewHook = {
 
     const preferredSrc = this.el.dataset.previewSrc || ""
     const fallbackSrc = this.el.dataset.fallbackSrc || ""
-    const nextSrc = this.selectPlayableSource(preferredSrc, fallbackSrc)
+    const nextSrc = this.selectPlayableSource(
+      preferredSrc === this.failedPreferredSrc ? "" : preferredSrc,
+      fallbackSrc,
+    )
 
     if (!nextSrc || this.currentSource === nextSrc) {
       return
@@ -498,7 +509,7 @@ const ThumbnailPreviewHook = {
   },
 
   selectPlayableSource(preferredSrc, fallbackSrc) {
-    if (preferredSrc && !preferredSrc.endsWith(".m3u8")) {
+    if (preferredSrc && !new URL(preferredSrc, document.baseURI).pathname.endsWith(".m3u8")) {
       return preferredSrc
     }
 

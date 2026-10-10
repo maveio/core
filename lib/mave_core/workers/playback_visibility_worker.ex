@@ -37,10 +37,12 @@ defmodule MaveCore.Workers.PlaybackVisibilityWorker do
   defp apply_visibility(_embed, nil), do: Repo.rollback(:playback_adapter_missing)
 
   defp apply_visibility(embed, adapter) do
-    case adapter.apply_visibility(embed, embed.playback_visibility) do
+    visibility = if embed.playback_status in [:private, :protecting], do: :private, else: :public
+
+    case adapter.apply_visibility(embed, visibility) do
       :ok ->
         embed
-        |> Ecto.Changeset.change(playback_status: embed.playback_visibility)
+        |> Ecto.Changeset.change(playback_visibility: visibility, playback_status: visibility)
         |> Repo.update!()
 
       {:error, _reason} ->
