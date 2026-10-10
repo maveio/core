@@ -40,7 +40,7 @@ defmodule MaveCore.Embeds.SettingsSerializer do
 
   @spec component_config_required?() :: boolean()
   def component_config_required? do
-    component_src() != default_component_src() or
+    not default_component_src?(component_src()) or
       not default_component_runtime_config?(component_runtime_config())
   end
 
@@ -579,7 +579,12 @@ defmodule MaveCore.Embeds.SettingsSerializer do
     end
   end
 
-  defp default_component_src, do: "https://cdn.video-dns.com/npm/@maveio/components/+esm"
+  defp default_component_src?(src) do
+    Regex.match?(
+      ~r"\Ahttps://cdn\.video-dns\.com/npm/@maveio/components(?:@[^/?#]+)?/(?:\+esm|dist/index\.js)\z",
+      src
+    )
+  end
 
   defp default_component_runtime_config?(%{"cdn" => %{"endpoint" => cdn_endpoint}} = config)
        when cdn_endpoint in @default_component_cdn_endpoint_aliases do

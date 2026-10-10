@@ -509,6 +509,27 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     end)
   end
 
+  test "private video snippets keep versioned bundles simple", %{conn: conn} do
+    with_default_component_runtime(fn ->
+      base = "https://cdn.video-dns.com/npm/@maveio/components@0.0.197"
+      Application.put_env(:mave_core, :components_base_url, base)
+      Application.put_env(:mave_core, :components_src, base <> "/+esm")
+      {conn, space} = authenticated_conn(conn)
+      embed = video_embed_fixture(space, %{name: "Versioned bundle snippet"})
+
+      embed
+      |> Ecto.Changeset.change(playback_visibility: :private, playback_status: :private)
+      |> Repo.update!()
+
+      {:ok, view, _html} = live(conn, "/videos/#{embed.id}")
+
+      assert has_element?(view, "#snippet-code", base <> "/+esm")
+      assert has_element?(view, "#snippet-code", ~s(token="YOUR_PLAYBACK_TOKEN"))
+      refute has_element?(view, "#snippet-code", "configureMave")
+      refute has_element?(view, "#snippet-code", "dist/config.js")
+    end)
+  end
+
   test "/videos/:id can switch into and out of replace mode with the upload panel", %{conn: conn} do
     {conn, space} = authenticated_conn(conn)
     video = video_embed_fixture(space, %{name: "Replace Flow"})
