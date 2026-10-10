@@ -102,6 +102,42 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
   end
 
   @tag :private_playback_ui
+  test "private preview replacements update the playback session hook", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    embed = video_embed_fixture(space, %{name: "Private settings preview"})
+
+    embed
+    |> Ecto.Changeset.change(playback_visibility: :private, playback_status: :private)
+    |> Repo.update!()
+
+    {:ok, view, _html} = live(conn, "/videos/#{embed.id}")
+
+    player_id = fn ->
+      view
+      |> element("#video-components-loader")
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.filter("#video-components-loader")
+      |> LazyHTML.attribute("data-playback-player")
+      |> List.first()
+    end
+
+    original_id = player_id.()
+    assert is_binary(original_id)
+    assert has_element?(view, "##{original_id} mave-player")
+
+    view
+    |> element(~s([phx-value-title="controls"][phx-value-label="big"]))
+    |> render_click()
+
+    replacement_id = player_id.()
+    assert is_binary(replacement_id)
+    refute replacement_id == original_id
+    assert has_element?(view, ~s(##{replacement_id} mave-player[controls="big"]))
+    assert has_element?(view, ~s(#video-components-loader[data-playback-status="private"]))
+  end
+
+  @tag :private_playback_ui
   test "public videos retain the ordinary embed code and iframe option", %{conn: conn} do
     {conn, space} = authenticated_conn(conn)
     embed = video_embed_fixture(space, %{name: "Public embed setup"})

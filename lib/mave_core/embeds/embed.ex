@@ -16,6 +16,7 @@ defmodule MaveCore.Embeds.Embed do
     field :external_url, :string
     field :archived, :boolean, default: false
     field :replacing, :boolean, default: false
+    # Last visibility confirmed by storage synchronization.
     field :playback_visibility, Ecto.Enum, values: [:public, :private], default: :public
 
     field :playback_status, Ecto.Enum,

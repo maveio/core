@@ -1582,13 +1582,13 @@ defmodule MaveCore.Embeds do
         "#{embed.hash}/original"
       end
 
-    SettingsSerializer.storage_object_url(bucket, key)
+    preview_storage_url(space, embed, bucket, key)
   end
 
   defp hls_preview_src(
          %Video{id: video_id},
          %Space{} = space,
-         %Embed{},
+         %Embed{} = embed,
          flow_run
        ) do
     bucket = Storage.bucket_for_space(space.hash, space.region)
@@ -1607,15 +1607,15 @@ defmodule MaveCore.Embeds do
       |> Repo.one()
 
     if is_binary(stable_key) and stable_key != "" do
-      SettingsSerializer.storage_object_url(bucket, stable_key)
+      preview_storage_url(space, embed, bucket, stable_key)
     else
-      processing_hls_preview_src(space, flow_run)
+      processing_hls_preview_src(space, embed, flow_run)
     end
   end
 
   defp hls_preview_src(_video, _space, _embed, _flow_run), do: nil
 
-  defp processing_hls_preview_src(%Space{} = space, %Run{status: status} = run)
+  defp processing_hls_preview_src(%Space{} = space, %Embed{} = embed, %Run{status: status} = run)
        when status in ["queued", "running"] do
     bucket = Storage.bucket_for_space(space.hash, space.region)
 
@@ -1627,14 +1627,14 @@ defmodule MaveCore.Embeds do
         output: %{"playlist_key" => key, "rendition" => %{"size" => "sd"}}
       }
       when is_binary(key) and key != "" ->
-        SettingsSerializer.storage_object_url(bucket, key)
+        preview_storage_url(space, embed, bucket, key)
 
       _ ->
         nil
     end)
   end
 
-  defp processing_hls_preview_src(_space, _flow_run), do: nil
+  defp processing_hls_preview_src(_space, _embed, _flow_run), do: nil
 
   defp preview_frame_srcs(%Space{} = space, %Embed{} = embed, duration, version) do
     frame_count = 6
@@ -1651,20 +1651,29 @@ defmodule MaveCore.Embeds do
 
       %{
         time: timestamp,
-        src: preview_thumbnail_src(bucket, embed.hash, version, index)
+        src: preview_thumbnail_src(space, embed, bucket, version, index)
       }
     end)
   end
 
-  defp preview_thumbnail_src(bucket, embed_hash, version, index) do
+  defp preview_thumbnail_src(space, embed, bucket, version, index) do
     key =
       if version > 0 do
-        "#{embed_hash}/v#{version}/thumbnail_#{index}.jpg"
+        "#{embed.hash}/v#{version}/thumbnail_#{index}.jpg"
       else
-        "#{embed_hash}/thumbnail_#{index}.jpg"
+        "#{embed.hash}/thumbnail_#{index}.jpg"
       end
 
-    SettingsSerializer.storage_object_url(bucket, key)
+    preview_storage_url(space, embed, bucket, key)
+  end
+
+  defp preview_storage_url(space, embed, bucket, key) do
+    if MaveCore.Playback.protected?(embed) do
+      path = String.replace_prefix(key, embed.hash <> "/", "")
+      PlaybackMedia.dashboard_preview_url(space, embed, path)
+    else
+      SettingsSerializer.storage_object_url(bucket, key)
+    end
   end
 
   defp resolution_label(video, audio_only? \\ false)

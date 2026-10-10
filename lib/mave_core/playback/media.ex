@@ -10,13 +10,29 @@ defmodule MaveCore.Playback.Media do
 
   # Call only for an authorized dashboard listing. The signature covers one image.
   def dashboard_thumbnail_url(space, embed, cache_buster) do
+    query = if cache_buster, do: [{"e", cache_buster}], else: []
+    dashboard_asset_url(space, embed, "thumbnail.jpg", query)
+  end
+
+  # Playlists must pass through the playback endpoint to sign their child URLs.
+  def dashboard_preview_url(space, embed, path) do
+    if String.ends_with?(path, ".m3u8") do
+      session = MaveCore.Playback.dashboard_session(embed)
+      endpoint = SettingsSerializer.component_runtime_config()["cdn"]["playback_endpoint"]
+      url = MaveCore.Playback.URLs.media_url(endpoint, space.hash, embed.hash, path)
+      url <> "?" <> URI.encode_query(%{"token" => session.token})
+    else
+      dashboard_asset_url(space, embed, path, [])
+    end
+  end
+
+  defp dashboard_asset_url(space, embed, path, query) do
     now = System.system_time(:second)
     signed_at = now - rem(now, @thumbnail_cache_seconds)
     bucket = Storage.bucket_for_space(space.hash, space.region)
-    query = [{"response-cache-control", "private, max-age=#{@thumbnail_cache_seconds}"}]
-    query = if cache_buster, do: query ++ [{"e", cache_buster}], else: query
+    query = [{"response-cache-control", "private, max-age=#{@thumbnail_cache_seconds}"} | query]
 
-    case storage().presigned_get_url(bucket, embed.hash <> "/thumbnail.jpg", space.region,
+    case storage().presigned_get_url(bucket, embed.hash <> "/" <> path, space.region,
            datetime: DateTime.from_unix!(signed_at),
            expires: @thumbnail_url_ttl,
            query_params: query
