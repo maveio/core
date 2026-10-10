@@ -227,10 +227,17 @@ defmodule MaveCoreWeb.DashboardComponents.Buttons do
         !@disabled && "cursor-pointer hover:bg-stone-100"
       ]}
     >
-      <div :if={@icon} class={["pl-3", @danger && "text-red-600", !@danger && "text-blue-400"]}>
+      <div
+        :if={@icon}
+        class={[
+          "flex shrink-0 items-center justify-center pl-3",
+          @danger && "text-red-600",
+          !@danger && "text-blue-400"
+        ]}
+      >
         <.dropdown_icon name={@icon} />
       </div>
-      <div class="text-stone-500 select-none font-medium text-sm pt-2 pb-2.5 pl-2 pr-4">
+      <div class="text-stone-500 select-none font-medium text-sm leading-5 py-2 pl-2 pr-4">
         {render_slot(@inner_block)}
       </div>
     </div>
@@ -255,220 +262,29 @@ defmodule MaveCoreWeb.DashboardComponents.Buttons do
     end
   end
 
-  # Icons for dropdown items
-  defp dropdown_icon(%{name: "render"} = assigns) do
-    ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      class="w-5 h-5 border-transparent border"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <polyline points="8 17 12 21 16 17"></polyline>
-      <line x1="12" y1="12" x2="12" y2="21"></line>
-      <path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"></path>
-    </svg>
-    """
-  end
-
-  defp dropdown_icon(%{name: "replace"} = assigns) do
-    ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      class="w-5 h-5 border-transparent border"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-    >
-      <path
-        stroke-width="1.5"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"
-      >
-      </path>
-    </svg>
-    """
-  end
-
-  defp dropdown_icon(%{name: "delete"} = assigns) do
-    ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      class="w-5 h-5 border-transparent border"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <polyline points="3 6 5 6 21 6"></polyline>
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-      <line x1="10" y1="11" x2="10" y2="17"></line>
-      <line x1="14" y1="11" x2="14" y2="17"></line>
-    </svg>
-    """
-  end
-
-  defp dropdown_icon(%{name: "archive"} = assigns) do
-    ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      class="w-5 h-5 border-transparent border"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <path d="M3 7.5h18" />
-      <path d="M5.25 7.5v11.25A1.5 1.5 0 0 0 6.75 20.25h10.5a1.5 1.5 0 0 0 1.5-1.5V7.5" />
-      <path d="M8.25 3.75h7.5A1.5 1.5 0 0 1 17.25 5.25v2.25H6.75V5.25a1.5 1.5 0 0 1 1.5-1.5Z" />
-      <path d="M10.5 12h3" />
-    </svg>
-    """
-  end
-
-  defp dropdown_icon(%{name: "move"} = assigns) do
-    ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      class="w-5 h-5 border-transparent border"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <path d="M8 7h10" />
-      <path d="M14 3l4 4-4 4" />
-      <path d="M16 17H6" />
-      <path d="M10 13l-4 4 4 4" />
-    </svg>
-    """
-  end
-
-  defp dropdown_icon(%{name: "remove"} = assigns) do
-    ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      class="w-5 h-5 border-transparent border"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <path d="M16 7H6" />
-      <path d="M10 3L6 7l4 4" />
-      <path d="M8 17h10" />
-    </svg>
-    """
-  end
-
-  defp dropdown_icon(%{name: "create"} = assigns) do
-    ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      class="w-5 h-5 border-transparent border"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <line x1="12" y1="5" x2="12" y2="19"></line>
-      <line x1="5" y1="12" x2="19" y2="12"></line>
-    </svg>
-    """
-  end
-
-  defp dropdown_icon(%{name: "video"} = assigns) do
-    ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      class="w-5 h-5 border-transparent border"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <rect x="3.75" y="5.25" width="16.5" height="13.5" rx="2.25" />
-      <path d="M10 9.25v5.5l4.75-2.75L10 9.25Z" />
-    </svg>
-    """
-  end
-
-  defp dropdown_icon(%{name: "folder"} = assigns) do
-    ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      class="w-5 h-5 border-transparent border"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.018a1.5 1.5 0 0 1 .948.337l1.284 1.026A1.5 1.5 0 0 0 11.698 7.7H19.5A1.5 1.5 0 0 1 21 9.2v7.3A1.5 1.5 0 0 1 19.5 18H4.5A1.5 1.5 0 0 1 3 16.5v-9Z" />
-      <path d="M3 10.5h18" />
-    </svg>
-    """
-  end
-
-  defp dropdown_icon(%{name: "hero-" <> _rest} = assigns) do
-    ~H"""
-    <.icon name={@name} class="size-5" />
-    """
-  end
-
+  # Keep menu icons in the same outline family and at the same optical size.
   defp dropdown_icon(assigns) do
-    # Fallback for unknown icons
+    icons = %{
+      "render" => "hero-cloud-arrow-down",
+      "replace" => "hero-arrow-path",
+      "delete" => "hero-trash",
+      "archive" => "hero-archive-box",
+      "move" => "hero-arrows-right-left",
+      "remove" => "hero-arrow-left",
+      "create" => "hero-plus",
+      "video" => "hero-play-circle",
+      "folder" => "hero-folder"
+    }
+
+    name =
+      if String.starts_with?(assigns.name, "hero-"),
+        do: assigns.name,
+        else: Map.get(icons, assigns.name, "hero-ellipsis-horizontal-circle")
+
+    assigns = assign(assigns, :name, name)
+
     ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      class="w-5 h-5"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <circle cx="12" cy="12" r="10"></circle>
-    </svg>
+    <.icon name={@name} class="block size-4 shrink-0" />
     """
   end
 

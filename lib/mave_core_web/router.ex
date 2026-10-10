@@ -81,6 +81,18 @@ defmodule MaveCoreWeb.Router do
     plug MaveCoreWeb.Plugs.RequireHost, env_var: "MAVE_IMAGE_HOST"
   end
 
+  scope "/api/v1", MaveCoreWeb do
+    pipe_through [:public_cors]
+    get "/playback/media/:id/*path", Api.PlaybackController, :show, log: false
+    options "/playback/media/:id/*path", Api.PlaybackController, :show, log: false
+  end
+
+  scope "/v1", MaveCoreWeb do
+    pipe_through [:api_host, :public_cors]
+    get "/playback/media/:id/*path", Api.PlaybackController, :show, log: false
+    options "/playback/media/:id/*path", Api.PlaybackController, :show, log: false
+  end
+
   scope "/", MaveCoreWeb do
     pipe_through :browser
 

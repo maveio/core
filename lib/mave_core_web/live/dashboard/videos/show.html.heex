@@ -207,6 +207,9 @@
   <% else %>
     <div
       id="video-components-loader"
+      data-playback-embed={@video.public_id}
+      data-playback-status={@resource_embed.playback_status}
+      data-playback-player={@player_dom_id}
       phx-hook="component_loader"
       data-component-config-src={@video.component_config_src}
       data-component-src={@component_src}
@@ -229,7 +232,20 @@
           <div class="font-mono pl-2 pr-2.5 text-stone-400/50">{@video.public_id}</div>
         </div>
 
-        <.dropdown_button id="video-actions">
+        <.dropdown_button id="video-actions" menu_class="w-40">
+          <:item
+            :if={MaveCore.Playback.available?(@current_space)}
+            id="video-playback-visibility"
+            icon={if @resource_embed.playback_visibility == :private, do: "hero-lock-open", else: "hero-lock-closed"}
+            phx-click="toggle_playback_visibility"
+            disabled={@resource_embed.playback_status in [:protecting, :publishing]}
+          >
+            {cond do
+              @resource_embed.playback_status in [:protecting, :publishing] -> gettext("updating access…")
+              @resource_embed.playback_visibility == :private -> gettext("public")
+              true -> gettext("private (token)")
+            end}
+          </:item>
           <:item :if={@video_ready or @replace_mode} icon="replace" phx-click={if @replace_mode, do: "cancel_replace", else: "replace"}>
             {if @replace_mode, do: gettext("cancel replace"), else: gettext("replace")}
           </:item>
@@ -246,10 +262,13 @@
         <.video_embed_panel
           player_dom_id={@player_dom_id}
           audio_only={match?(%{original: %{audio_only: true}}, @video) and !@replace_mode}
-          tabs={code_tabs(@code_preview, @video)}
-          snippet={snippet_string(@code_preview, @video)}
-          line_numbers={line_numbers(@code_preview, @video)}
+          tabs={code_tabs(@code_preview, @video, @resource_embed)}
+          snippet={snippet_string(@code_preview, @video, @resource_embed)}
+          line_numbers={line_numbers(@code_preview, @video, @resource_embed)}
         >
+          <:guidance>
+            <MaveCoreWeb.DashboardComponents.PlaybackAccess.guidance embed={@resource_embed} />
+          </:guidance>
           <:player>
             <%= if @replace_mode do %>
               <.video_upload_panel token={@upload_token} dom_id="video-upload-bridge-detail" />

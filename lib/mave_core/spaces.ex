@@ -776,13 +776,23 @@ defmodule MaveCore.Spaces do
 
       true ->
         case LegacyShortUUID.cast(sub) do
-          {:ok, id} -> list_space_by_id(id)
-          :error -> []
+          {:ok, id} ->
+            list_space_by_scope_id(id)
+
+          :error ->
+            []
         end
     end
   end
 
   defp jwt_space_candidates(_sub), do: []
+
+  defp list_space_by_scope_id(id) do
+    case list_space_by_id(id) do
+      [] -> list_space_by_embed_id(id)
+      spaces -> spaces
+    end
+  end
 
   defp list_spaces_by_hash(hash) when is_binary(hash) do
     normalized_space_hash = normalize_space_hash(hash)
@@ -798,6 +808,16 @@ defmodule MaveCore.Spaces do
       %Space{} = space -> [space]
       nil -> []
     end
+  end
+
+  defp list_space_by_embed_id(id) do
+    from(s in Space,
+      join: e in MaveCore.Embeds.Embed,
+      on: e.space_id == s.id,
+      where: e.id == ^id and is_nil(e.deleted_at) and is_nil(s.deleted_at),
+      select: s
+    )
+    |> Repo.all()
   end
 
   defp matching_jwt_key(%Space{} = space, jwt_string) do

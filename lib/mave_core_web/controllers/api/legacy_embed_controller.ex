@@ -16,6 +16,7 @@ defmodule MaveCoreWeb.Api.LegacyEmbedController do
     with {:ok, %{space_hash: space_hash, embed_hash: embed_hash}} <-
            EmbedId.split(String.trim(embed_id || "")),
          %Embed{type: :video} = embed <- Embeds.get_embed_by_hashes(space_hash, embed_hash),
+         false <- MaveCore.Playback.protected?(embed),
          {:ok, manifest} <- ManifestPublisher.current(embed) do
       json(conn, manifest)
     else

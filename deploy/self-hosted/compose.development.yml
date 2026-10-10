@@ -16,6 +16,7 @@ x-development: &development
     POSTGRES_USER: mave_core
     CLICKHOUSE_HOST: clickhouse
     MAVE_MEDIA_SANDBOX: required
+    MAVE_PLAYBACK_STORAGE_ENDPOINT: http://localhost:${MAVE_MINIO_API_PORT:-9000}
   volumes:
     - ../..:/app
     - dev_deps:/app/deps
@@ -23,6 +24,9 @@ x-development: &development
     - dev_node_modules:/app/assets/node_modules
 
 services:
+  minio:
+    ports:
+      - "127.0.0.1:${MAVE_MINIO_API_PORT:-9000}:9000"
   welcome:
     environment:
       MAVE_DEVELOPMENT: "true"

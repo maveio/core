@@ -254,9 +254,49 @@ const ComponentLoaderHook = {
       }
 
       await window.__maveComponentImports[src]
+      this.applyPlaybackSession()
     } catch (error) {
       console.error("Failed to load mave components bundle", error)
     }
+  },
+
+  destroyed() {
+    clearTimeout(this.playbackRenewal)
+    this.playbackDestroyed = true
+  },
+
+  applyPlaybackSession() {
+    const key = `${this.el.dataset.playbackEmbed}:${this.el.dataset.playbackStatus}`
+    if (!this.el.dataset.playbackEmbed || this.playbackDestroyed) return
+
+    const apply = ({ session, embed }) => {
+      document.querySelectorAll("mave-player, mave-clip, mave-audio").forEach((element) => {
+        if (element.embed === embed) element.token = session?.token || ""
+      })
+    }
+    if (this.playbackKey === key && this.playbackData &&
+        (!this.playbackData.session || this.playbackData.session.expires_at * 1000 > Date.now() + 60000)) {
+      apply(this.playbackData)
+      return
+    }
+    if (this.playbackPending) return
+    this.playbackPending = true
+    this.pushEvent("playback_session", {}, (data) => {
+      this.playbackPending = false
+      if (this.playbackDestroyed) return
+      if (key !== `${this.el.dataset.playbackEmbed}:${this.el.dataset.playbackStatus}`) {
+        this.applyPlaybackSession()
+        return
+      }
+      this.playbackKey = key
+      this.playbackData = data
+      apply(data)
+      clearTimeout(this.playbackRenewal)
+      if (data.session) {
+        this.playbackRenewal = setTimeout(() => this.applyPlaybackSession(),
+          Math.max(1000, data.session.expires_at * 1000 - Date.now() - 60000))
+      }
+    })
   },
 }
 
@@ -401,6 +441,14 @@ const ThumbnailPreviewHook = {
 
     this.eventsBound = true
 
+    this.video.addEventListener("error", () => {
+      const preferredSrc = this.el.dataset.previewSrc
+      if (this.currentSource === preferredSrc && this.el.dataset.fallbackSrc !== preferredSrc) {
+        this.failedPreferredSrc = preferredSrc
+        this.loadVideoSource()
+      }
+    })
+
     this.scrubArea.addEventListener("mousedown", (event) => {
       this.scrubStart(event)
     })
@@ -438,7 +486,10 @@ const ThumbnailPreviewHook = {
 
     const preferredSrc = this.el.dataset.previewSrc || ""
     const fallbackSrc = this.el.dataset.fallbackSrc || ""
-    const nextSrc = this.selectPlayableSource(preferredSrc, fallbackSrc)
+    const nextSrc = this.selectPlayableSource(
+      preferredSrc === this.failedPreferredSrc ? "" : preferredSrc,
+      fallbackSrc,
+    )
 
     if (!nextSrc || this.currentSource === nextSrc) {
       return
@@ -458,7 +509,7 @@ const ThumbnailPreviewHook = {
   },
 
   selectPlayableSource(preferredSrc, fallbackSrc) {
-    if (preferredSrc && !preferredSrc.endsWith(".m3u8")) {
+    if (preferredSrc && !new URL(preferredSrc, document.baseURI).pathname.endsWith(".m3u8")) {
       return preferredSrc
     }
 

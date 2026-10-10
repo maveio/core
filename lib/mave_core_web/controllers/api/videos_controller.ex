@@ -1,7 +1,7 @@
 defmodule MaveCoreWeb.Api.VideosController do
   use MaveCoreWeb, :controller
 
-  plug MaveCoreWeb.Plugs.ApiKeyWriteAuth when action in [:create, :update, :delete]
+  plug(MaveCoreWeb.Plugs.ApiKeyWriteAuth when action in [:create, :update, :delete])
 
   alias MaveCore.Embeds
   alias MaveCore.PublicApi
@@ -41,7 +41,9 @@ defmodule MaveCoreWeb.Api.VideosController do
   def show(%{assigns: %{current_space: %Space{} = space}} = conn, %{"hash" => hash}) do
     case PublicApi.get_embed(space, hash) do
       %Embeds.Embed{type: :video} = embed ->
-        json(conn, PublicApi.video_response(space, embed))
+        conn
+        |> put_visibility_response_status(embed)
+        |> json(PublicApi.video_response(space, embed))
 
       nil ->
         conn |> put_status(:not_found) |> json(%{error: "This video embed does not exist."})
@@ -70,10 +72,13 @@ defmodule MaveCoreWeb.Api.VideosController do
 
   def create(%{assigns: %{current_space: %Space{} = space}} = conn, params) do
     with {:ok, parent_folder_id} <- resolve_parent_folder_id(space, params),
+         :ok <-
+           MaveCore.Playback.validate_visibility(space, Map.get(params, "visibility", "public")),
          :ok <- maybe_validate_input_url(params),
          {:ok, embed} <-
            Embeds.create_video_embed(space, %{
              name: blank_to_nil(params["name"]),
+             visibility: Map.get(params, "visibility", "public"),
              parent_folder_id: parent_folder_id
            }),
          :ok <- maybe_start_input_url_upload(space, embed, params) do
@@ -91,10 +96,19 @@ defmodule MaveCoreWeb.Api.VideosController do
   def update(%{assigns: %{current_space: %Space{} = space}} = conn, %{"hash" => hash} = params) do
     case PublicApi.get_embed(space, hash) do
       %Embeds.Embed{type: :video} = embed ->
-        with {:ok, embed} <- maybe_rename(embed, params),
-             {:ok, embed} <- maybe_move(space, embed, params) do
+        with :ok <-
+               MaveCore.Playback.validate_visibility(
+                 space,
+                 Map.get(params, "visibility", "public")
+               ),
+             {:ok, embed} <- maybe_rename(embed, params),
+             {:ok, embed} <- maybe_move(space, embed, params),
+             {:ok, embed} <- maybe_playback_visibility(embed, params) do
           embed = PublicApi.get_embed(space, hash) || embed
-          json(conn, PublicApi.video_response(space, embed))
+
+          conn
+          |> maybe_put_visibility_response_status(params, embed)
+          |> json(PublicApi.video_response(space, embed))
         else
           {:error, error} ->
             conn |> put_status(:bad_request) |> json(%{error: format_error(error)})
@@ -131,6 +145,26 @@ defmodule MaveCoreWeb.Api.VideosController do
     do: PublicApi.collection_response(space, embed)
 
   defp serialize_embed(space, %Embeds.Embed{} = embed), do: PublicApi.video_response(space, embed)
+
+  defp maybe_put_visibility_response_status(conn, %{"visibility" => _}, embed),
+    do: put_visibility_response_status(conn, embed)
+
+  defp maybe_put_visibility_response_status(conn, _params, _embed), do: conn
+
+  defp put_visibility_response_status(conn, %{playback_status: status})
+       when status in [:protecting, :publishing],
+       do: put_status(conn, :accepted)
+
+  defp put_visibility_response_status(conn, _embed), do: conn
+
+  defp maybe_playback_visibility(embed, %{"visibility" => "private"}),
+    do: MaveCore.Playback.request_visibility(embed, :private)
+
+  defp maybe_playback_visibility(embed, %{"visibility" => "public"}),
+    do: MaveCore.Playback.request_visibility(embed, :public)
+
+  defp maybe_playback_visibility(_embed, %{"visibility" => _}), do: {:error, :invalid_visibility}
+  defp maybe_playback_visibility(embed, _params), do: {:ok, embed}
 
   defp resolve_collection(params, space),
     do: PublicApi.resolve_collection_id(space, params["collection"])
@@ -203,6 +237,8 @@ defmodule MaveCoreWeb.Api.VideosController do
     do: "This collection does not seem to be part of your space."
 
   defp format_error(:not_found), do: "This video embed does not exist."
+  defp format_error(:invalid_visibility), do: "visibility must be public or private."
+  defp format_error(:playback_unavailable), do: "Private playback is unavailable for this space."
   defp format_error(:embed_limit_reached), do: "This space has reached its video limit."
   defp format_error(error) when is_binary(error), do: error
   defp format_error(_error), do: "Could not update this video."

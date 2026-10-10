@@ -9,6 +9,7 @@ defmodule MaveCore.PublicApi do
   alias MaveCore.Embeds.{Embed, Events, SettingsSerializer}
   alias MaveCore.Flow
   alias MaveCore.Languages
+  alias MaveCore.Playback.URLs
   alias MaveCore.PublicHttpUrl
   alias MaveCore.Repo
   alias MaveCore.Spaces.Space
@@ -141,6 +142,7 @@ defmodule MaveCore.PublicApi do
     if embed.version == 2 do
       %{
         id: public_embed_id(space, embed),
+        visibility: embed.playback_visibility,
         name: embed_name(embed),
         duration: current_video && current_video.duration,
         width: current_video && current_video.max_width,
@@ -157,6 +159,7 @@ defmodule MaveCore.PublicApi do
     else
       %{
         id: public_embed_id(space, embed),
+        visibility: embed.playback_visibility,
         embed_url: embed_url(space, embed),
         poster_image: poster_image(space, embed),
         object: "video",
@@ -474,7 +477,14 @@ defmodule MaveCore.PublicApi do
   end
 
   defp poster_image(%Space{} = space, %Embed{} = embed) do
-    SettingsSerializer.preview_poster_url(space, embed, embed.settings)
+    if MaveCore.Playback.protected?(embed),
+      do: private_poster_url(space, embed),
+      else: SettingsSerializer.preview_poster_url(space, embed, embed.settings)
+  end
+
+  defp private_poster_url(space, embed) do
+    endpoint = SettingsSerializer.component_runtime_config()["cdn"]["playback_endpoint"]
+    URLs.media_url(endpoint, space.hash, embed.hash, "thumbnail.jpg")
   end
 
   defp video_renditions(nil), do: []

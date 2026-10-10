@@ -58,6 +58,7 @@ defmodule MaveCoreWeb.Endpoint do
 
   plug Plug.MethodOverride
   plug Plug.Head
+  plug MaveCoreWeb.Plugs.PlaybackHost
   plug Plug.Session, @session_options
   plug MaveCoreWeb.Router
 

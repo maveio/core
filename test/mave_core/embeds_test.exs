@@ -1969,19 +1969,19 @@ defmodule MaveCore.EmbedsTest do
 
     Application.delete_env(:mave_core, :components_src)
     Application.delete_env(:mave_core, :components_base_url)
-    Application.put_env(:mave_core, :domain, "https://dash.staging.mave.io/")
+    Application.put_env(:mave_core, :domain, "https://dashboard.example.test/")
 
     Application.put_env(:mave_core, :upload,
-      endpoint: "https://upload.staging.mave.io/files",
-      source_base_url: "https://s3.fr-par.scw.cloud",
+      endpoint: "https://upload.example.test/files",
+      source_base_url: "https://storage.example.test",
       source_region: "fr-par",
       hook_secret: "secret",
       default_template: "publish_default"
     )
 
-    Application.put_env(:mave_core, :public_cdn_host, "staging.video-dns.com")
+    Application.put_env(:mave_core, :public_cdn_host, "storage.example.test")
     Application.put_env(:mave_core, :public_cdn_scheme, "https")
-    System.put_env("MAVE_METRICS_HOST", "metrics.staging.video-dns.com")
+    System.put_env("MAVE_METRICS_HOST", "metrics.example.test")
 
     assert SettingsSerializer.component_src() ==
              "https://cdn.video-dns.com/npm/@maveio/components/+esm"
@@ -1990,20 +1990,25 @@ defmodule MaveCore.EmbedsTest do
              "https://cdn.video-dns.com/npm/@maveio/components/dist/config.js"
 
     assert Jason.decode!(SettingsSerializer.component_config_json()) == %{
-             "api" => %{"endpoint" => "https://dash.staging.mave.io/api/v1"},
-             "cdn" => %{"endpoint" => "https://space-${this.spaceId}.s3.fr-par.scw.cloud"},
-             "metrics" => %{"endpoint" => "https://metrics.staging.video-dns.com/v1/events"},
+             "api" => %{"endpoint" => "https://dashboard.example.test/api/v1"},
+             "cdn" => %{
+               "endpoint" => "https://space-${this.spaceId}.storage.example.test",
+               "playback_endpoint" =>
+                 "https://dashboard.example.test/api/v1/playback/media/${this.spaceId}${this.embedId}"
+             },
+             "metrics" => %{"endpoint" => "https://metrics.example.test/v1/events"},
              "upload" => %{
-               "endpoint" => "https://upload.staging.mave.io/files",
-               "socket" => "wss://dash.staging.mave.io/api/v1/socket"
+               "endpoint" => "https://upload.example.test/files",
+               "socket" => "wss://dashboard.example.test/api/v1/socket"
              }
            }
 
     assert SettingsSerializer.storage_object_url("space-ofyrn", "Vkmazex4WB/manifest.json") ==
-             "https://space-ofyrn.s3.fr-par.scw.cloud/Vkmazex4WB/manifest.json"
+             "https://space-ofyrn.storage.example.test/Vkmazex4WB/manifest.json"
   end
 
   test "settings serializer does not require component config for production CDN aliases" do
+    original_playback_origin = Application.get_env(:mave_core, :playback_origin)
     original_src = Application.get_env(:mave_core, :components_src)
     original_base = Application.get_env(:mave_core, :components_base_url)
     original_domain = Application.get_env(:mave_core, :domain)
@@ -2015,6 +2020,7 @@ defmodule MaveCore.EmbedsTest do
     original_metrics_host = System.get_env("MAVE_METRICS_HOST")
 
     on_exit(fn ->
+      restore_env(:playback_origin, original_playback_origin)
       restore_env(:components_src, original_src)
       restore_env(:components_base_url, original_base)
       restore_env(:domain, original_domain)
@@ -2026,13 +2032,14 @@ defmodule MaveCore.EmbedsTest do
       restore_system_env("MAVE_METRICS_HOST", original_metrics_host)
     end)
 
+    Application.put_env(:mave_core, :playback_origin, "https://signed.video-dns.com")
     Application.delete_env(:mave_core, :components_src)
     Application.delete_env(:mave_core, :components_base_url)
     Application.put_env(:mave_core, :domain, "https://dash.mave.io")
 
     Application.put_env(:mave_core, :upload,
       endpoint: "https://upload.mave.io/files",
-      source_base_url: "https://s3.fr-par.scw.cloud",
+      source_base_url: "https://storage.example.test",
       public_base_url: "https://storage.mave.io",
       source_region: "fr-par",
       hook_secret: "secret",
@@ -2046,17 +2053,15 @@ defmodule MaveCore.EmbedsTest do
 
     Application.delete_env(:mave_core, :public_cdn_mode)
 
-    assert Jason.decode!(SettingsSerializer.component_config_json())["cdn"] == %{
-             "endpoint" => "https://space-${this.spaceId}.video-dns.com"
-           }
+    assert Jason.decode!(SettingsSerializer.component_config_json())["cdn"]["endpoint"] ==
+             "https://space-${this.spaceId}.video-dns.com"
 
     refute SettingsSerializer.component_config_required?()
 
     Application.put_env(:mave_core, :public_cdn_mode, "path")
 
-    assert Jason.decode!(SettingsSerializer.component_config_json())["cdn"] == %{
-             "endpoint" => "https://cdn.video-dns.com/space-${this.spaceId}"
-           }
+    assert Jason.decode!(SettingsSerializer.component_config_json())["cdn"]["endpoint"] ==
+             "https://cdn.video-dns.com/space-${this.spaceId}"
 
     refute SettingsSerializer.component_config_required?()
   end
@@ -2079,7 +2084,14 @@ defmodule MaveCore.EmbedsTest do
     assert SettingsSerializer.storage_object_url("space-lt1ij", "yrATPMmNde/poster.jpg") ==
              "https://cdn.saas.orb.local/space-lt1ij/yrATPMmNde/poster.jpg"
 
-    assert Jason.decode!(SettingsSerializer.component_config_json()) == %{
+    config = Jason.decode!(SettingsSerializer.component_config_json())
+
+    assert config["cdn"]["playback_endpoint"] ==
+             "http://localhost:4000/api/v1/playback/media/${this.spaceId}${this.embedId}"
+
+    config = update_in(config, ["cdn"], &Map.delete(&1, "playback_endpoint"))
+
+    assert config == %{
              "api" => %{"endpoint" => "http://localhost:4000/api/v1"},
              "cdn" => %{"endpoint" => "https://cdn.saas.orb.local/space-${this.spaceId}"},
              "metrics" => %{"endpoint" => "http://localhost:4000/v1/events"},
@@ -2103,9 +2115,8 @@ defmodule MaveCore.EmbedsTest do
     assert SettingsSerializer.storage_object_url("space-lt1ij", "video/manifest.json") ==
              "http://localhost:9000/space-lt1ij/video/manifest.json"
 
-    assert Jason.decode!(SettingsSerializer.component_config_json())["cdn"] == %{
-             "endpoint" => "http://localhost:9000/space-${this.spaceId}"
-           }
+    assert Jason.decode!(SettingsSerializer.component_config_json())["cdn"]["endpoint"] ==
+             "http://localhost:9000/space-${this.spaceId}"
   end
 
   test "settings serializer honors explicit path-style public CDN mode" do
@@ -2126,9 +2137,8 @@ defmodule MaveCore.EmbedsTest do
     assert SettingsSerializer.storage_object_url("space-ubg50", "XiyviR3oEq/thumbnail.jpg") ==
              "https://cdn.video-dns.com/space-ubg50/XiyviR3oEq/thumbnail.jpg"
 
-    assert Jason.decode!(SettingsSerializer.component_config_json())["cdn"] == %{
-             "endpoint" => "https://cdn.video-dns.com/space-${this.spaceId}"
-           }
+    assert Jason.decode!(SettingsSerializer.component_config_json())["cdn"]["endpoint"] ==
+             "https://cdn.video-dns.com/space-${this.spaceId}"
   end
 
   test "settings serializer uses public upload base for legacy uploaded poster keys" do
@@ -2222,6 +2232,32 @@ defmodule MaveCore.EmbedsTest do
              "https://space-#{space.hash}.s3.fr-par.scw.cloud/#{video.hash}/thumbnail_4.jpg",
              "https://space-#{space.hash}.s3.fr-par.scw.cloud/#{video.hash}/thumbnail_5.jpg"
            ]
+
+    private_video =
+      video
+      |> Ecto.Changeset.change(playback_visibility: :private, playback_status: :private)
+      |> Repo.update!()
+
+    preview = Embeds.get_video_dashboard_payload(space, private_video).thumbnail_preview
+    playlist = URI.parse(preview.preferred_src)
+    token = URI.decode_query(playlist.query)["token"]
+    assert is_binary(token)
+
+    assert String.ends_with?(playlist.path, "/#{video.hash}/h264_sd_hls/playlist.m3u8") or
+             String.ends_with?(
+               playlist.path,
+               "/#{space.hash}#{video.hash}/h264_sd_hls/playlist.m3u8"
+             )
+
+    assert {:ok, _expires_at} = MaveCore.Playback.authorize(token, private_video)
+
+    for src <- [preview.fallback_src | Enum.map(preview.frame_srcs, & &1.src)] do
+      uri = URI.parse(src)
+      query = URI.decode_query(uri.query)
+      assert query["X-Amz-Signature"]
+      assert query["X-Amz-Expires"] == "86400"
+      assert String.contains?(uri.path, "/#{video.hash}/")
+    end
   end
 
   test "settings serializer omits default controls from player attrs but keeps manifest default" do

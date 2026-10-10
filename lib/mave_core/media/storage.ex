@@ -43,6 +43,7 @@ defmodule MaveCore.Media.Storage do
   @multipart_part_request_timeout_ms 5 * 60 * 1000
   @direct_upload_part_size 16 * 1024 * 1024
   @direct_upload_url_expiry_seconds 2 * 60 * 60
+  @direct_download_url_max_expiry_seconds 24 * 60 * 60
   @download_to_file_request_timeout_ms 30 * 60 * 1000
   @object_prefix_max_bytes 1_048_576
   @copy_tmp_root "mave-storage-copy"
@@ -588,7 +589,9 @@ defmodule MaveCore.Media.Storage do
          bucket: bucket,
          key: path,
          method: :get,
-         expires: min(expires, @direct_upload_url_expiry_seconds)
+         datetime: Keyword.get(opts, :datetime, DateTime.utc_now()),
+         query: Keyword.get(opts, :query_params, []),
+         expires: min(expires, @direct_download_url_max_expiry_seconds)
        )}
     end
   rescue
@@ -1673,7 +1676,8 @@ defmodule MaveCore.Media.Storage do
     |> Map.put("Statement", statements)
   end
 
-  defp get_bucket_access_policy(bucket, storage_profile) do
+  @doc "Reads the current bucket policy without changing access."
+  def get_bucket_access_policy(bucket, storage_profile) do
     case Req.get(build_service_req(storage_profile, bucket), url: "/#{bucket}?policy", raw: true) do
       {:ok, %{status: status, body: body}} when status in 200..299 ->
         decode_bucket_policy(body)
@@ -1703,7 +1707,8 @@ defmodule MaveCore.Media.Storage do
 
   defp decode_bucket_policy(_policy), do: {:error, :invalid_bucket_policy}
 
-  defp put_bucket_policy_document(bucket, policy, storage_profile) do
+  @doc "Writes a complete bucket policy supplied by a deployment storage adapter."
+  def put_bucket_policy_document(bucket, policy, storage_profile) do
     case Req.put(build_service_req(storage_profile, bucket),
            url: "/#{bucket}?policy",
            body: Jason.encode_to_iodata!(policy),

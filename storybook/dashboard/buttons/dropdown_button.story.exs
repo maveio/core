@@ -6,15 +6,33 @@ defmodule Storybook.Dashboard.Buttons.DropdownButton do
   def variations do
     [
       %Variation{
-        id: :default,
-        description: "Dropdown with render, replace, and delete actions",
+        id: :public_video,
+        description: "Public video actions",
         attributes: %{
-          id: "dropdown-default"
+          id: "dropdown-public-video",
+          menu_class: "w-40"
         },
         slots: [
           """
-          <:item icon="render">(re)render</:item>
+          <:item icon="hero-lock-closed">private (token)</:item>
           <:item icon="replace">replace</:item>
+          <:item icon="archive">archive</:item>
+          <:item icon="delete" danger>delete</:item>
+          """
+        ]
+      },
+      %Variation{
+        id: :private_video,
+        description: "Private video actions",
+        attributes: %{
+          id: "dropdown-private-video",
+          menu_class: "w-40"
+        },
+        slots: [
+          """
+          <:item icon="hero-lock-open">public</:item>
+          <:item icon="replace">replace</:item>
+          <:item icon="archive">archive</:item>
           <:item icon="delete" danger>delete</:item>
           """
         ]
