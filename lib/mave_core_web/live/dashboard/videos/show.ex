@@ -9,6 +9,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   alias MaveCore.Embeds.Events, as: EmbedEvents
   alias MaveCore.Embeds.SettingsSerializer
   alias MaveCore.Flow.Diagnostics
+  alias MaveCore.Playback.EmbedCode
   alias MaveCore.Spaces
   alias MaveCore.Uploads.Token
   alias MaveCore.UsageLimits
@@ -441,6 +442,38 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   end
 
   @impl true
+  def handle_event(
+        "playback_session",
+        _params,
+        %{assigns: %{resource_embed: %Embed{} = embed}} = socket
+      ) do
+    session =
+      if MaveCore.Playback.protected?(embed),
+        do: MaveCore.Playback.dashboard_session(embed),
+        else: nil
+
+    {:reply, %{session: session, embed: socket.assigns.current_space.hash <> embed.hash}, socket}
+  end
+
+  def handle_event(
+        "toggle_playback_visibility",
+        _params,
+        %{assigns: %{resource_embed: %Embed{} = embed}} = socket
+      ) do
+    visibility = if embed.playback_visibility == :private, do: :public, else: :private
+
+    case MaveCore.Playback.request_visibility(embed, visibility) do
+      {:ok, updated} ->
+        {:noreply,
+         socket
+         |> assign(:resource_embed, updated)
+         |> put_flash(:info, gettext("Playback access is being updated."))}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, gettext("Playback access could not be updated."))}
+    end
+  end
+
   def handle_event("change_code_preview", %{"preview" => preview}, socket) do
     {:noreply, assign(socket, :code_preview, String.to_existing_atom(preview))}
   end
@@ -1527,9 +1560,9 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
     }
   end
 
-  defp line_numbers(type, video) do
+  defp line_numbers(type, video, embed) do
     type
-    |> snippet_string(video)
+    |> snippet_string(video, embed)
     |> String.split("\n")
     |> Enum.with_index(1)
     |> Enum.map(&elem(&1, 1))
@@ -1555,7 +1588,9 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
     end)
   end
 
-  defp code_tabs(current, video) do
+  defp code_tabs(current, video, embed) do
+    current = effective_code_preview(current, embed)
+
     [
       %{name: :script, label: "Player", current: current == :script},
       %{name: :clip, label: "Clip", current: current == :clip},
@@ -1563,7 +1598,36 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
       %{name: :react, label: "React", current: current == :react},
       %{name: :vue, label: "Vue", current: current == :vue}
     ]
-    |> Enum.reject(&(dashboard_player_tag(video) == "mave-audio" and &1.name == :clip))
+    |> Enum.reject(fn tab ->
+      (dashboard_player_tag(video) == "mave-audio" and tab.name == :clip) or
+        (MaveCore.Playback.protected?(embed) and tab.name == :iframe)
+    end)
+  end
+
+  defp effective_code_preview(:iframe, embed) do
+    if MaveCore.Playback.protected?(embed), do: :script, else: :iframe
+  end
+
+  defp effective_code_preview(type, _embed), do: type
+
+  defp snippet_string(type, video, embed) do
+    type = effective_code_preview(type, embed)
+
+    if MaveCore.Playback.protected?(embed) do
+      # Public thumbnail URLs are not suitable as private embed backgrounds.
+      video = video |> Map.put(:snippet_player_poster, nil) |> Map.put(:snippet_clip_poster, nil)
+
+      tag =
+        case type do
+          :clip -> "mave-clip"
+          framework when framework in [:react, :vue] -> framework_player_name(video)
+          _ -> dashboard_player_tag(video)
+        end
+
+      EmbedCode.add_token(snippet_string(type, video), type, video.public_id, tag)
+    else
+      snippet_string(type, video)
+    end
   end
 
   defp snippet_string(:script, video) do

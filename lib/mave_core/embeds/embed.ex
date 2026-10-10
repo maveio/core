@@ -16,6 +16,12 @@ defmodule MaveCore.Embeds.Embed do
     field :external_url, :string
     field :archived, :boolean, default: false
     field :replacing, :boolean, default: false
+    field :playback_visibility, Ecto.Enum, values: [:public, :private], default: :public
+
+    field :playback_status, Ecto.Enum,
+      values: [:public, :protecting, :private, :publishing],
+      default: :public
+
     field :deleted_at, :utc_datetime_usec
 
     belongs_to :space, Space

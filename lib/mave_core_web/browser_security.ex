@@ -1,5 +1,6 @@
 defmodule MaveCoreWeb.BrowserSecurity do
   @moduledoc false
+  alias MaveCore.Playback.URLs
 
   def init(opts), do: opts
 
@@ -50,6 +51,8 @@ defmodule MaveCoreWeb.BrowserSecurity do
     [
       Application.get_env(:mave_core, :domain),
       Application.get_env(:mave_core, :public_cdn_base_url),
+      Application.get_env(:mave_core, :playback_public_storage_endpoint),
+      playback_origin(),
       Application.get_env(:mave_core, :image_base_url),
       Keyword.get(upload, :endpoint),
       Keyword.get(upload, :public_base_url)
@@ -74,4 +77,11 @@ defmodule MaveCoreWeb.BrowserSecurity do
   end
 
   defp extract_origin(_), do: []
+
+  defp playback_origin do
+    case URLs.origin() do
+      %URI{} = uri -> URI.to_string(%{uri | host: "*." <> uri.host})
+      nil -> nil
+    end
+  end
 end

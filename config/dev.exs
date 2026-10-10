@@ -1,5 +1,13 @@
 import Config
 
+config :mave_core, :playback_adapter, MaveCore.Playback.Minio
+config :mave_core, :bucket_cors_syncer, MaveCore.Playback.Minio
+config :mave_core, :playback_storage_adapter, MaveCore.Playback.Minio
+
+config :mave_core,
+       :playback_public_storage_endpoint,
+       System.get_env("MAVE_PLAYBACK_STORAGE_ENDPOINT", "http://localhost:9000")
+
 # Configure your database
 config :mave_core, MaveCore.Repo,
   username: System.get_env("POSTGRES_USER", "postgres"),

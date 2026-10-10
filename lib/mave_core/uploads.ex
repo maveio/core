@@ -247,9 +247,9 @@ defmodule MaveCore.Uploads do
   defp handle_standard_upload(scope, bucket, key, metadata, upload) do
     source_region = present(metadata, "source_region") || upload_config(:source_region)
 
-    with :ok <- publish_completed_upload(bucket, key, source_region),
+    with {:ok, upload_embed} <- resolve_standard_upload_embed(scope, metadata),
+         :ok <- maybe_publish_completed_upload(upload_embed, bucket, key, source_region),
          {:ok, source_url} <- resolve_source_url(metadata, bucket, key),
-         {:ok, upload_embed} <- resolve_standard_upload_embed(scope, metadata),
          %Space{hash: space_hash} <- upload_embed.space,
          embed_hash <- upload_embed.hash,
          {:ok, embed} <- begin_video_upload(space_hash, embed_hash, metadata, upload, source_url),
@@ -292,6 +292,12 @@ defmodule MaveCore.Uploads do
     else
       :ok
     end
+  end
+
+  defp maybe_publish_completed_upload(embed, bucket, key, region) do
+    if MaveCore.Playback.protected?(embed),
+      do: :ok,
+      else: publish_completed_upload(bucket, key, region)
   end
 
   defp begin_video_upload(space_hash, embed_hash, metadata, upload, source_url) do
@@ -681,6 +687,7 @@ defmodule MaveCore.Uploads do
 
   defp build_run_input(upload, metadata, bucket, key, source_url, space_hash, embed_hash, embed) do
     space = upload_space(embed, space_hash)
+    {ffmpeg_url, public_url} = public_upload_urls(embed, bucket, key)
 
     region =
       case space do
@@ -696,8 +703,8 @@ defmodule MaveCore.Uploads do
         "version" =>
           parse_integer(present(metadata, "version"), Embeds.current_video_version(embed)),
         "source_url" => source_url,
-        "upload_ffmpeg_input_url" => upload_ffmpeg_input_url(bucket, key),
-        "upload_public_url" => Storage.upload_public_object_url(key),
+        "upload_ffmpeg_input_url" => ffmpeg_url,
+        "upload_public_url" => public_url,
         "source_bucket" => bucket,
         "source_key" => key,
         "source_region" => present(metadata, "source_region") || upload_config(:source_region),
@@ -726,6 +733,12 @@ defmodule MaveCore.Uploads do
         "http://localhost:9000"
 
     build_storage_url(base_url, bucket, key)
+  end
+
+  defp public_upload_urls(embed, bucket, key) do
+    if MaveCore.Playback.protected?(embed),
+      do: {nil, nil},
+      else: {upload_ffmpeg_input_url(bucket, key), Storage.upload_public_object_url(key)}
   end
 
   defp upload_ffmpeg_input_url(bucket, key) do

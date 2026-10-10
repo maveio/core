@@ -17,6 +17,7 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
   attr :audio_only, :boolean, default: false
   attr :change_event, :string, default: "change_code_preview"
   slot :player, required: true
+  slot :guidance
 
   def video_embed_panel(assigns) do
     ~H"""
@@ -31,6 +32,7 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
         {render_slot(@player)}
       </div>
 
+      {render_slot(@guidance)}
       <div class="border-t border-stone-900 -mt-px">
         <div class="w-full bg-stone-900 flex items-center border-b border-stone-800 select-none">
           <.video_embed_tab :for={tab <- @tabs} tab={tab} change_event={@change_event} />

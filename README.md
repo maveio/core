@@ -104,6 +104,9 @@ Contributor references are in [CONTRIBUTING.md](CONTRIBUTING.md#code-and-referen
 
 ## Make Core your own
 
+See [private playback](docs/private_playback.md) for per-video access controls,
+local MinIO support and deployment adapter integration.
+
 - **Your storage:** use a compatible hosted S3 provider or run your own storage.
   MinIO is the bundled default, not a requirement. Other providers need matching
   storage, upload, and public-media configuration; see the

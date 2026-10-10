@@ -45,6 +45,28 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.IndexTest do
     assert has_element?(view, "#videos-empty-state.min-h-full")
   end
 
+  test "/videos signs private thumbnails for the matching video", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    video = video_embed_fixture(space, %{name: "Private overview thumbnail"})
+
+    video =
+      video
+      |> Ecto.Changeset.change(playback_visibility: :private, playback_status: :private)
+      |> Repo.update!()
+
+    %{videos: [row]} = MaveCore.Embeds.list_root_items(space)
+    uri = URI.parse(row.thumb)
+    assert uri.path == "/space-#{space.hash}/#{video.hash}/thumbnail.jpg"
+    query = URI.decode_query(uri.query)
+    assert query["X-Amz-Signature"]
+    assert query["X-Amz-Expires"] == "86400"
+    assert query["response-cache-control"] == "private, max-age=300"
+
+    {:ok, view, _html} = live(conn, "/videos")
+    assert has_element?(view, ~s([style*="#{uri.path}?"][style*="X-Amz-Signature="]))
+    refute has_element?(view, ~s([style*="/api/v1/playback/media/"]))
+  end
+
   test "/videos renders cache-busted custom thumbnails in overview rows", %{conn: conn} do
     {conn, space} = authenticated_conn(conn)
     video = video_embed_fixture(space, %{name: "Custom Overview Poster"})

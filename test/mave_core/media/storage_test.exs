@@ -9,6 +9,56 @@ defmodule MaveCore.Media.StorageTest do
 
   setup {Req.Test, :verify_on_exit!}
 
+  test "signed reads support a full dashboard day while remaining bounded" do
+    profile = [
+      endpoint: "https://storage.example.test",
+      access_key_id: "test",
+      secret_access_key: "test"
+    ]
+
+    for requested <- [86_400, 172_800] do
+      assert {:ok, url} =
+               Storage.presigned_get_url("bucket", "video.mp4", profile, expires: requested)
+
+      query = url |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+      assert query["X-Amz-Expires"] == "86400"
+    end
+  end
+
+  test "presigned image URLs reuse a signing time and cover cache parameters" do
+    profile = [
+      endpoint: "https://storage.example.test",
+      region: "test-region",
+      access_key_id: "test-key",
+      secret_access_key: "test-secret"
+    ]
+
+    opts = [
+      datetime: ~U[2026-01-01 12:00:00Z],
+      expires: 600,
+      query_params: [{"response-cache-control", "private, max-age=300"}, {"e", 1}]
+    ]
+
+    assert {:ok, url} = Storage.presigned_get_url("bucket", "video/thumbnail.jpg", profile, opts)
+    assert {:ok, ^url} = Storage.presigned_get_url("bucket", "video/thumbnail.jpg", profile, opts)
+    query = url |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+    assert query["response-cache-control"] == "private, max-age=300"
+    assert query["X-Amz-Date"] == "20260101T120000Z"
+    assert query["X-Amz-Expires"] == "600"
+
+    changed_opts =
+      Keyword.put(opts, :query_params, [
+        {"response-cache-control", "private, max-age=300"},
+        {"e", 2}
+      ])
+
+    assert {:ok, changed_url} =
+             Storage.presigned_get_url("bucket", "video/thumbnail.jpg", profile, changed_opts)
+
+    changed_query = changed_url |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+    refute changed_query["X-Amz-Signature"] == query["X-Amz-Signature"]
+  end
+
   test "bucket overrides sign requests and presigned URLs for the correct account" do
     Req.default_options(plug: {Req.Test, __MODULE__})
 

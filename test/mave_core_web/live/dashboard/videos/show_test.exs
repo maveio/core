@@ -24,6 +24,10 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
       do: {:error, :visibility_failed}
   end
 
+  defmodule AvailablePlayback do
+    def available?(_space), do: true
+  end
+
   setup do
     old_storage_adapter = Application.get_env(:mave_core, :flow_storage_adapter)
 
@@ -46,6 +50,66 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     end)
 
     {:ok, db_name: db_name}
+  end
+
+  @tag :private_playback_ui
+  test "playback visibility actions are only shown when available for the space", %{conn: conn} do
+    original_adapter = Application.get_env(:mave_core, :playback_adapter)
+    on_exit(fn -> restore_env(:playback_adapter, original_adapter) end)
+    {conn, space} = authenticated_conn(conn)
+    embed = video_embed_fixture(space, %{name: "Playback visibility"})
+
+    for visibility <- [:public, :private], available? <- [false, true] do
+      embed
+      |> Ecto.Changeset.change(playback_visibility: visibility, playback_status: visibility)
+      |> Repo.update!()
+
+      Application.put_env(:mave_core, :playback_adapter, if(available?, do: AvailablePlayback))
+      {:ok, view, _html} = live(conn, "/videos/#{embed.id}")
+
+      assert has_element?(view, "#video-playback-visibility") == available?
+    end
+  end
+
+  @tag :private_playback_ui
+  test "private videos explain token setup and display token-aware embed code", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    embed = video_embed_fixture(space, %{name: "Private embed setup"})
+
+    embed
+    |> Ecto.Changeset.change(playback_visibility: :private, playback_status: :private)
+    |> Repo.update!()
+
+    {:ok, view, _html} = live(conn, "/videos/#{embed.id}")
+    refute has_element?(view, "#video-access-status")
+    assert has_element?(view, "#private-playback-guide", "Dashboard previews work automatically")
+    assert has_element?(view, "#snippet-code", "YOUR_PLAYBACK_TOKEN")
+    assert has_element?(view, "#snippet-code", ~s(token="YOUR_PLAYBACK_TOKEN"))
+    refute has_element?(view, "#private-playback-server-help")
+    refute has_element?(view, ~s([phx-value-preview="iframe"]))
+
+    view |> element(~s([phx-value-preview="react"])) |> render_click()
+    assert has_element?(view, "#snippet-code", "token={playbackToken}")
+    view |> element(~s([phx-value-preview="vue"])) |> render_click()
+    assert has_element?(view, "#snippet-code", ~s(:token="playbackToken"))
+    view |> element(~s([phx-value-preview="clip"])) |> render_click()
+
+    assert has_element?(
+             view,
+             "#snippet-code",
+             ~s(<mave-clip embed="#{space.hash}#{embed.hash}" token="YOUR_PLAYBACK_TOKEN")
+           )
+  end
+
+  @tag :private_playback_ui
+  test "public videos retain the ordinary embed code and iframe option", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    embed = video_embed_fixture(space, %{name: "Public embed setup"})
+    {:ok, view, _html} = live(conn, "/videos/#{embed.id}")
+    refute has_element?(view, "#video-access-status")
+    assert has_element?(view, ~s([phx-value-preview="iframe"]))
+    refute has_element?(view, "#private-playback-guide")
+    refute has_element?(view, "#snippet-code", "YOUR_PLAYBACK_TOKEN")
   end
 
   test "/videos/:id renders folder mode when embed type is collection", %{conn: conn} do
@@ -2773,6 +2837,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
   end
 
   defp with_default_component_runtime(fun) do
+    original_playback_origin = Application.get_env(:mave_core, :playback_origin)
     original_domain = Application.get_env(:mave_core, :domain)
     original_upload = Application.get_env(:mave_core, :upload)
     original_cdn_host = Application.get_env(:mave_core, :public_cdn_host)
@@ -2784,6 +2849,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     original_metrics_host = System.get_env("MAVE_METRICS_HOST")
 
     try do
+      Application.put_env(:mave_core, :playback_origin, "https://signed.video-dns.com")
       Application.put_env(:mave_core, :domain, "https://dash.mave.io")
 
       Application.put_env(:mave_core, :upload,
@@ -2805,6 +2871,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
 
       fun.()
     after
+      restore_env(:playback_origin, original_playback_origin)
       restore_env(:domain, original_domain)
       restore_env(:upload, original_upload)
       restore_env(:public_cdn_host, original_cdn_host)

@@ -49,14 +49,42 @@ defmodule MaveCoreWeb.Api.ImageController do
   end
 
   defp serve_image(conn, space_hash, embed_hash, format) do
-    with {:ok, time} <- parse_time(conn.query_params["time"]),
+    with {:ok, conn} <- authorize_image(conn, space_hash, embed_hash),
+         {:ok, time} <- parse_time(conn.query_params["time"]),
          {:ok, dimensions} <- parse_dimensions(conn.query_params) do
       opts = [{:format, format} | dimensions]
 
       ImageProcessor.process(space_hash, embed_hash, time, opts)
       |> respond_to_image_result(conn, format)
     else
-      :error -> send_resp(conn, 400, "Invalid image parameters")
+      {:error, :unauthorized} ->
+        conn
+        |> put_resp_header("cache-control", "private, no-store")
+        |> send_resp(401, "Authorization required")
+
+      :error ->
+        send_resp(conn, 400, "Invalid image parameters")
+    end
+  end
+
+  defp authorize_image(conn, space_hash, embed_hash) do
+    case MaveCore.Embeds.get_embed_by_hashes(space_hash, embed_hash) do
+      %MaveCore.Embeds.Embed{} = embed ->
+        if MaveCore.Playback.protected?(embed) do
+          authorize_private_image(conn, embed)
+        else
+          {:ok, conn}
+        end
+
+      _ ->
+        {:ok, conn}
+    end
+  end
+
+  defp authorize_private_image(conn, embed) do
+    case MaveCore.Playback.authorize(conn.query_params["token"], embed) do
+      {:ok, _expires_at} -> {:ok, put_private(conn, :protected_playback, true)}
+      _ -> {:error, :unauthorized}
     end
   end
 
@@ -93,7 +121,13 @@ defmodule MaveCoreWeb.Api.ImageController do
   defp respond_to_image_result({:ok, _path, image_data}, conn, format) do
     conn
     |> put_resp_header("x-content-type-options", "nosniff")
-    |> put_resp_header("cache-control", "public, max-age=604800, immutable")
+    |> put_resp_header(
+      "cache-control",
+      if(conn.private[:protected_playback],
+        do: "private, no-store",
+        else: "public, max-age=604800, immutable"
+      )
+    )
     |> send_download(
       {:binary, image_data},
       filename: "image.#{format}",

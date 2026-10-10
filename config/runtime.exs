@@ -139,6 +139,21 @@ if external_uri do
          |> String.trim_trailing("/")
 end
 
+# Optional per-space media origin; an unset value retains the API playback route.
+if playback_origin = System.get_env("MAVE_PLAYBACK_ORIGIN") do
+  uri = playback_origin |> String.trim() |> URI.parse()
+
+  unless uri.scheme in ["http", "https"] and is_binary(uri.host) and uri.host != "" and
+           uri.path in [nil, "", "/"] and is_nil(uri.query) and is_nil(uri.fragment) and
+           is_nil(uri.userinfo) do
+    raise "MAVE_PLAYBACK_ORIGIN must be an HTTP(S) origin without a path or credentials"
+  end
+
+  config :mave_core,
+         :playback_origin,
+         URI.to_string(%{uri | host: String.downcase(uri.host), path: nil})
+end
+
 if public_cdn_host = System.get_env("MAVE_PUBLIC_CDN_HOST") do
   trimmed = String.trim(public_cdn_host)
 
