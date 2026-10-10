@@ -3,6 +3,7 @@ defmodule MaveCore.Playback.Media do
 
   alias MaveCore.Embeds.{ManifestPublisher, SettingsSerializer}
   alias MaveCore.Media.Storage
+  alias MaveCore.Playback.URLs
 
   @max_playlist_bytes 2_000_000
   @thumbnail_cache_seconds 300
@@ -19,7 +20,7 @@ defmodule MaveCore.Playback.Media do
     if String.ends_with?(path, ".m3u8") do
       session = MaveCore.Playback.dashboard_session(embed)
       endpoint = SettingsSerializer.component_runtime_config()["cdn"]["playback_endpoint"]
-      url = MaveCore.Playback.URLs.media_url(endpoint, space.hash, embed.hash, path)
+      url = URLs.media_url(endpoint, space.hash, embed.hash, path)
       url <> "?" <> URI.encode_query(%{"token" => session.token})
     else
       dashboard_asset_url(space, embed, path, [])
