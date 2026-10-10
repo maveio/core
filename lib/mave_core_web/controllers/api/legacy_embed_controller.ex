@@ -47,13 +47,6 @@ defmodule MaveCoreWeb.Api.LegacyEmbedController do
     end
   end
 
-  def collection(conn, params) do
-    case get_req_header(conn, "authorization") do
-      ["Bearer " <> token] -> collection(conn, Map.put(params, "token", token))
-      _ -> send_resp(conn, 401, "Authorization required")
-    end
-  end
-
   def delete_video(conn, %{"embed_hash" => embed_hash, "token" => token}) do
     case Spaces.validate_api_jwt(token, true) do
       {:ok,
