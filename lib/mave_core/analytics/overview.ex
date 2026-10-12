@@ -97,6 +97,93 @@ defmodule MaveCore.Analytics.Overview do
     if DateTime.compare(previous_to, from) == :gt, do: from, else: previous_to
   end
 
+  @doc """
+  Returns the space's most viewed videos in `period`, ordered by views, as
+  maps with `:embed_hash`, `:views`, `:watch_ms`, `:avg_completion` and
+  `:series` (views per hour, day or month, oldest first).
+  """
+  def top_videos(space_hash, period, limit \\ 25, now \\ DateTime.utc_now())
+
+  def top_videos(space_hash, period, limit, now)
+      when is_binary(space_hash) and period in @periods and is_integer(limit) and limit > 0 do
+    window = window(period, now)
+
+    with {:ok, space_hash} <- parse_space_hash(space_hash) do
+      if SharedStorageSpace.hash?(space_hash),
+        do: {:ok, []},
+        else: query_top_videos(space_hash, window, limit)
+    end
+  end
+
+  def top_videos(_space_hash, _period, _limit, _now), do: {:error, :invalid_request}
+
+  defp query_top_videos(space_hash, window, limit) do
+    sql = """
+    /* mave_perf:spaces.top_videos */
+    #{views_cte(space_hash, %{window | previous_from: window.from})},
+    top AS (
+      SELECT
+        embed_hash,
+        count() AS views,
+        sum(watch_ms) AS watch_ms,
+        ifNotFinite(avgIf(completion, video_duration > 0), 0) AS completion
+      FROM views
+      GROUP BY embed_hash
+      ORDER BY views DESC, embed_hash ASC
+      LIMIT #{limit}
+    )
+    SELECT
+      'video' AS kind,
+      embed_hash,
+      '' AS key,
+      toUInt64(views) AS views,
+      toInt64(watch_ms) AS watch_ms,
+      toFloat64(completion) AS value
+    FROM top
+    UNION ALL
+    SELECT
+      'bucket' AS kind,
+      embed_hash,
+      #{bucket_key_sql(window.bucket)} AS key,
+      toUInt64(count()) AS views,
+      toInt64(0) AS watch_ms,
+      toFloat64(0) AS value
+    FROM views
+    WHERE embed_hash IN (SELECT embed_hash FROM top)
+    GROUP BY embed_hash, key
+    """
+
+    query_clickhouse(
+      sql,
+      {:error, :analytics_unavailable},
+      fn rows -> {:ok, build_top_videos(rows, window)} end,
+      []
+    )
+  end
+
+  defp build_top_videos(rows, window) do
+    {videos, buckets} = Enum.split_with(rows, &(hd(&1) == "video"))
+
+    series =
+      Enum.group_by(buckets, &Enum.at(&1, 1), fn [_, _, key, views, _, _] ->
+        {key, to_int(views)}
+      end)
+
+    videos
+    |> Enum.map(fn [_, hash, _, views, watch_ms, completion] ->
+      counts = Map.new(Map.get(series, hash, []))
+
+      %{
+        embed_hash: hash,
+        views: to_int(views),
+        watch_ms: to_int(watch_ms),
+        avg_completion: to_float(completion),
+        series: Enum.map(window.buckets, &Map.get(counts, bucket_key(&1), 0))
+      }
+    end)
+    |> Enum.sort_by(&{-&1.views, &1.embed_hash})
+  end
+
   defp query_overview(space_hash, period, window) do
     if Sessions.enabled?(space_hash) do
       case Sessions.overview_generations(space_hash) do
@@ -294,6 +381,10 @@ defmodule MaveCore.Analytics.Overview do
   defp shift_months(%DateTime{year: year, month: month} = dt, months) do
     index = year * 12 + month - 1 + months
     %{dt | year: div(index, 12), month: rem(index, 12) + 1}
+  end
+
+  defp bucket_key_sql(bucket) do
+    "formatDateTime(toDateTime(#{bucket_sql(bucket)}(started_at, 'UTC'), 'UTC'), '%Y-%m-%d %H:%i:%S', 'UTC')"
   end
 
   defp bucket_sql(:hour), do: "toStartOfHour"
