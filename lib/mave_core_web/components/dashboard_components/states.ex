@@ -296,7 +296,12 @@ defmodule MaveCoreWeb.DashboardComponents.States do
         </div>
       </div>
       <div class="flex text-stone-300 text-sm">
-        <div class="flex-grow">{@current}</div>
+        <div
+          data-usage-current
+          class={["flex-grow", @segments.overage > 0 && "text-red-500"]}
+        >
+          {@current}
+        </div>
         <div>{@max}</div>
       </div>
     </div>

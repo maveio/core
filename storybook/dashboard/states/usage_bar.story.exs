@@ -56,6 +56,16 @@ defmodule Storybook.Dashboard.States.UsageBar do
           max: "10,000 calls",
           percent: 100.0
         }
+      },
+      %Variation{
+        id: :over_limit,
+        description: "Over limit (129%)",
+        attributes: %{
+          label: "Bandwidth",
+          current: "1.29 TB",
+          max: "1 TB",
+          percent: 129.0
+        }
       }
     ]
   end
