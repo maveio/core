@@ -9,8 +9,10 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   @top_list_query_size 50
 
   alias MaveCore.Analytics
+  alias MaveCore.Analytics.Overview
   alias MaveCore.Embeds
   alias MaveCore.UsageLimits
+  alias MaveCoreWeb.Dashboard.Data.OverviewComponents
   alias MaveCoreWeb.DashboardRoutes
   alias MaveCoreWeb.Formatter
   alias Phoenix.LiveView.AsyncResult
@@ -22,6 +24,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
      |> assign(:page_title, gettext("Data"))
      |> assign(:settings_open, false)
      |> assign(:route_scope, :unscoped)
+     |> assign(:period, Overview.default_period())
      |> assign(:show_all_devices, false)
      |> assign(:show_all_browsers, false)
      |> assign(:data_access_notice, nil)
@@ -31,6 +34,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
   def handle_params(params, _url, socket) do
     space = socket.assigns.current_space
+    socket = assign(socket, :period, period(params))
 
     socket =
       case UsageLimits.can_view_space_data?(space) do
@@ -57,9 +61,11 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   end
 
   defp start_tab_fetch(socket, _overview, space) do
+    period = socket.assigns.period
+
     socket
     |> assign_async_defaults()
-    |> start_async(:fetch_stats, fn -> Analytics.space_overview(space.hash) end)
+    |> start_async(:fetch_overview, fn -> Overview.space_overview(space.hash, period) end)
   end
 
   defp fetch_top_videos(space) do
@@ -75,40 +81,22 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
     end
   end
 
-  def handle_async(:fetch_stats, {:ok, {:ok, result}}, socket) do
-    socket = assign(socket, :analytics_preparing, false)
-    views_by_month = Enum.map(result.views_by_month, &Map.put(&1, :count, &1.views))
-    max_views = Enum.max_by(views_by_month, & &1.count, fn -> %{count: 0} end).count
-    max_month = max_views + max_views / 3
-
+  def handle_async(:fetch_overview, {:ok, {:ok, overview}}, socket) do
     {:noreply,
      socket
-     |> assign(:views_today, AsyncResult.ok(socket.assigns.views_today, result.views.today))
-     |> assign(
-       :views_this_month,
-       AsyncResult.ok(socket.assigns.views_this_month, result.views.month)
-     )
-     |> assign(
-       :views_this_year,
-       AsyncResult.ok(socket.assigns.views_this_year, result.views.year)
-     )
-     |> assign(:views_per_month, AsyncResult.ok(socket.assigns.views_per_month, views_by_month))
-     |> assign(:devices, AsyncResult.ok(socket.assigns.devices, result.devices))
-     |> assign(:browsers, AsyncResult.ok(socket.assigns.browsers, result.browsers))
-     |> assign(:max_month, AsyncResult.ok(socket.assigns.max_month, max_month))
+     |> assign(:overview, AsyncResult.ok(socket.assigns.overview, overview))
      |> assign(:show_all_devices, false)
      |> assign(:show_all_browsers, false)}
   end
 
-  def handle_async(:fetch_stats, {:ok, {:error, :preparing}}, socket) do
-    Process.send_after(self(), {:refresh_analytics, socket.assigns.current_space.hash}, 5_000)
-    {:noreply, socket |> assign_failed() |> assign(:analytics_preparing, true)}
+  def handle_async(:fetch_overview, _result, socket) do
+    {:noreply,
+     assign(
+       socket,
+       :overview,
+       AsyncResult.failed(socket.assigns.overview, :analytics_unavailable)
+     )}
   end
-
-  def handle_async(:fetch_stats, {:ok, {:error, _reason}}, socket),
-    do: {:noreply, assign_failed(socket)}
-
-  def handle_async(:fetch_stats, {:exit, _reason}, socket), do: {:noreply, assign_failed(socket)}
 
   def handle_async(:fetch_top_videos, {:ok, {:ok, top_videos}}, socket) do
     {:noreply,
@@ -158,23 +146,38 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
         <.menubar>
           <.menubar_item
             icon="hero-chart-bar-mini"
-            path={DashboardRoutes.data_path(@current_space, scope: @route_scope)}
+            path={
+              DashboardRoutes.data_path(@current_space,
+                scope: @route_scope,
+                period: period_param(@period)
+              )
+            }
             active={@live_action != :top_list}
           >
             {gettext("Overview")}
           </.menubar_item>
           <.menubar_item
             icon="hero-trophy-mini"
-            path={DashboardRoutes.data_top_list_path(@current_space, scope: @route_scope)}
+            path={
+              DashboardRoutes.data_top_list_path(@current_space,
+                scope: @route_scope,
+                period: period_param(@period)
+              )
+            }
             active={@live_action == :top_list}
           >
             {gettext("Top list")}
           </.menubar_item>
           <div class="flex-grow"></div>
+          <OverviewComponents.period_switch
+            :if={@live_action != :top_list}
+            period={@period}
+            path={&period_path(assigns, &1)}
+          />
           <div
             :if={@data_access_notice}
             id="data-access-limit-notice"
-            class="flex-none text-stone-400 text-opacity-70 text-sm cursor-default flex items-center"
+            class="flex-none ml-4 text-stone-400 text-opacity-70 text-sm cursor-default flex items-center"
           >
             <div>{@data_access_notice}</div>
             <.info_hover position="left">
@@ -202,27 +205,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
                 route_scope={@route_scope}
               />
             <% else %>
-              <div class="mb-6">
-                <.subtitle label={gettext("Numbers")} icon="hero-hashtag" />
-              </div>
-
-              <div class="grid grid-cols-3 gap-4 font-sans">
-                <.video_metric_card
-                  label={gettext("Today")}
-                  value={metric_value(@views_today)}
-                  loading={@views_today.loading}
-                />
-                <.video_metric_card
-                  label={gettext("This month")}
-                  value={metric_value(@views_this_month)}
-                  loading={@views_this_month.loading}
-                />
-                <.video_metric_card
-                  label={gettext("This year")}
-                  value={metric_value(@views_this_year)}
-                  loading={@views_this_year.loading}
-                />
-              </div>
+              <OverviewComponents.kpis overview={@overview} period={@period} />
 
               <.divider />
 
@@ -230,71 +213,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
                 <.subtitle label={gettext("History")} icon="hero-chart-bar" />
               </div>
 
-              <.video_data_section>
-                <div class="w-full h-56 flex flex-col">
-                  <.async_result :let={views_per_month} assign={@views_per_month}>
-                    <:loading>
-                      <div
-                        id="data-history-loading"
-                        class="flex min-h-0 flex-1 flex-col"
-                        role="status"
-                        aria-label={gettext("Loading history")}
-                      >
-                        <div class="flex-none flex items-center pt-4 text-center">
-                          <%= for width <- [34, 42, 30, 38, 46, 32, 40, 28, 44, 34, 40, 30] do %>
-                            <div class="w-full flex justify-center">
-                              <div
-                                class="data-loading-skeleton h-3 rounded-full"
-                                style={"width: #{width}%"}
-                                aria-hidden="true"
-                              >
-                              </div>
-                            </div>
-                          <% end %>
-                        </div>
-                        <div class="flex-grow flex items-end px-1 pb-5">
-                          <%= for height <- [42, 67, 52, 78, 58, 86, 70, 47, 62, 38, 55, 31] do %>
-                            <div class="w-full h-full flex items-end justify-center">
-                              <div
-                                class="data-loading-skeleton w-1 rounded-full"
-                                style={"height: #{height}%"}
-                                aria-hidden="true"
-                              >
-                              </div>
-                            </div>
-                          <% end %>
-                        </div>
-                        <span class="sr-only">{gettext("Loading data")}</span>
-                      </div>
-                    </:loading>
-
-                    <div class="flex-none flex items-center pt-4 text-xs font-medium text-stone-300 text-center">
-                      <%= for month <- views_per_month do %>
-                        <div class="w-full">{format_number(month.count)}</div>
-                      <% end %>
-                    </div>
-                    <div class="flex-grow flex items-center">
-                      <%= for month <- views_per_month do %>
-                        <div class="w-full flex justify-center">
-                          <div class="h-32 w-1 bg-stone-50 flex items-end rounded-full overflow-hidden">
-                            <div
-                              :if={@max_month.ok? && @max_month.result}
-                              class="w-full bg-blue-500"
-                              style={"height: #{calc_height(month.count, @max_month.result)}%"}
-                            >
-                            </div>
-                          </div>
-                        </div>
-                      <% end %>
-                    </div>
-                  </.async_result>
-                  <div class="flex-none flex items-center py-1 text-xs font-medium text-stone-300 bg-stone-50 text-center">
-                    <%= for month <- ~w(jan feb mar apr may jun jul aug sep oct nov dec)a do %>
-                      <div class="w-full">{month}</div>
-                    <% end %>
-                  </div>
-                </div>
-              </.video_data_section>
+              <OverviewComponents.trend overview={@overview} />
 
               <.divider />
 
@@ -305,8 +224,8 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
               <div class="grid grid-cols-2 gap-4 mt-4">
                 <.source_panel
                   title={gettext("Device")}
-                  assign={@devices}
-                  rows={visible_devices(@devices, @show_all_devices)}
+                  assign={overview_field(@overview, :devices)}
+                  rows={visible_devices(overview_field(@overview, :devices), @show_all_devices)}
                   toggle="toggle_show_all_devices"
                   expanded={@show_all_devices}
                   key_name={:device}
@@ -315,8 +234,8 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
                 <.source_panel
                   title={gettext("Browser")}
-                  assign={@browsers}
-                  rows={visible_browsers(@browsers, @show_all_browsers)}
+                  assign={overview_field(@overview, :browsers)}
+                  rows={visible_browsers(overview_field(@overview, :browsers), @show_all_browsers)}
                   toggle="toggle_show_all_browsers"
                   expanded={@show_all_browsers}
                   key_name={:browser}
@@ -512,12 +431,28 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
   defp route_scope(_params), do: :unscoped
 
-  defp metric_value(%AsyncResult{loading: true}), do: "..."
+  defp period(%{"period" => period}) do
+    if period in Overview.periods(), do: period, else: Overview.default_period()
+  end
 
-  defp metric_value(%AsyncResult{ok?: true, result: result}) when is_integer(result),
-    do: format_number(result)
+  defp period(_params), do: Overview.default_period()
 
-  defp metric_value(_), do: "0"
+  defp period_path(assigns, period) do
+    DashboardRoutes.data_path(assigns.current_space,
+      scope: assigns.route_scope,
+      period: period_param(period)
+    )
+  end
+
+  # Keeps URLs for the default period free of a query string.
+  defp period_param(period) do
+    if period == Overview.default_period(), do: nil, else: period
+  end
+
+  defp overview_field(%AsyncResult{ok?: true, result: overview} = result, field),
+    do: %{result | result: Map.fetch!(overview, field)}
+
+  defp overview_field(%AsyncResult{} = result, _field), do: result
 
   defp format_number(number), do: Formatter.format_number(number)
 
@@ -539,49 +474,19 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   defp assign_async_defaults(socket) do
     socket
     |> assign(:top_videos, AsyncResult.loading())
-    |> assign(:max_month, AsyncResult.loading())
-    |> assign(:devices, AsyncResult.loading())
-    |> assign(:browsers, AsyncResult.loading())
-    |> assign(:views_today, AsyncResult.loading())
-    |> assign(:views_this_month, AsyncResult.loading())
-    |> assign(:views_this_year, AsyncResult.loading())
-    |> assign(:views_per_month, AsyncResult.loading())
+    |> assign(:overview, AsyncResult.loading())
   end
 
   defp assign_empty_stats(socket) do
     socket
-    |> assign(:max_month, AsyncResult.ok(AsyncResult.loading(), 0))
-    |> assign(:devices, AsyncResult.ok(AsyncResult.loading(), []))
-    |> assign(:browsers, AsyncResult.ok(AsyncResult.loading(), []))
-    |> assign(:views_today, AsyncResult.ok(AsyncResult.loading(), 0))
-    |> assign(:views_this_month, AsyncResult.ok(AsyncResult.loading(), 0))
-    |> assign(:views_this_year, AsyncResult.ok(AsyncResult.loading(), 0))
-    |> assign(:views_per_month, AsyncResult.ok(AsyncResult.loading(), empty_months()))
+    |> assign(
+      :overview,
+      AsyncResult.ok(AsyncResult.loading(), Overview.empty(socket.assigns.period))
+    )
     |> assign(:top_videos, AsyncResult.ok(AsyncResult.loading(), []))
     |> assign(:show_all_devices, false)
     |> assign(:show_all_browsers, false)
   end
-
-  defp empty_months do
-    Enum.map(1..12, fn _month -> %{count: 0, views: 0} end)
-  end
-
-  defp assign_failed(socket) do
-    failed = AsyncResult.failed(AsyncResult.loading(), :analytics_unavailable)
-
-    socket
-    |> assign(:views_today, failed)
-    |> assign(:views_this_month, failed)
-    |> assign(:views_this_year, failed)
-    |> assign(:views_per_month, failed)
-    |> assign(:devices, failed)
-    |> assign(:browsers, failed)
-    |> assign(:max_month, failed)
-  end
-
-  defp calc_height(0, _max), do: 0
-  defp calc_height(_count, 0), do: 0
-  defp calc_height(count, max), do: 100 * count / max
 
   defp data_access_notice(reason) do
     :view_space_data

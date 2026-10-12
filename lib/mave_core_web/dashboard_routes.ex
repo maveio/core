@@ -20,11 +20,11 @@ defmodule MaveCoreWeb.DashboardRoutes do
   end
 
   def data_path(space_or_user, opts \\ []) do
-    path_for(space_or_user, "/data", [], opts)
+    path_for(space_or_user, "/data", period_params(opts), opts)
   end
 
   def data_top_list_path(space_or_user, opts \\ []) do
-    path_for(space_or_user, "/data/top", [], opts)
+    path_for(space_or_user, "/data/top", period_params(opts), opts)
   end
 
   def settings_path(space_or_user, tab \\ nil, opts \\ []) do
@@ -56,6 +56,13 @@ defmodule MaveCoreWeb.DashboardRoutes do
     []
     |> maybe_put_param(:tab, tab == :archive, "archive")
     |> maybe_put_param(:page, page > 1, page)
+  end
+
+  defp period_params(opts) do
+    case Keyword.get(opts, :period) do
+      period when is_binary(period) and period != "" -> [period: period]
+      _ -> []
+    end
   end
 
   defp maybe_put_param(params, _key, false, _value), do: params
