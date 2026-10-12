@@ -4,6 +4,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
   import Phoenix.LiveViewTest
 
   alias MaveCore.Accounts
+  alias MaveCore.Analytics.Overview
   alias MaveCore.ClickHouseRepo
   alias MaveCore.Embeds
   alias MaveCore.Repo
@@ -39,16 +40,50 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
     _ = render_async(view, 5_000)
     html = render(view)
 
-    assert html =~ "Data"
-    assert html =~ "Today"
-    assert html =~ "This month"
-    assert html =~ "This year"
+    assert html =~ "Views"
+    assert html =~ "Watch time"
+    assert html =~ "Average per view"
+    assert html =~ "Average completion"
     assert html =~ "History"
     assert html =~ "Sources"
     assert html =~ "Device"
     assert html =~ "Browser"
-    assert html =~ "grid grid-cols-3 gap-4 font-sans"
+    assert html =~ ~s(id="data-trend")
+    # The default 30-day period includes both views; the earlier one is two days old.
+    assert view |> element("#data-kpis") |> render() =~ ~r/>\s*2\s*</
     refute html =~ "font-family: 'Sofia'"
+  end
+
+  test "/data switches period and compares with the previous period", %{
+    conn: conn,
+    db_name: db_name
+  } do
+    {conn, space} = authenticated_conn(conn)
+
+    sql = """
+    INSERT INTO #{db_name}.events
+    (timestamp, name, session_id, space_hash, embed_hash, video_time, duration, source_url, browser, browser_version, os, os_version, device, device_brand)
+    VALUES
+    (addSeconds(now64(6), -108000), 'play',  '00000000-0000-0000-0000-000000001102', '#{space.hash}', 'BBBBBBBBBB', 0.0, 10, 'https://example.com/a', 'Safari', '17', 'Mac', '14', 'Mobile', 'Apple'),
+    (addSeconds(now64(6), -107997), 'pause', '00000000-0000-0000-0000-000000001102', '#{space.hash}', 'BBBBBBBBBB', 3.0, 10, 'https://example.com/a', 'Safari', '17', 'Mac', '14', 'Mobile', 'Apple'),
+    (addSeconds(now64(6), -30), 'play',  '00000000-0000-0000-0000-000000001103', '#{space.hash}', 'CCCCCCCCCC', 0.0, 10, 'https://example.com/b', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple'),
+    (addSeconds(now64(6), -28), 'pause', '00000000-0000-0000-0000-000000001103', '#{space.hash}', 'CCCCCCCCCC', 2.0, 10, 'https://example.com/b', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple')
+    """
+
+    {:ok, _} = ClickHouseRepo.query(sql)
+
+    {:ok, view, _html} = live(conn, "/data")
+    _ = render_async(view, 5_000)
+
+    view |> element(~s(#data-period-switch a[href="/data?period=24h"])) |> render_click()
+    assert_patch(view, "/data?period=24h")
+    _ = render_async(view, 5_000)
+
+    kpis = view |> element("#data-kpis") |> render()
+    # One view in the last 24 hours against one view 30 hours ago.
+    assert kpis =~ "vs previous 24 hours"
+    assert has_element?(view, ~s(#data-period-switch a[aria-current="page"]), "24 hours")
+    assert has_element?(view, ~s(a[href="/data/top-list?period=24h"]))
   end
 
   test "/data formats analytics counts with dot thousands separators" do
@@ -57,20 +92,16 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
         live_action: :index,
         route_scope: :unscoped,
         current_space: %{id: "space-id"},
+        period: "30d",
         data_access_notice: nil,
         data_access_help: nil,
-        views_today: async_ok(12_345),
-        views_this_month: async_ok(67_890),
-        views_this_year: async_ok(123_456),
-        views_per_month:
-          async_ok([
-            %{count: 12_345, views: 12_345},
-            %{count: 67_890, views: 67_890}
-            | empty_months(10)
-          ]),
-        devices: async_ok([%{device: "desktop", views: 12_345}]),
-        browsers: async_ok([%{browser: "chrome", views: 67_890}]),
-        max_month: async_ok(100_000),
+        overview:
+          async_ok(%{
+            Overview.empty("30d")
+            | current: %{views: 123_456, watch_ms: 0, avg_watch_ms: 0, avg_completion: 0.0},
+              devices: [%{device: "desktop", views: 12_345}],
+              browsers: [%{browser: "chrome", views: 67_890}]
+          }),
         show_all_devices: false,
         show_all_browsers: false
       }
@@ -93,22 +124,17 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
         live_action: :index,
         route_scope: :unscoped,
         current_space: %{id: "space-id"},
+        period: "30d",
         data_access_notice: nil,
         data_access_help: nil,
-        views_today: loading,
-        views_this_month: loading,
-        views_this_year: loading,
-        views_per_month: loading,
-        devices: loading,
-        browsers: loading,
-        max_month: loading,
+        overview: loading,
         show_all_devices: false,
         show_all_browsers: false
       }
       |> Index.render()
       |> rendered_to_string()
 
-    assert html =~ ~s(id="data-history-loading")
+    assert html =~ ~s(id="data-trend-loading")
     assert html =~ ~s(id="data-device-sources-loading")
     assert html =~ ~s(id="data-browser-sources-loading")
     assert html =~ ~s(aria-label="Loading history")
@@ -210,8 +236,4 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
   end
 
   defp async_ok(result), do: AsyncResult.ok(AsyncResult.loading(), result)
-
-  defp empty_months(count) do
-    Enum.map(1..count, fn _month -> %{count: 0, views: 0} end)
-  end
 end

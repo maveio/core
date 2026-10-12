@@ -541,6 +541,9 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
   attr :label, :string, required: true
   attr :value, :string, required: true
   attr :loading, :boolean, default: false
+  attr :unit, :string, default: nil, doc: "text above the value; defaults to \"views\""
+  attr :delta, :string, default: nil, doc: "optional comparison shown below the value"
+  attr :delta_tone, :atom, values: [:up, :down, :flat], default: :flat
 
   def video_metric_card(assigns) do
     ~H"""
@@ -549,8 +552,11 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
       aria-busy={to_string(@loading)}
     >
       <.section_title label={@label} />
-      <div class="text-sm text-stone-400 pt-6 px-6">views</div>
-      <div class="text-5xl font-extralight text-stone-500 pt-3 pb-6 px-6">
+      <div class="text-sm text-stone-400 pt-6 px-6">{@unit || gettext("views")}</div>
+      <div class={[
+        "text-5xl font-extralight text-stone-500 pt-3 px-6",
+        if(@delta && !@loading, do: "pb-2", else: "pb-6")
+      ]}>
         <div
           :if={@loading}
           class="data-loading-skeleton h-12 w-24 rounded-md"
@@ -559,6 +565,18 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
         </div>
         <span :if={@loading} class="sr-only">{gettext("Loading")}</span>
         <span :if={!@loading}>{@value}</span>
+      </div>
+      <div
+        :if={@delta && !@loading}
+        data-metric-delta={@delta_tone}
+        class={[
+          "px-6 pb-5 text-xs tabular-nums",
+          @delta_tone == :up && "text-green-600",
+          @delta_tone == :down && "text-red-500",
+          @delta_tone == :flat && "text-stone-400"
+        ]}
+      >
+        {@delta}
       </div>
     </div>
     """
