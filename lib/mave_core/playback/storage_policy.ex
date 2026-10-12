@@ -75,7 +75,8 @@ defmodule MaveCore.Playback.StoragePolicy do
          do: :ok,
          else: {:error, :playback_public_access_not_converged}
     else
-      {:error, :not_found} when visibility == :private ->
+      {:error, :not_found} ->
+        # Empty embeds have no manifest to verify in either visibility state.
         if is_nil(Repo.preload(embed, :asset).asset.current_video_id),
           do: :ok,
           else: {:error, :playback_storage_verification_failed}
