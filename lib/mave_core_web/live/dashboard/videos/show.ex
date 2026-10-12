@@ -1164,8 +1164,6 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
     {Map.put(video, :processing_player_ready, ready?), visible_after_ms}
   end
 
-  defp with_processing_player_readiness(video, _socket, _embed_id), do: {video, nil}
-
   defp processing_player_visible_after_ms(socket, video, now_ms, ready_now?) do
     if socket.assigns[:video_processing] &&
          is_map(socket.assigns[:video]) &&

@@ -714,8 +714,6 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStep do
     result
   end
 
-  defp maybe_report_encoding_booster_completed(result, _context, _variants, _timings), do: result
-
   defp maybe_finalize_encoding_booster_variants(
          _context,
          _variants,
@@ -725,41 +723,6 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStep do
          :gpu
        ) do
     {:ok, uploaded_variants, "gpu_encoding_booster", booster_result.metadata}
-  end
-
-  defp maybe_finalize_encoding_booster_variants(
-         %{encoding_booster_dispatch: :direct} = context,
-         variants,
-         output_paths,
-         uploaded_variants,
-         booster_result,
-         :cpu
-       ) do
-    {hls_outputs, hls_errors} =
-      prepackage_hls_variants(context, variants, output_paths, true)
-
-    metadata =
-      put_hls_prepackage_metadata(booster_result.metadata, hls_outputs, hls_errors)
-
-    {:ok, attach_hls_outputs(uploaded_variants, hls_outputs), "encoding_booster", metadata}
-  end
-
-  defp maybe_finalize_encoding_booster_variants(
-         context,
-         variants,
-         output_paths,
-         uploaded_variants,
-         booster_result,
-         :cpu
-       ) do
-    finalize_transcoded_variants(
-      context,
-      variants,
-      output_paths,
-      uploaded_variants,
-      "encoding_booster",
-      booster_result.metadata
-    )
   end
 
   defp encode_booster_variants(context, variants, input_url, output_paths, profile) do
@@ -905,8 +868,6 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStep do
     |> BoosterChunking.source_chunks()
     |> BoosterChunking.chunked?()
   end
-
-  defp chunked_booster_source?(_context, _profile), do: false
 
   defp maybe_add_encoding_booster_referer(options, input_url) do
     if Storage.ffmpeg_storage_url?(input_url) do
@@ -2288,9 +2249,6 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStep do
 
   defp normalize_string(value) when is_atom(value),
     do: value |> Atom.to_string() |> normalize_string()
-
-  defp normalize_string(value) when is_boolean(value),
-    do: value |> to_string() |> normalize_string()
 
   defp normalize_string(_value), do: nil
 

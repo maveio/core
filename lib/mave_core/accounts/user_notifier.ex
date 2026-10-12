@@ -240,8 +240,6 @@ defmodule MaveCore.Accounts.UserNotifier do
     end
   end
 
-  defp endpoint_http_port(_), do: nil
-
   defp normalize_port(nil), do: nil
   defp normalize_port(port) when is_integer(port), do: port
 

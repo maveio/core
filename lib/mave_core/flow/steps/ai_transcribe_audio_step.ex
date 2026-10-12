@@ -697,8 +697,6 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
     end
   end
 
-  defp heuristic_language_from_text(_), do: nil
-
   defp normalize_label(label, _language) when is_binary(label) and label != "" do
     String.trim(label)
   end

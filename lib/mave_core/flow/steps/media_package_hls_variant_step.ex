@@ -963,8 +963,6 @@ defmodule MaveCore.Flow.Steps.MediaPackageHlsVariantStep do
     end
   end
 
-  defp select_variant_output(_output, _codec, _size), do: %{}
-
   defp ok_transcode_video_output?(output, codec, size) do
     is_map(output) and output["step_type"] == "media.transcode_video" and
       output["status"] == "ok" and output_matches_variant?(output, codec, size)

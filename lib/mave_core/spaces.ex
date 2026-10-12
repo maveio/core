@@ -785,8 +785,6 @@ defmodule MaveCore.Spaces do
     end
   end
 
-  defp jwt_space_candidates(_sub), do: []
-
   defp list_space_by_scope_id(id) do
     case list_space_by_id(id) do
       [] -> list_space_by_embed_id(id)
@@ -1380,8 +1378,6 @@ defmodule MaveCore.Spaces do
     )
     |> then(fn {headers, _size, _count, truncated?} -> {headers, truncated?} end)
   end
-
-  defp response_headers_to_map(_), do: {%{}, false}
 
   defp reduce_response_header(
          _header,

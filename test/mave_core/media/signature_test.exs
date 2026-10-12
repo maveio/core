@@ -35,6 +35,17 @@ defmodule MaveCore.Media.SignatureTest do
     end
   end
 
+  test "accepts AIFF and AIFC form types and rejects truncated or unrelated forms" do
+    for form <- ["AIFF", "AIFC"] do
+      assert :ok = Signature.validate_audio(<<"FORM", 4::32, form::binary>>)
+    end
+
+    for form <- ["", "A", "AIF", "ILBM", "AIFX"] do
+      assert {:error, :unsupported_audio_signature} =
+               Signature.validate_audio(<<"FORM", 4::32, form::binary>>)
+    end
+  end
+
   test "accepts common video and audio signatures" do
     assert Signature.audio_or_video?(<<0, 0, 0, 24, "ftyp", "isom", 0::128>>)
     assert Signature.audio_or_video?(<<0x1A, 0x45, 0xDF, 0xA3, 0::128>>)

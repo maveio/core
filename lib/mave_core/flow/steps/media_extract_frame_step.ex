@@ -412,7 +412,6 @@ defmodule MaveCore.Flow.Steps.MediaExtractFrameStep do
 
   defp maybe_put_booster_instance(metadata, _timing), do: metadata
 
-  defp encoding_booster_error_code(:encoding_booster_busy), do: "busy"
   defp encoding_booster_error_code({:encoding_booster_http_status, status}), do: "http_#{status}"
   defp encoding_booster_error_code(_reason), do: "request_failed"
 

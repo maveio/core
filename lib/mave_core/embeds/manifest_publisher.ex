@@ -399,8 +399,6 @@ defmodule MaveCore.Embeds.ManifestPublisher do
     |> Enum.map(&stringify_keys/1)
   end
 
-  defp manifest_video_renditions(_, _hls_ready?), do: []
-
   defp playback_original_url(
          %Video{max_width: width, max_height: height},
          renditions,

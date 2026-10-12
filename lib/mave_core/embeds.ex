@@ -1984,8 +1984,6 @@ defmodule MaveCore.Embeds do
     processing_player_published?(step_runs)
   end
 
-  defp processing_player_ready?(_run), do: false
-
   defp processing_player_published?(step_runs) when is_list(step_runs) do
     Enum.any?(step_runs, fn
       %StepRun{

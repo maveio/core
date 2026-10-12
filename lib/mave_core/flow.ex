@@ -4353,8 +4353,6 @@ defmodule MaveCore.Flow do
     uploaded_original_output(step_runs) || public_upload_playback_output(input)
   end
 
-  defp processing_playback_output(_run, step_runs), do: uploaded_original_output(step_runs)
-
   defp public_upload_playback_output(input) do
     case public_upload_source_url(input) do
       url when is_binary(url) -> %{"original_url" => url}
@@ -4514,8 +4512,6 @@ defmodule MaveCore.Flow do
     |> Repo.all()
   end
 
-  defp list_step_runs(_flow_run_id), do: []
-
   defp maybe_sync_completed_media_metadata(
          flow_run_id,
          step_type,
@@ -4628,8 +4624,6 @@ defmodule MaveCore.Flow do
       _ -> nil
     end
   end
-
-  defp inspect_has_audio(_step_runs), do: nil
 
   defp uploaded_original_output(step_runs) when is_list(step_runs) do
     Enum.find_value(step_runs, fn

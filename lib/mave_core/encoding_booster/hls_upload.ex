@@ -42,7 +42,6 @@ defmodule MaveCore.EncodingBooster.HLSUpload do
       {:ok, uploads}
     else
       {:error, _reason} = error -> error
-      _other -> {:error, :invalid_hls_upload_token}
     end
   rescue
     _error -> {:error, :invalid_hls_upload_request}
