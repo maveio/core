@@ -230,7 +230,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
       view
       |> render()
       |> LazyHTML.from_fragment()
-      |> LazyHTML.query("#data-top-list a")
+      |> LazyHTML.query("#data-top-list tbody a")
       |> Enum.map(&LazyHTML.attribute(&1, "href"))
       |> List.flatten()
 
@@ -238,6 +238,55 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
              "/videos/#{Embeds.dashboard_embed_id(popular)}",
              "/videos/#{Embeds.dashboard_embed_id(quiet)}"
            ]
+  end
+
+  test "/data/top-list sorts by watch time and keeps the period", %{
+    conn: conn,
+    db_name: db_name
+  } do
+    {conn, space} = authenticated_conn(conn)
+    {:ok, short} = Embeds.create_video_embed(space)
+    {:ok, long} = Embeds.create_video_embed(space)
+
+    # Two short views against one long view.
+    rows =
+      [{short.hash, 1, 3}, {short.hash, 2, 3}, {long.hash, 3, 9}]
+      |> Enum.map_join(",\n", fn {embed_hash, session, seconds} ->
+        session_id = "00000000-0000-0000-0000-00000000400#{session}"
+
+        """
+        (addSeconds(now64(6), -30), 'play', '#{session_id}', '#{space.hash}', '#{embed_hash}', 0.0, 10, 'https://example.com', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple'),
+        (addSeconds(now64(6), #{seconds - 30}), 'pause', '#{session_id}', '#{space.hash}', '#{embed_hash}', #{seconds}.0, 10, 'https://example.com', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple')
+        """
+      end)
+
+    {:ok, _} =
+      ClickHouseRepo.query("""
+      INSERT INTO #{db_name}.events
+      (timestamp, name, session_id, space_hash, embed_hash, video_time, duration, source_url, browser, browser_version, os, os_version, device, device_brand)
+      VALUES
+      #{rows}
+      """)
+
+    {:ok, view, _html} = live(conn, "/data/top-list?period=7d")
+    _ = render_async(view, 5_000)
+    assert top_list_links(view) == ["/videos/#{short.id}", "/videos/#{long.id}"]
+
+    view |> element(~s(#data-top-list a[data-sort="watch_time"])) |> render_click()
+    assert_patch(view, "/data/top-list?period=7d&sort=watch_time")
+    _ = render_async(view, 5_000)
+
+    assert top_list_links(view) == ["/videos/#{long.id}", "/videos/#{short.id}"]
+    assert has_element?(view, ~s(#data-top-list a[aria-sort="descending"]), "Watch time")
+  end
+
+  defp top_list_links(view) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#data-top-list tbody a")
+    |> Enum.map(&LazyHTML.attribute(&1, "href"))
+    |> List.flatten()
   end
 
   defp authenticated_conn(conn, space_hash \\ nil) do
