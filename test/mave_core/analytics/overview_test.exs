@@ -161,7 +161,26 @@ defmodule MaveCore.Analytics.OverviewTest do
 
     assert length(overview.series) == 24
     assert Enum.sum(Enum.map(overview.series, & &1.views)) == 3
-    assert [%{device: "Desktop", views: 3}] = overview.devices
+    assert [%{device: "desktop", views: 3}] = overview.devices
+    assert [%{os: "Mac OS", views: 3}] = overview.operating_systems
+    assert [%{website: "example.com", views: 3}] = overview.websites
+
+    # Reached 50%, 25% and 100% of the video.
+    assert [
+             %{percent: 0, share: 1.0},
+             %{percent: 25, share: 1.0},
+             %{percent: 50, share: two_thirds},
+             %{percent: 75, share: one_third},
+             %{percent: 95, share: finished}
+           ] = overview.reach
+
+    assert_in_delta two_thirds, 2 / 3, 0.001
+    assert_in_delta one_third, 1 / 3, 0.001
+    assert_in_delta finished, 1 / 3, 0.001
+
+    assert overview.hours |> Map.values() |> Enum.sum() == 3
+
+    assert Enum.all?(Map.keys(overview.hours), fn {day, hour} -> day in 1..7 and hour in 0..23 end)
   end
 
   test "prepared overview preserves all periods without reading raw events", %{db_name: db_name} do

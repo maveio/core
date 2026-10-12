@@ -107,8 +107,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
               devices: [%{device: "desktop", views: 12_345}],
               browsers: [%{browser: "chrome", views: 67_890}]
           }),
-        show_all_devices: false,
-        show_all_browsers: false
+        expanded_sources: MapSet.new()
       }
       |> Index.render()
       |> rendered_to_string()
@@ -216,8 +215,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
         analytics_preparing: false,
         data_access_help: nil,
         overview: loading,
-        show_all_devices: false,
-        show_all_browsers: false
+        expanded_sources: MapSet.new()
       }
       |> Index.render()
       |> rendered_to_string()
@@ -229,6 +227,42 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
     assert html =~ ~s(aria-busy="true")
     assert html =~ "data-loading-skeleton"
     refute html =~ "..."
+  end
+
+  test "/data shows engagement and lets long breakdowns expand", %{conn: conn, db_name: db_name} do
+    {conn, space} = authenticated_conn(conn)
+
+    values =
+      Enum.map_join(1..7, ",\n", fn n ->
+        session = "00000000-0000-0000-0000-00000000300#{n}"
+        site = "https://site#{n}.example.com/page"
+
+        """
+        (addSeconds(now64(6), -#{n * 60}), 'play', '#{session}', '#{space.hash}', 'CCCCCCCCCC', 0.0, 10, '#{site}', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple'),
+        (addSeconds(now64(6), -#{n * 60 - 5}), 'pause', '#{session}', '#{space.hash}', 'CCCCCCCCCC', 5.0, 10, '#{site}', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple')
+        """
+      end)
+
+    {:ok, _} =
+      ClickHouseRepo.query("""
+      INSERT INTO #{db_name}.events
+      (timestamp, name, session_id, space_hash, embed_hash, video_time, duration, source_url, browser, browser_version, os, os_version, device, device_brand)
+      VALUES
+      #{values}
+      """)
+
+    {:ok, view, _html} = live(conn, "/data")
+    _ = render_async(view, 5_000)
+
+    assert view |> element("#data-reach") |> render() =~ "50%"
+    assert has_element?(view, "#data-hours")
+    assert render(view) =~ "Operating system"
+
+    # Seven websites: five are shown until the panel expands.
+    assert render(view) =~ "site1.example.com"
+    refute render(view) =~ "site7.example.com"
+    view |> element(~s(button[phx-value-source="website"])) |> render_click()
+    assert render(view) =~ "site7.example.com"
   end
 
   test "/data shows overview and top list tabs", %{conn: conn} do
