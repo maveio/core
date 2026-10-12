@@ -746,6 +746,36 @@ window.addEventListener('mave:clipcopy', (event) => {
   }
 })
 
+// Development alignment grid: Ctrl+G toggles #dev-grid, which only renders
+// when dev routes are enabled. The state survives page loads.
+const DEV_GRID_KEY = "mave:dev-grid"
+
+const readDevGrid = () => {
+  try {
+    return localStorage.getItem(DEV_GRID_KEY) === "on"
+  } catch (_error) {
+    return false
+  }
+}
+
+const applyDevGrid = () => {
+  const grid = document.getElementById("dev-grid")
+  if (grid) grid.hidden = !readDevGrid()
+}
+
+window.addEventListener("keydown", (event) => {
+  const grid = document.getElementById("dev-grid")
+  if (!grid || !event.ctrlKey || event.metaKey || event.altKey || event.key.toLowerCase() !== "g") return
+
+  event.preventDefault()
+  grid.hidden = !grid.hidden
+  try {
+    localStorage.setItem(DEV_GRID_KEY, grid.hidden ? "off" : "on")
+  } catch (_error) {}
+})
+window.addEventListener("phx:page-loading-stop", applyDevGrid)
+applyDevGrid()
+
 // The lines below enable quality of life phoenix_live_reload
 // development features:
 //
