@@ -130,6 +130,115 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
     """
   end
 
+  attr :overview, AsyncResult, required: true
+
+  def reach(assigns) do
+    ~H"""
+    <.video_data_section label={gettext("How far people watch")}>
+      <.async_result :let={overview} assign={@overview}>
+        <:loading>
+          <div id="data-reach-loading" class="grid gap-3 p-4" role="status">
+            <div
+              :for={width <- [100, 80, 62, 45, 33]}
+              class="data-loading-skeleton h-2.5 rounded-full"
+              style={"width: #{width}%"}
+              aria-hidden="true"
+            >
+            </div>
+            <span class="sr-only">{gettext("Loading data")}</span>
+          </div>
+        </:loading>
+        <:failed>
+          <div class="py-8 text-center text-sm font-medium text-stone-400">
+            {gettext("Data is unavailable")}
+          </div>
+        </:failed>
+        <div id="data-reach" class="grid gap-3 p-4">
+          <div
+            :for={step <- overview.reach}
+            class="grid grid-cols-[5.5rem_minmax(0,1fr)_3rem] items-center gap-3 text-xs text-stone-400"
+          >
+            <span>{reach_label(step.percent)}</span>
+            <div class="h-2.5 rounded-full bg-stone-50 overflow-hidden">
+              <div
+                class="h-full rounded-full bg-blue-500"
+                style={"width: #{round(step.share * 100)}%"}
+              >
+              </div>
+            </div>
+            <span class="text-right text-stone-500 tabular-nums">{round(step.share * 100)}%</span>
+          </div>
+        </div>
+      </.async_result>
+    </.video_data_section>
+    """
+  end
+
+  attr :overview, AsyncResult, required: true
+
+  def hours(assigns) do
+    ~H"""
+    <.video_data_section label={gettext("When people watch")}>
+      <.async_result :let={overview} assign={@overview}>
+        <:loading>
+          <div id="data-hours-loading" class="p-4" role="status">
+            <div class="data-loading-skeleton h-36 rounded-md" aria-hidden="true"></div>
+            <span class="sr-only">{gettext("Loading data")}</span>
+          </div>
+        </:loading>
+        <:failed>
+          <div class="py-8 text-center text-sm font-medium text-stone-400">
+            {gettext("Data is unavailable")}
+          </div>
+        </:failed>
+        <div
+          id="data-hours"
+          class="grid grid-cols-[2rem_repeat(24,minmax(0,1fr))] gap-0.5 p-4 text-[10px] text-stone-300"
+        >
+          <span></span>
+          <span :for={hour <- 0..23} class="text-center">{if rem(hour, 6) == 0, do: hour}</span>
+          <%= for {weekday, label} <- weekdays() do %>
+            <span class="self-center">{label}</span>
+            <div
+              :for={hour <- 0..23}
+              class="aspect-square rounded-sm bg-blue-500"
+              style={"opacity: #{hour_opacity(overview.hours, weekday, hour)}"}
+              title={"#{label} #{hour}:00 · #{format_number(Map.get(overview.hours, {weekday, hour}, 0))} #{gettext("views")}"}
+            >
+            </div>
+          <% end %>
+        </div>
+        <p class="px-4 pb-3 text-xs text-stone-300">{gettext("Hours in UTC")}</p>
+      </.async_result>
+    </.video_data_section>
+    """
+  end
+
+  defp reach_label(0), do: gettext("Started")
+  defp reach_label(95), do: gettext("Finished")
+  defp reach_label(percent), do: "#{percent}%"
+
+  defp weekdays do
+    [
+      {1, gettext("Mon")},
+      {2, gettext("Tue")},
+      {3, gettext("Wed")},
+      {4, gettext("Thu")},
+      {5, gettext("Fri")},
+      {6, gettext("Sat")},
+      {7, gettext("Sun")}
+    ]
+  end
+
+  defp hour_opacity(hours, weekday, hour) do
+    busiest = hours |> Map.values() |> Enum.max(fn -> 0 end)
+
+    case Map.get(hours, {weekday, hour}, 0) do
+      0 -> 0.06
+      views -> Float.round(0.15 + 0.85 * views / busiest, 2)
+    end
+  end
+
   attr :chart, :map, required: true
 
   defp trend_chart(assigns) do

@@ -24,8 +24,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
      |> assign(:settings_open, false)
      |> assign(:route_scope, :unscoped)
      |> assign(:period, Overview.default_period())
-     |> assign(:show_all_devices, false)
-     |> assign(:show_all_browsers, false)
+     |> assign(:expanded_sources, MapSet.new())
      |> assign(:data_access_notice, nil)
      |> assign(:data_access_help, nil)
      |> assign_async_defaults()}
@@ -84,8 +83,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
     {:noreply,
      socket
      |> assign(:overview, AsyncResult.ok(socket.assigns.overview, overview))
-     |> assign(:show_all_devices, false)
-     |> assign(:show_all_browsers, false)}
+     |> assign(:expanded_sources, MapSet.new())}
   end
 
   def handle_async(:fetch_overview, _result, socket) do
@@ -110,12 +108,16 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
      )}
   end
 
-  def handle_event("toggle_show_all_devices", _, socket) do
-    {:noreply, assign(socket, :show_all_devices, !socket.assigns.show_all_devices)}
-  end
+  def handle_event("toggle_source", %{"source" => source}, socket)
+      when source in ["device", "browser", "os", "website"] do
+    expanded = socket.assigns.expanded_sources
 
-  def handle_event("toggle_show_all_browsers", _, socket) do
-    {:noreply, assign(socket, :show_all_browsers, !socket.assigns.show_all_browsers)}
+    expanded =
+      if MapSet.member?(expanded, source),
+        do: MapSet.delete(expanded, source),
+        else: MapSet.put(expanded, source)
+
+    {:noreply, assign(socket, :expanded_sources, expanded)}
   end
 
   def render(assigns) do
@@ -190,6 +192,17 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
               <.divider />
 
               <div class="mb-6">
+                <.subtitle label={gettext("Engagement")} icon="hero-play-circle" />
+              </div>
+
+              <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <OverviewComponents.reach overview={@overview} />
+                <OverviewComponents.hours overview={@overview} />
+              </div>
+
+              <.divider />
+
+              <div class="mb-6">
                 <.subtitle label={gettext("Sources")} icon="hero-globe-alt" />
               </div>
 
@@ -197,9 +210,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
                 <.source_panel
                   title={gettext("Device")}
                   assign={overview_field(@overview, :devices)}
-                  rows={visible_devices(overview_field(@overview, :devices), @show_all_devices)}
-                  toggle="toggle_show_all_devices"
-                  expanded={@show_all_devices}
+                  expanded={MapSet.member?(@expanded_sources, "device")}
                   key_name={:device}
                   empty_icon="device"
                 />
@@ -207,11 +218,27 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
                 <.source_panel
                   title={gettext("Browser")}
                   assign={overview_field(@overview, :browsers)}
-                  rows={visible_browsers(overview_field(@overview, :browsers), @show_all_browsers)}
-                  toggle="toggle_show_all_browsers"
-                  expanded={@show_all_browsers}
+                  expanded={MapSet.member?(@expanded_sources, "browser")}
                   key_name={:browser}
                   empty_icon="browser"
+                />
+
+                <.source_panel
+                  title={gettext("Operating system")}
+                  assign={overview_field(@overview, :operating_systems)}
+                  expanded={MapSet.member?(@expanded_sources, "os")}
+                  key_name={:os}
+                  empty_icon="os"
+                  capitalize={false}
+                />
+
+                <.source_panel
+                  title={gettext("Websites")}
+                  assign={overview_field(@overview, :websites)}
+                  expanded={MapSet.member?(@expanded_sources, "website")}
+                  key_name={:website}
+                  empty_icon="website"
+                  capitalize={false}
                 />
               </div>
             <% end %>
@@ -294,11 +321,10 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
   attr :title, :string, required: true
   attr :assign, :any, required: true
-  attr :rows, :list, required: true
-  attr :toggle, :string, required: true
   attr :expanded, :boolean, required: true
   attr :key_name, :atom, required: true
   attr :empty_icon, :string, required: true
+  attr :capitalize, :boolean, default: true
 
   defp source_panel(assigns) do
     ~H"""
@@ -374,23 +400,25 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
             <div class="text-sm font-medium">{gettext("No data yet")}</div>
           </div>
         <% else %>
-          <%= for row <- @rows do %>
-            <div class="flex px-3 py-2.5 border-b border-stone-100 last:border-none hover:bg-stone-50 active:bg-blue-50">
-              <div class="flex-grow text-sm text-stone-400">
-                {row |> Map.fetch!(@key_name) |> to_string() |> String.capitalize()}
+          <%= for row <- visible_rows(rows, @key_name, @expanded) do %>
+            <div class="flex gap-3 px-3 py-2.5 border-b border-stone-100 last:border-none hover:bg-stone-50 active:bg-blue-50">
+              <div class="flex-grow min-w-0 truncate text-sm text-stone-400">
+                {source_label(Map.fetch!(row, @key_name), @capitalize)}
               </div>
-              <div class="text-sm text-stone-400">{format_number(row.views)}</div>
+              <div class="text-sm text-stone-400 tabular-nums">{format_number(row.views)}</div>
             </div>
           <% end %>
-          <%= if length(rows) < length(@assign.result || []) do %>
-            <div
-              class="px-3 py-2.5 bg-stone-50 border-t border-stone-100 flex justify-center cursor-pointer hover:bg-stone-100"
-              phx-click={@toggle}
+          <%= if length(visible_rows(rows, @key_name, false)) < length(visible_rows(rows, @key_name, true)) do %>
+            <button
+              type="button"
+              class="w-full px-3 py-2.5 bg-stone-50 border-t border-stone-100 flex justify-center cursor-pointer hover:bg-stone-100"
+              phx-click="toggle_source"
+              phx-value-source={@empty_icon}
             >
               <span class="text-sm text-stone-500 text-opacity-60">
                 {if @expanded, do: gettext("Show less"), else: gettext("Show more")}
               </span>
-            </div>
+            </button>
           <% end %>
         <% end %>
       </.video_data_section>
@@ -428,20 +456,17 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
   defp format_number(number), do: Formatter.format_number(number)
 
-  defp visible_devices(%AsyncResult{ok?: true, result: devices}, true), do: devices
-  defp visible_devices(%AsyncResult{ok?: true, result: devices}, false), do: Enum.take(devices, 5)
-  defp visible_devices(_, _), do: []
-
-  defp visible_browsers(%AsyncResult{ok?: true, result: browsers}, expanded?) do
-    filtered =
-      Enum.filter(browsers, fn %{browser: type, views: count} ->
-        not (type in ["ie", "firefox", "brave", "opera"] and count == 0)
-      end)
-
-    if expanded?, do: filtered, else: Enum.take(filtered, 5)
+  defp visible_rows(rows, :browser, expanded?) do
+    rows
+    |> Enum.reject(&(&1.browser in ["ie", "firefox", "brave", "opera"] and &1.views == 0))
+    |> visible_rows(nil, expanded?)
   end
 
-  defp visible_browsers(_, _), do: []
+  defp visible_rows(rows, _key, true), do: rows
+  defp visible_rows(rows, _key, false), do: Enum.take(rows, 5)
+
+  defp source_label(value, true), do: value |> to_string() |> String.capitalize()
+  defp source_label(value, false), do: to_string(value)
 
   defp assign_async_defaults(socket) do
     socket
@@ -456,8 +481,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
       AsyncResult.ok(AsyncResult.loading(), Overview.empty(socket.assigns.period))
     )
     |> assign(:top_videos, AsyncResult.ok(AsyncResult.loading(), []))
-    |> assign(:show_all_devices, false)
-    |> assign(:show_all_browsers, false)
+    |> assign(:expanded_sources, MapSet.new())
   end
 
   defp data_access_notice(reason) do
