@@ -2026,17 +2026,6 @@ defmodule MaveCore.Media.Storage do
               )
 
             {:error, {:server_side_multipart_copy_failed, reason}}
-
-          other ->
-            _ =
-              abort_multipart_upload(
-                context.destination_bucket,
-                context.destination_path,
-                context.destination_storage_profile,
-                upload_id
-              )
-
-            {:error, {:server_side_multipart_copy_failed, other}}
         end
 
       {:error, reason} ->
@@ -2167,17 +2156,6 @@ defmodule MaveCore.Media.Storage do
               )
 
             {:error, {:multipart_copy_failed, reason}}
-
-          other ->
-            _ =
-              abort_multipart_upload(
-                context.destination_bucket,
-                context.destination_path,
-                context.destination_storage_profile,
-                upload_id
-              )
-
-            {:error, {:multipart_copy_failed, other}}
         end
 
       {:error, reason} ->

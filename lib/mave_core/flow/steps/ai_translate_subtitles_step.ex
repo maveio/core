@@ -316,8 +316,6 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
     {:ok, Jason.encode!(%{"text" => String.trim(text), "segments" => json_segments})}
   end
 
-  defp translation_to_json(_), do: {:error, :empty_translation_response}
-
   defp segments_to_vtt(segments) do
     valid_segments =
       segments
@@ -461,7 +459,6 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
   defp source_language_from_output(_), do: nil
 
   defp detect_language_from_text(text) when is_binary(text), do: LanguageDetector.detect(text)
-  defp detect_language_from_text(_), do: nil
 
   defp same_base_language?(left, right) do
     base_language(left) == base_language(right)

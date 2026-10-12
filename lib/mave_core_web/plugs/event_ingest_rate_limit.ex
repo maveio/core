@@ -159,8 +159,4 @@ defmodule MaveCoreWeb.Plugs.EventIngestRateLimit do
     ms = if timeout_ms > 0, do: timeout_ms, else: fallback_interval_ms
     max(div(ms + 999, 1000), 1)
   end
-
-  defp retry_after_seconds(_timeout_ms, fallback_interval_ms) do
-    max(div(fallback_interval_ms + 999, 1000), 1)
-  end
 end

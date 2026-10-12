@@ -96,7 +96,7 @@ defmodule MaveCore.Media.RemoteSource do
   end
 
   defp write_chunk(file, data, received, request, response) do
-    case IO.binwrite(file, data) do
+    case :file.write(file, data) do
       :ok ->
         response =
           Req.Response.put_private(response, @bytes_private_key, received + byte_size(data))

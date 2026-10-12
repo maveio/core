@@ -41,9 +41,6 @@ defmodule MaveCoreWeb.Api.LegacyEmbedController do
 
       {:error, error} when is_binary(error) ->
         conn |> put_status(:bad_request) |> json(%{error: error})
-
-      _error ->
-        conn |> put_status(:bad_request) |> json(%{error: @invalid_jwt_error})
     end
   end
 

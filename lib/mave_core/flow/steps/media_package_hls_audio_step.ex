@@ -429,7 +429,6 @@ defmodule MaveCore.Flow.Steps.MediaPackageHlsAudioStep do
     end
   end
 
-  defp encoding_booster_error_code(:encoding_booster_busy), do: "busy"
   defp encoding_booster_error_code({:encoding_booster_http_status, status}), do: "http_#{status}"
   defp encoding_booster_error_code(_reason), do: "request_failed"
 

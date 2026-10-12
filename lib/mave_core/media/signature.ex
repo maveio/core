@@ -100,7 +100,7 @@ defmodule MaveCore.Media.Signature do
   defp audio?(<<"fLaC", _rest::binary>>), do: true
   defp audio?(<<"RIFF", _size::binary-size(4), "WAVE", _rest::binary>>), do: true
 
-  defp audio?(<<"FORM", _size::binary-size(4), form, _rest::binary>>)
+  defp audio?(<<"FORM", _size::binary-size(4), form::binary-size(4), _rest::binary>>)
        when form in ["AIFF", "AIFC"], do: true
 
   defp audio?(<<"#!AMR", _rest::binary>>), do: true

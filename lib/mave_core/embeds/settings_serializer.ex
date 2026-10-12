@@ -510,8 +510,6 @@ defmodule MaveCore.Embeds.SettingsSerializer do
     end
   end
 
-  defp upload_url(_), do: nil
-
   defp build_upload_url(key) when is_binary(key) and key != "" do
     upload_config = Application.get_env(:mave_core, :upload, [])
     trimmed_key = String.trim_leading(key, "/")

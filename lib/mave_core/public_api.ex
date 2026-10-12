@@ -533,8 +533,6 @@ defmodule MaveCore.PublicApi do
     end
   end
 
-  defp current_video(_embed), do: nil
-
   defp embed_payload(%Space{} = space, %Embed{type: :video} = embed) do
     current_video = current_video(embed)
     version = current_video_version(embed)

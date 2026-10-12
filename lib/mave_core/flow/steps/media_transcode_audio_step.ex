@@ -498,7 +498,6 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeAudioStep do
   defp maybe_put_fallback(metadata, _key, nil), do: metadata
   defp maybe_put_fallback(metadata, key, value), do: Map.put(metadata, key, value)
 
-  defp encoding_booster_error_code(:encoding_booster_busy), do: "busy"
   defp encoding_booster_error_code({:encoding_booster_http_status, status}), do: "http_#{status}"
 
   defp encoding_booster_error_code({:audio_upload_verification_failed, _reason}),

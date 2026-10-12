@@ -238,8 +238,6 @@ defmodule MaveCore.Uploads do
     :ok
   end
 
-  defp maybe_warm_encoding_boosters(_scope, _metadata), do: :ok
-
   defp encoding_booster_prewarmer do
     Application.get_env(:mave_core, :encoding_booster_prewarmer, EncodingBooster)
   end
@@ -362,7 +360,6 @@ defmodule MaveCore.Uploads do
          audio_track_id: track.id
        }}
     else
-      nil -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -390,7 +387,6 @@ defmodule MaveCore.Uploads do
          subtitle_id: subtitle.id
        }}
     else
-      nil -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -816,8 +812,6 @@ defmodule MaveCore.Uploads do
       _ -> key |> Path.extname() |> String.trim_leading(".") |> String.downcase()
     end
   end
-
-  defp parse_integer(value, _fallback) when is_integer(value), do: value
 
   defp parse_integer(value, fallback) when is_binary(value) do
     case Integer.parse(value) do

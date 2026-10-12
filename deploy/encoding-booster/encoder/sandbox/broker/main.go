@@ -248,6 +248,21 @@ type connections struct {
 	once  sync.Once
 }
 
+// Bound live sockets, not the number of seeks over a media command's lifetime.
+const maxActiveConnections = 4096
+
+type limitedConnection struct {
+	net.Conn
+	once    sync.Once
+	release func()
+}
+
+func (c *limitedConnection) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(c.release)
+	return err
+}
+
 func (l *connections) Accept() (net.Conn, error) {
 	select {
 	case connection := <-l.queue:
@@ -260,29 +275,48 @@ func (l *connections) Close() error   { l.once.Do(func() { close(l.done) }); ret
 func (l *connections) Addr() net.Addr { return &net.UnixAddr{Name: "media-broker", Net: "unix"} }
 
 func serve(ctx context.Context, control *net.UnixConn, b *broker) {
+	serveWithConnectionLimit(ctx, control, b, maxActiveConnections)
+}
+
+func serveWithConnectionLimit(ctx context.Context, control *net.UnixConn, b *broker, limit int) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	defer control.Close()
+	slots := make(chan struct{}, limit)
 	listener := &connections{queue: make(chan net.Conn), done: make(chan struct{})}
 	server := &http.Server{Handler: b, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second,
 		MaxHeaderBytes: 8192, BaseContext: func(net.Listener) context.Context { return ctx }}
 	go func() { <-ctx.Done(); control.Close(); server.Close(); listener.Close() }()
 	go server.Serve(listener)
-	// Limit parser-created connections over the entire invocation to bound abuse.
-	for count := 0; count < 4096; count++ {
+	for {
 		var request [2]byte
 		n, err := control.Read(request[:])
 		if err != nil || n != 1 || request[0] != 'C' {
 			return
 		}
+		select {
+		case slots <- struct{}{}:
+		default:
+			// A response without a descriptor is a refused connection. Keep the
+			// control channel available so the parser can retry after closing one.
+			if _, _, err := control.WriteMsgUnix([]byte{'N'}, nil, nil); err != nil {
+				return
+			}
+			continue
+		}
 		parent, child, err := socketPair(syscall.SOCK_STREAM)
 		if err != nil {
+			<-slots
 			return
 		}
 		connection, err := net.FileConn(parent)
 		parent.Close()
 		if err != nil {
 			child.Close()
+			<-slots
 			return
 		}
+		connection = &limitedConnection{Conn: connection, release: func() { <-slots }}
 		_, _, err = control.WriteMsgUnix([]byte{'C'}, syscall.UnixRights(int(child.Fd())), nil)
 		child.Close()
 		if err != nil {
