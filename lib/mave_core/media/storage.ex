@@ -49,6 +49,13 @@ defmodule MaveCore.Media.Storage do
   @copy_tmp_root "mave-storage-copy"
   @default_object_acl_profiles ["eu", "eu_3"]
   @space_hash_pattern ~r/^[a-z0-9]{5}$/
+  @cacheable_media_content_types ["video/mp4", "audio/mp4"]
+  # Versioned output keys (`{embed}/v{n}/...`) are never rewritten with different
+  # bytes, so browsers and CDNs may keep them without revalidating. Unversioned
+  # legacy keys can be replaced in place and get a short lifetime instead.
+  @versioned_media_cache_control "public, max-age=31536000, immutable"
+  @unversioned_media_cache_control "public, max-age=86400"
+  @versioned_media_key_pattern ~r{(?:^|/)v[1-9][0-9]*/}
 
   @doc """
   Returns the bucket name for a given space hash.
@@ -392,6 +399,7 @@ defmodule MaveCore.Media.Storage do
         {"content-type", content_type},
         {"content-length", Integer.to_string(size)}
       ]
+      |> maybe_add_media_headers(path, content_type, opts)
       |> maybe_add_public_read_header(storage_profile, opts)
 
     put_object_with_retry(
@@ -418,6 +426,7 @@ defmodule MaveCore.Media.Storage do
     headers =
       [{"content-type", content_type}]
       |> maybe_add_content_length_header(opts)
+      |> maybe_add_media_headers(path, content_type, opts)
       |> maybe_add_public_read_header(storage_profile, opts)
 
     put_object_with_retry(bucket, path, storage_profile, headers, fn -> body end)
@@ -635,6 +644,7 @@ defmodule MaveCore.Media.Storage do
         {"content-type", content_type},
         {"content-length", Integer.to_string(content_length)}
       ]
+      |> maybe_add_media_headers(path, content_type, public: true)
       |> maybe_add_public_read_header(storage_profile, public: true)
 
     with {:ok, endpoint} <- required_storage_config(config, :endpoint),
@@ -2164,9 +2174,12 @@ defmodule MaveCore.Media.Storage do
   end
 
   defp initiate_multipart_upload(bucket, path, storage_profile, content_type, opts \\ []) do
+    public? = Keyword.get(opts, :public, true)
+
     headers =
       [{"content-type", content_type}]
-      |> maybe_add_public_read_header(storage_profile, public: Keyword.get(opts, :public, true))
+      |> maybe_add_media_headers(path, content_type, public: public?)
+      |> maybe_add_public_read_header(storage_profile, public: public?)
 
     result =
       build_req(bucket, storage_profile)
@@ -3208,6 +3221,26 @@ defmodule MaveCore.Media.Storage do
     else
       headers
     end
+  end
+
+  # Public MP4 and fMP4 outputs are served straight from storage or a CDN, so the
+  # caching and inline-playback headers are stored as object metadata.
+  defp maybe_add_media_headers(headers, path, content_type, opts) do
+    if Keyword.get(opts, :public, false) and content_type in @cacheable_media_content_types do
+      headers ++
+        [
+          {"cache-control", media_cache_control(path)},
+          {"content-disposition", "inline"}
+        ]
+    else
+      headers
+    end
+  end
+
+  defp media_cache_control(path) do
+    if Regex.match?(@versioned_media_key_pattern, path),
+      do: @versioned_media_cache_control,
+      else: @unversioned_media_cache_control
   end
 
   defp copy_source_header(bucket, path) do
