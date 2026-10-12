@@ -17,6 +17,7 @@ defmodule MaveCore.Analytics.Overview do
   @periods ~w(today week month year)
   @default_period "month"
   @min_watch_ms 1_000
+  @reach_percents [0, 25, 50, 75, 95]
   @clickhouse_identifier ~r/^[A-Za-z_][A-Za-z0-9_]*$/
 
   def periods, do: @periods
@@ -33,8 +34,16 @@ defmodule MaveCore.Analytics.Overview do
          previous: %{views: 100, ...},
          series: [%{start: ~U[...], views: 4, watch_ms: 120_000}, ...],
          devices: [%{device: "desktop", views: 80}, ...],
-         browsers: [%{browser: "Chrome", views: 60}, ...]
+         browsers: [%{browser: "Chrome", views: 60}, ...],
+         operating_systems: [%{os: "Mac OS", views: 50}, ...],
+         websites: [%{website: "example.com", views: 70}, ...],
+         reach: [%{percent: 0, share: 1.0}, %{percent: 25, share: 0.8}, ...],
+         hours: %{{1, 9} => 12, ...}
        }}
+
+  `reach` is the share of views that got at least that far into the video;
+  95% counts as finished. `hours` maps `{weekday, hour}` (Monday is 1) to
+  views started in that hour.
   """
   def space_overview(space_hash, period, now \\ DateTime.utc_now())
 
@@ -259,6 +268,8 @@ defmodule MaveCore.Analytics.Overview do
         duration,
         device,
         browser,
+        os,
+        source_url,
         leadInFrame(timestamp) OVER (
           PARTITION BY embed_hash, session_id
           ORDER BY timestamp
@@ -287,8 +298,10 @@ defmodule MaveCore.Analytics.Overview do
         max(duration) AS video_duration,
         max(video_time) AS furthest,
         if(video_duration > 0, least(1, furthest / video_duration), 0) AS completion,
-        nullIf(argMin(device, timestamp), '') AS device,
-        nullIf(argMin(browser, timestamp), '') AS browser
+        nullIf(lower(argMin(device, timestamp)), '') AS device,
+        nullIf(argMin(browser, timestamp), '') AS browser,
+        nullIf(argMin(os, timestamp), '') AS os,
+        nullIf(domainWithoutWWW(argMin(source_url, timestamp)), '') AS website
       FROM ordered
       GROUP BY embed_hash, session_id
       HAVING watch_ms >= #{@min_watch_ms}
@@ -318,9 +331,32 @@ defmodule MaveCore.Analytics.Overview do
           %{start: start, views: to_int(views), watch_ms: to_int(watch_ms)}
         end),
       devices: dimension_rows(grouped, "device", :device),
-      browsers: dimension_rows(grouped, "browser", :browser)
+      browsers: dimension_rows(grouped, "browser", :browser),
+      operating_systems: dimension_rows(grouped, "os", :os),
+      websites: dimension_rows(grouped, "website", :website),
+      reach: reach(Map.get(grouped, "reach", [])),
+      hours: hours(Map.get(grouped, "hour", []))
     }
   end
+
+  defp reach(rows) do
+    counts = Map.new(rows, fn [percent, views, _watch_ms, _value] -> {percent, to_int(views)} end)
+    started = Map.get(counts, "0", 0)
+
+    Enum.map(@reach_percents, fn percent ->
+      views = Map.get(counts, Integer.to_string(percent), 0)
+      %{percent: percent, share: if(started > 0, do: views / started, else: 0.0)}
+    end)
+  end
+
+  defp hours(rows) do
+    Map.new(rows, fn [key, views, _watch_ms, _value] ->
+      [weekday, hour] = key |> String.split("-") |> Enum.map(&String.to_integer/1)
+      {{weekday, hour}, to_int(views)}
+    end)
+  end
+
+  defp reach_sql, do: "[" <> Enum.map_join(@reach_percents, ", ", &Integer.to_string/1) <> "]"
 
   defp totals([views, watch_ms, completion]) do
     views = to_int(views)
@@ -354,7 +390,11 @@ defmodule MaveCore.Analytics.Overview do
       previous: totals([0, 0, 0.0]),
       series: Enum.map(window.buckets, &%{start: &1, views: 0, watch_ms: 0}),
       devices: [],
-      browsers: []
+      browsers: [],
+      operating_systems: [],
+      websites: [],
+      reach: Enum.map(@reach_percents, &%{percent: &1, share: 0.0}),
+      hours: %{}
     }
   end
 
