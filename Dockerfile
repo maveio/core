@@ -9,11 +9,11 @@
 #   - https://hub.docker.com/r/hexpm/elixir/tags - for the build image
 #   - https://hub.docker.com/_/ubuntu/tags?name=26.04 - for the release image
 #   - https://pkgs.org/ - resource for finding needed packages
-#   - Ex: docker.io/hexpm/elixir:1.19.4-erlang-28.2-debian-trixie-20251208-slim
+#   - Ex: docker.io/hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005-slim
 #
-ARG ELIXIR_VERSION=1.19.4
-ARG OTP_VERSION=28.2
-ARG DEBIAN_VERSION=trixie-20251208-slim
+ARG ELIXIR_VERSION=1.20.4
+ARG OTP_VERSION=29.1.1
+ARG DEBIAN_VERSION=trixie-20261005-slim
 ARG FFMPEG_VERSION=9.0.2
 ARG VERSION=dev
 ARG VCS_REF=unknown
@@ -26,7 +26,7 @@ ARG RUNNER_IMAGE="docker.io/ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da
 
 FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS node_build
 
-FROM golang:1.25.13-alpine3.23 AS media_broker_build
+FROM golang:1.27.2-alpine3.23 AS media_broker_build
 WORKDIR /src
 COPY deploy/encoding-booster/encoder/sandbox/broker/ ./
 RUN go test ./... && CGO_ENABLED=0 go build -trimpath -o /mave-media-broker .
@@ -194,6 +194,10 @@ RUN apt-get update \
 # the compiled release and other runtime necessities
 FROM ${RUNNER_IMAGE} AS runtime_base
 
+# The base image includes Pebble, but this release runs under tini instead.
+# Remove the unused Go binary so it cannot retain an unpatched Go runtime.
+RUN rm -f /usr/bin/pebble
+
 ARG FFMPEG_VERSION
 RUN apt-get update \
   && apt-get upgrade -y --no-install-recommends \
@@ -204,6 +208,7 @@ RUN apt-get update \
     libmp3lame0 \
     libncurses6 \
     libseccomp2 \
+    libsctp1 \
     libnuma1 \
     libopus0 \
     libsharpyuv0 \

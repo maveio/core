@@ -1,4 +1,4 @@
-FROM golang:1.25.13-alpine3.23 AS app-build
+FROM golang:1.27.2-alpine3.23 AS app-build
 WORKDIR /src
 COPY go.mod *.go ./
 COPY assets/play.png ./assets/play.png

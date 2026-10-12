@@ -46,7 +46,7 @@ development services publicly.
 
 Requirements:
 
-- Docker with Compose v2; Elixir 1.19.4 and Erlang/OTP 28.2, as pinned in the
+- Docker with Compose v2; Elixir 1.20.4 and Erlang/OTP 29.1.1, as pinned in the
   [Dockerfile](Dockerfile).
 - Node.js/npm, a C compiler, and Rust/Cargo.
 - FFmpeg and FFprobe on `PATH`, with H.264 encoding (`libx264`).

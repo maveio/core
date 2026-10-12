@@ -685,6 +685,35 @@ defmodule MaveCore.EncodingBoosterTest do
     File.rm_rf!(output_path <> ".bundle")
   end
 
+  test "rejects corrupted streamed ZIP entries with zero-date metadata", %{
+    output_path: output_path
+  } do
+    configure_booster()
+    Req.default_options(plug: {Req.Test, __MODULE__})
+
+    bundle =
+      :binary.replace(
+        go_streaming_encoding_bundle(),
+        <<"segment", 0x50, 0x4B, 0x07, 0x08>>,
+        <<"corrupt", 0x50, 0x4B, 0x07, 0x08>>
+      )
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      conn
+      |> put_resp_header("content-type", "application/vnd.mave.encoding-bundle+zip")
+      |> send_resp(200, bundle)
+    end)
+
+    assert {:error, :incomplete_encoding_booster_bundle} =
+             EncodingBooster.encode_to_file(
+               "https://source.example/video.mp4",
+               output_path,
+               package_hls: true
+             )
+
+    refute File.exists?(output_path)
+  end
+
   test "packages an encoded rendition through the HLS-only booster endpoint", %{
     output_path: output_path
   } do

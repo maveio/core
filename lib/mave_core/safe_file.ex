@@ -39,7 +39,7 @@ defmodule MaveCore.SafeFile do
   # sobelow_skip ["Traversal.FileModule"]
   def stream_read!(path, modes \\ [], chunk_size \\ @default_stream_chunk) do
     {:ok, expanded} = readable_path(path)
-    File.stream!(expanded, modes, chunk_size)
+    File.stream!(expanded, chunk_size, modes)
   end
 
   # sobelow_skip ["Traversal.FileModule"]

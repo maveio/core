@@ -34,6 +34,9 @@ jobs:
     uses: ./.github/workflows/security.yml
     with:
       release_version: ${{ needs.version.outputs.version }}
+  image-security:
+    needs: version
+    uses: ./.github/workflows/image-security.yml
   self-hosted:
     needs: version
     runs-on: ubuntu-24.04
@@ -72,7 +75,7 @@ jobs:
                   print(f'::group::{name}\n{text}\n::endgroup::')
           PY
   release:
-    needs: [version, checks, self-hosted]
+    needs: [version, checks, image-security, self-hosted]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

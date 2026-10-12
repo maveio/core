@@ -1,7 +1,7 @@
 # Security checks
 
 Pull requests run the complete test suite against disposable PostgreSQL,
-ClickHouse and MinIO services, with Elixir 1.19.4 / OTP 28.2 and FFmpeg.
+ClickHouse and MinIO services, with Elixir 1.20.4 / OTP 29.1.1 and FFmpeg.
 CI and the shared Core/SaaS asset builder use Node 24.21.0 LTS; the official
 checkout/setup-node/cache Actions use Node 24 as well. Production Core, CPU and
 GPU images use FFmpeg 9.0.2. The GPU build retains Ubuntu 24.04's NVIDIA headers
@@ -10,7 +10,9 @@ Compilation warnings, formatting, Credo, dependency advisories, high-severity
 npm advisories and newly committed secrets fail their respective jobs. Scanner
 output redacts secret values. Scheduled jobs scan the current tree and locally
 built Core/CPU/GPU images, including unfixed high/critical OS and native-library
-advisories. Images are never published or deployed by these workflows.
+advisories. Image scans also run for Dockerfile/encoder pull requests and gate
+Core releases. Trivy is pinned to 0.75.0; Go binaries use Go 1.27.2.
+Images are never published or deployed by these workflows.
 
 Actions are pinned to reviewed commit SHAs. PR jobs have read-only repository
 permissions, do not persist checkout credentials, and receive no production

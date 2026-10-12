@@ -155,15 +155,24 @@ defmodule MaveCore.EncodingBooster.Bundle do
            cwd: String.to_charlist(extract_root),
            file_list: file_list
          ) do
-      {:ok, _files} -> :ok
-      {:error, :badarg} -> extract_streamed_store_entries(bundle_path, extract_root, entries)
-      {:error, reason} -> {:error, {:invalid_encoding_booster_bundle, reason}}
+      {:ok, _files} ->
+        :ok
+
+      {:error, :badarg} ->
+        extract_streamed_store_entries(bundle_path, extract_root, entries)
+
+      {:error, {_path, {:file, :write_file_info, _args}, :badarg}} ->
+        extract_streamed_store_entries(bundle_path, extract_root, entries)
+
+      {:error, reason} ->
+        {:error, {:invalid_encoding_booster_bundle, reason}}
     end
   end
 
   # Go's archive/zip writes data descriptors when entries are streamed to an
   # HTTP response. OTP can list those archives but :zip.extract/2 rejects them
-  # with :badarg, so copy the already-validated stored entries by their central
+  # with :badarg (including invalid zero-date metadata in newer OTP versions),
+  # so copy the already-validated stored entries by their central
   # directory offsets and verify each data descriptor while doing so.
   defp extract_streamed_store_entries(bundle_path, extract_root, entries) do
     with {:ok, safe_bundle_path} <- SafeFile.readable_path(bundle_path),
