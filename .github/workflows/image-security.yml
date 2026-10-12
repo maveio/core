@@ -2,6 +2,12 @@ name: Image security
 
 on:
   workflow_dispatch:
+  workflow_call:
+  pull_request:
+    paths:
+      - Dockerfile
+      - deploy/encoding-booster/encoder/**
+      - .github/workflows/image-security.yml
   schedule:
     - cron: "41 6 * * 1"
 
@@ -35,8 +41,9 @@ jobs:
           DOCKERFILE: ${{ matrix.dockerfile }}
           BUILD_CONTEXT: ${{ matrix.context }}
         run: docker build --pull --file "$DOCKERFILE" --tag "mave-scan:$IMAGE_NAME" "$BUILD_CONTEXT"
-      - uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.75.0
           image-ref: mave-scan:${{ matrix.name }}
           scanners: vuln
           severity: HIGH,CRITICAL

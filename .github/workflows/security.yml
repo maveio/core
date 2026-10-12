@@ -37,7 +37,7 @@ jobs:
           trap 'sudo rm -rf "$artifacts"' EXIT
           docker run --rm \
             -v "$PWD/deploy/encoding-booster/encoder/sandbox/broker:/src:ro" \
-            -v "$artifacts:/out" -w /src golang:1.25.13-alpine3.23 \
+            -v "$artifacts:/out" -w /src golang:1.27.2-alpine3.23 \
             sh -c 'go test ./... && go vet ./... && CGO_ENABLED=0 go build -trimpath -o /out/mave-media-broker .'
           cc -O2 -Wall -Wextra -Werror deploy/encoding-booster/encoder/sandbox/media_sandbox.c \
             -lseccomp -o "$artifacts/mave-media-sandbox"
@@ -105,8 +105,8 @@ jobs:
         run: python3 .github/scripts/release.py apply
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
-          otp-version: "28.2"
-          elixir-version: "1.19.4"
+          otp-version: "29.1.1"
+          elixir-version: "1.20.4"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.21.0"
@@ -117,7 +117,7 @@ jobs:
             deps
             _build
             priv/ua_inspector
-          key: test-${{ runner.os }}-otp28.2-elixir1.19.4-${{ hashFiles('mix.lock') }}
+          key: test-${{ runner.os }}-otp29.1.1-elixir1.20.4-${{ hashFiles('mix.lock') }}
       - name: Prepare disposable media dependencies
         run: |
           sudo apt-get update
@@ -161,8 +161,8 @@ jobs:
         run: python3 .github/scripts/release.py apply
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
-          otp-version: "28.2"
-          elixir-version: "1.19.4"
+          otp-version: "29.1.1"
+          elixir-version: "1.20.4"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.21.0"
