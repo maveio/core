@@ -318,8 +318,34 @@ defmodule MaveCore.Analytics.OverviewTest do
     assert actual.current.watch_ms == 54_000
   end
 
+  test "ranks videos with watch time, completion and views per bucket", %{db_name: db_name} do
+    now = DateTime.utc_now()
+
+    insert_events(db_name, [
+      {-3_600, "play", 1, "AAAAAAAAAA", 0.0},
+      {-3_540, "pause", 1, "AAAAAAAAAA", 60.0},
+      {-1_800, "play", 2, "BBBBBBBBBB", 0.0},
+      {-1_680, "pause", 2, "BBBBBBBBBB", 120.0},
+      {-600, "play", 3, "BBBBBBBBBB", 0.0},
+      {-570, "pause", 3, "BBBBBBBBBB", 30.0},
+      # Outside the 7-day period.
+      {-8 * 86_400, "play", 4, "AAAAAAAAAA", 0.0},
+      {-8 * 86_400 + 60, "pause", 4, "AAAAAAAAAA", 60.0}
+    ])
+
+    assert {:ok, [first, second]} = Overview.top_videos("space", "week", 25, now)
+
+    assert %{embed_hash: "BBBBBBBBBB", views: 2, watch_ms: 150_000} = first
+    assert_in_delta first.avg_completion, (1.0 + 0.25) / 2, 0.001
+    assert length(first.series) == 7
+    assert Enum.sum(first.series) == 2
+
+    assert %{embed_hash: "AAAAAAAAAA", views: 1, watch_ms: 60_000} = second
+  end
+
   test "rejects unknown periods" do
     assert {:error, :invalid_request} = Overview.space_overview("space", "5y")
+    assert {:error, :invalid_request} = Overview.top_videos("space", "5y")
   end
 
   defp assert_overview(actual, expected) do

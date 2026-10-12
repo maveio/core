@@ -8,11 +8,11 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   # Deleted videos keep their analytics, so query extra rows to fill the list.
   @top_list_query_size 50
 
-  alias MaveCore.Analytics
   alias MaveCore.Analytics.Overview
   alias MaveCore.Embeds
   alias MaveCore.UsageLimits
   alias MaveCoreWeb.Dashboard.Data.OverviewComponents
+  alias MaveCoreWeb.Dashboard.Data.TopListComponents
   alias MaveCoreWeb.DashboardRoutes
   alias MaveCoreWeb.Formatter
   alias Phoenix.LiveView.AsyncResult
@@ -27,6 +27,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
      |> assign(:period, Overview.default_period())
      |> assign(:show_all_devices, false)
      |> assign(:show_all_browsers, false)
+     |> assign(:sort, TopListComponents.default_sort())
      |> assign(:data_access_notice, nil)
      |> assign(:data_access_help, nil)
      |> assign_async_defaults()}
@@ -34,7 +35,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
   def handle_params(params, _url, socket) do
     space = socket.assigns.current_space
-    socket = assign(socket, :period, period(params))
+    socket = assign(socket, period: period(params), sort: sort(params))
 
     socket =
       case UsageLimits.can_view_space_data?(space) do
@@ -55,9 +56,11 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   end
 
   defp start_tab_fetch(socket, :top_list, space) do
+    %{period: period, sort: sort} = socket.assigns
+
     socket
     |> assign(:top_videos, AsyncResult.loading())
-    |> start_async(:fetch_top_videos, fn -> fetch_top_videos(space) end)
+    |> start_async(:fetch_top_videos, fn -> fetch_top_videos(space, period, sort) end)
   end
 
   defp start_tab_fetch(socket, _overview, space) do
@@ -68,16 +71,16 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
     |> start_async(:fetch_overview, fn -> Overview.space_overview(space.hash, period) end)
   end
 
-  defp fetch_top_videos(space) do
-    with {:ok, rows} <- Analytics.space_top_videos(space.hash, @top_list_query_size) do
+  defp fetch_top_videos(space, period, sort) do
+    with {:ok, rows} <- Overview.top_videos(space.hash, period, @top_list_query_size) do
       videos = Embeds.dashboard_videos_by_hash(space, Enum.map(rows, & &1.embed_hash))
 
       top_videos =
-        for %{embed_hash: hash, views: views} <- rows,
+        for %{embed_hash: hash} = row <- rows,
             Map.has_key?(videos, hash),
-            do: Map.put(videos[hash], :views, views)
+            do: Map.merge(row, videos[hash])
 
-      {:ok, Enum.take(top_videos, @top_list_size)}
+      {:ok, top_videos |> Enum.take(@top_list_size) |> TopListComponents.sort(sort)}
     end
   end
 
@@ -176,11 +179,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
             {gettext("Top list")}
           </.menubar_item>
           <div class="flex-grow"></div>
-          <OverviewComponents.period_switch
-            :if={@live_action != :top_list}
-            period={@period}
-            path={&period_path(assigns, &1)}
-          />
+          <OverviewComponents.period_switch period={@period} path={&period_path(assigns, &1)} />
           <div
             :if={@data_access_notice}
             id="data-access-limit-notice"
@@ -206,10 +205,12 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
               {gettext("Analytics are being prepared. Please check back shortly.")}
             </p>
             <%= if @live_action == :top_list do %>
-              <.top_list
+              <TopListComponents.top_list
                 top_videos={@top_videos}
                 current_space={@current_space}
                 route_scope={@route_scope}
+                sort={@sort}
+                sort_path={&top_list_path(assigns, @period, &1)}
               />
             <% else %>
               <OverviewComponents.kpis overview={@overview} period={@period} />
@@ -256,74 +257,6 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
       <.footer />
     </div>
-    """
-  end
-
-  attr(:top_videos, AsyncResult, required: true)
-  attr(:current_space, :any, required: true)
-  attr(:route_scope, :atom, required: true)
-
-  defp top_list(assigns) do
-    ~H"""
-    <div class="mb-6">
-      <.subtitle label={gettext("Most viewed this year")} icon="hero-trophy" />
-    </div>
-
-    <.async_result :let={top_videos} assign={@top_videos}>
-      <:loading>
-        <div id="data-top-list-loading" role="status" aria-label={gettext("Loading top list")}>
-          <.video_data_section>
-            <%= for width <- [46, 38, 52, 30, 42, 35, 48, 33] do %>
-              <div class="flex items-center gap-4 px-3 py-2.5 border-b border-stone-100 last:border-none">
-                <div class="data-loading-skeleton h-3.5 w-4 flex-none rounded-full" aria-hidden="true">
-                </div>
-                <div class="flex-grow">
-                  <div
-                    class="data-loading-skeleton h-3.5 rounded-full"
-                    style={"width: #{width}%"}
-                    aria-hidden="true"
-                  >
-                  </div>
-                </div>
-                <div class="data-loading-skeleton h-3.5 w-10 rounded-full" aria-hidden="true"></div>
-              </div>
-            <% end %>
-            <span class="sr-only">{gettext("Loading data")}</span>
-          </.video_data_section>
-        </div>
-      </:loading>
-
-      <:failed>
-        <.video_data_section>
-          <div class="py-8 text-center text-sm font-medium text-stone-400">
-            {gettext("Data is unavailable")}
-          </div>
-        </.video_data_section>
-      </:failed>
-
-      <.video_data_section>
-        <div
-          :if={top_videos == []}
-          class="flex flex-col items-center justify-center py-8 text-stone-400"
-        >
-          <.icon name="hero-trophy" class="h-6 w-6 mb-2 opacity-50" />
-          <div class="text-sm font-medium">{gettext("No data yet")}</div>
-        </div>
-        <div id="data-top-list">
-          <.link
-            :for={{video, rank} <- Enum.with_index(top_videos, 1)}
-            navigate={DashboardRoutes.video_path(@current_space, video.id, :all, scope: @route_scope)}
-            class="flex items-center gap-4 px-3 py-2.5 border-b border-stone-100 last:border-none hover:bg-stone-50 active:bg-blue-50"
-          >
-            <div class="w-6 flex-none text-sm text-stone-300 tabular-nums">{rank}</div>
-            <div class="flex-grow min-w-0 truncate text-sm text-stone-500">{video.name}</div>
-            <div class="flex-none text-sm text-stone-400 tabular-nums">
-              {format_number(video.views)}
-            </div>
-          </.link>
-        </div>
-      </.video_data_section>
-    </.async_result>
     """
   end
 
@@ -451,12 +384,29 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
   defp period(_params), do: Overview.default_period()
 
+  defp period_path(%{live_action: :top_list} = assigns, period),
+    do: top_list_path(assigns, period, assigns.sort)
+
   defp period_path(assigns, period) do
     DashboardRoutes.data_path(assigns.current_space,
       scope: assigns.route_scope,
       period: period_param(period)
     )
   end
+
+  defp top_list_path(assigns, period, sort) do
+    DashboardRoutes.data_top_list_path(assigns.current_space,
+      scope: assigns.route_scope,
+      period: period_param(period),
+      sort: if(sort != TopListComponents.default_sort(), do: sort)
+    )
+  end
+
+  defp sort(%{"sort" => sort}) do
+    if sort in TopListComponents.sorts(), do: sort, else: TopListComponents.default_sort()
+  end
+
+  defp sort(_params), do: TopListComponents.default_sort()
 
   # Keeps URLs for the default period free of a query string.
   defp period_param(period) do
