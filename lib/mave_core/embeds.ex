@@ -1935,6 +1935,7 @@ defmodule MaveCore.Embeds do
         where:
           fragment("?->>'space_hash' = ?", run.input, ^space_hash) and
             fragment("?->>'embed_hash' = ?", run.input, ^embed_hash),
+        where: fragment("COALESCE(?->>'operation', '')", run.input) != "subtitle_translation",
         order_by: [desc: run.inserted_at],
         limit: 1,
         preload: [:step_runs, :flow_template, :flow_version]

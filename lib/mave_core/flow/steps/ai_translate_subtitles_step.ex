@@ -1,6 +1,6 @@
 defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
   @moduledoc """
-  Produces English subtitle artifacts from an existing transcription JSON output.
+  Produces translated subtitle artifacts from an existing transcription JSON output.
   """
   @behaviour MaveCore.Flow.Step
 
@@ -8,6 +8,7 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
   alias MaveCore.Languages
   alias MaveCore.Media.Storage
   alias MaveCore.Transcription.LanguageDetector
+  alias MaveCore.Transcription.SubtitleTranslations
 
   @target_language "en"
 
@@ -21,7 +22,9 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
     step_id = Map.get(step_definition, "id", "translate_subtitles")
 
     target_language =
-      normalize_optional_language(Map.get(params, "target_language")) || @target_language
+      normalize_optional_language(
+        Map.get(params, "target_language") || requested_target(run_input)
+      ) || @target_language
 
     space_hash = Map.get(source_output, "space_hash") || Map.get(run_input, "space_hash")
     embed_hash = Map.get(source_output, "embed_hash") || Map.get(run_input, "embed_hash")
@@ -39,23 +42,38 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
 
     bucket = Storage.bucket_for_space(space_hash, region)
     source_language = source_language_from_output(transcribe_output)
+    preserve_timing? = run_input["operation"] == "subtitle_translation"
 
-    with {:ok, space_hash} <- StepSupport.require_binary(space_hash, :space_hash),
+    with :ok <- authorize_translation(run_input),
+         {:ok, space_hash} <- StepSupport.require_binary(space_hash, :space_hash),
          {:ok, embed_hash} <- StepSupport.require_binary(embed_hash, :embed_hash),
          :ok <- transcribe_output_ready(transcribe_output),
          :ok <- continue_unless_target_language(source_language, target_language),
          {:ok, transcription} <-
-           load_transcription(storage_adapter, bucket, transcribe_output, region),
+           load_transcription(
+             storage_adapter,
+             bucket,
+             transcribe_output,
+             region,
+             preserve_timing?
+           ),
          source_language = source_language || detect_language_from_text(transcription.text),
          :ok <- continue_unless_target_language(source_language, target_language),
          {:ok, translation} <-
            translate(translation_provider, transcription, source_language, target_language),
+         {:ok, translation} <- preserve_cue_timing(translation, transcription, run_input),
          {:ok, subtitle_body} <-
-           translation_to_vtt(translation, transcription_duration(transcription)),
+           translation_to_vtt(
+             translation,
+             transcription_duration(transcription),
+             preserve_timing?
+           ),
          {:ok, subtitle_json} <- translation_to_json(translation),
          {:ok, key} <- build_subtitle_key(embed_hash, version, target_language),
+         key = translation_output_key(key, run_input),
          {:ok, uri} <- put_subtitle(storage_adapter, bucket, key, subtitle_body, region),
          {:ok, json_key} <- build_subtitle_json_key(embed_hash, version, target_language),
+         json_key = translation_output_key(json_key, run_input),
          {:ok, json_uri} <-
            put_subtitle_json(storage_adapter, bucket, json_key, subtitle_json, region) do
       size = byte_size(subtitle_body)
@@ -137,6 +155,37 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
     end
   end
 
+  defp requested_target(%{"operation" => "subtitle_translation", "target_language" => language}),
+    do: language
+
+  defp requested_target(_), do: nil
+
+  defp authorize_translation(%{"operation" => "subtitle_translation"} = input) do
+    with {:ok, _embed} <- SubtitleTranslations.authorize_execution(input), do: :ok
+  end
+
+  defp authorize_translation(_), do: :ok
+
+  defp translation_output_key(key, %{"operation" => "subtitle_translation"} = input),
+    do: SubtitleTranslations.output_prefix(input) <> "/" <> Path.basename(key)
+
+  defp translation_output_key(key, _input), do: key
+
+  defp preserve_cue_timing(translation, transcription, %{"operation" => "subtitle_translation"}) do
+    if length(translation.segments) == length(transcription.segments) do
+      segments =
+        Enum.zip_with(translation.segments, transcription.segments, fn translated, original ->
+          %{translated | start: original.start, end: original.end}
+        end)
+
+      {:ok, %{translation | segments: segments}}
+    else
+      {:error, :translation_cue_count_mismatch}
+    end
+  end
+
+  defp preserve_cue_timing(translation, _transcription, _input), do: {:ok, translation}
+
   defp transcribe_output_ready(%{"status" => "ok"}), do: :ok
 
   defp transcribe_output_ready(%{"status" => status}),
@@ -154,12 +203,12 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
     end
   end
 
-  defp load_transcription(storage_adapter, bucket, transcribe_output, region) do
+  defp load_transcription(storage_adapter, bucket, transcribe_output, region, preserve_timing?) do
     case subtitle_json_key(transcribe_output) do
       {:ok, key} ->
         with {:ok, body} <- fetch_json_body(storage_adapter, bucket, key, region),
              {:ok, decoded} <- decode_json_body(body),
-             {:ok, transcription} <- normalize_transcription(decoded) do
+             {:ok, transcription} <- normalize_transcription(decoded, preserve_timing?) do
           {:ok, transcription}
         else
           {:error, reason} -> {:error, {:translation_source_fetch_failed, reason}}
@@ -254,7 +303,9 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
   defp normalize_translation(_translation, _target_language),
     do: {:error, :empty_translation_response}
 
-  defp normalize_transcription(transcription) when is_map(transcription) do
+  defp normalize_transcription(transcription, preserve_timing? \\ false)
+
+  defp normalize_transcription(transcription, preserve_timing?) when is_map(transcription) do
     text =
       transcription
       |> map_get(:text)
@@ -263,7 +314,7 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
     segments =
       transcription
       |> map_get(:segments, [])
-      |> normalize_segments()
+      |> normalize_segments(preserve_timing?)
 
     text = text || transcript_text_from_segments(segments)
 
@@ -274,13 +325,14 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
     end
   end
 
-  defp normalize_transcription(_), do: {:error, :empty_translation_input}
+  defp normalize_transcription(_, _), do: {:error, :empty_translation_input}
 
-  defp translation_to_vtt(%{segments: [_ | _] = segments}, _fallback_duration) do
-    segments_to_vtt(segments)
+  defp translation_to_vtt(%{segments: [_ | _] = segments}, _fallback_duration, preserve_timing?) do
+    segments_to_vtt(segments, preserve_timing?)
   end
 
-  defp translation_to_vtt(%{text: text}, fallback_duration) when is_binary(text) and text != "" do
+  defp translation_to_vtt(%{text: text}, fallback_duration, _preserve_timing?)
+       when is_binary(text) and text != "" do
     duration = fallback_duration || 5.0
 
     [
@@ -296,7 +348,7 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
     |> then(&{:ok, &1})
   end
 
-  defp translation_to_vtt(_translation, _fallback_duration),
+  defp translation_to_vtt(_translation, _fallback_duration, _preserve_timing?),
     do: {:error, :empty_translation_response}
 
   defp translation_to_json(%{text: text, segments: segments}) when is_binary(text) do
@@ -316,10 +368,10 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
     {:ok, Jason.encode!(%{"text" => String.trim(text), "segments" => json_segments})}
   end
 
-  defp segments_to_vtt(segments) do
+  defp segments_to_vtt(segments, preserve_timing?) do
     valid_segments =
       segments
-      |> normalize_segments()
+      |> normalize_segments(preserve_timing?)
       |> Enum.filter(&(&1.text != ""))
 
     if valid_segments == [] do
@@ -343,7 +395,9 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
     end
   end
 
-  defp normalize_segments(segments) when is_list(segments) do
+  defp normalize_segments(segments, preserve_timing? \\ false)
+
+  defp normalize_segments(segments, preserve_timing?) when is_list(segments) do
     segments
     |> Enum.filter(&is_map/1)
     |> Enum.map(fn segment ->
@@ -352,14 +406,14 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
 
       %{
         start: start_time,
-        end: max(end_time, start_time + 0.1),
+        end: if(preserve_timing?, do: end_time, else: max(end_time, start_time + 0.1)),
         text: normalize_text(map_get(segment, :text)) || ""
       }
     end)
     |> Enum.filter(&(&1.text != ""))
   end
 
-  defp normalize_segments(_), do: []
+  defp normalize_segments(_, _), do: []
 
   defp segment_words(%{text: text, start: start_time, end: end_time}) do
     words = String.split(text, ~r/\s+/, trim: true)

@@ -34,6 +34,13 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
       String.ends_with?(path, "/h264_hd_hls/playlist.m3u8") ->
         {:ok, "#EXTM3U\nsegment_000.ts\n#EXT-X-ENDLIST\n"}
 
+      String.ends_with?(path, "/subtitle_en_hls/playlist.m3u8") ->
+        {:ok,
+         Process.get(
+           :subtitle_playlist_body,
+           "#EXTM3U\n../translations/request/subtitle_en.vtt\n"
+         )}
+
       true ->
         {:ok, "#EXTM3U\nh264_hd_hls/playlist.m3u8\n"}
     end
@@ -244,6 +251,32 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
     assert get(build_conn(), path <> "?" <> URI.encode_query(%{token: wrong})).status == 401
     {:ok, _} = Spaces.delete_key(context.read_key)
     assert get(build_conn(), path <> "?" <> URI.encode_query(%{token: token})).status == 401
+  end
+
+  test "private HLS subtitles sign nested translation objects and reject escaping references",
+       context do
+    {:ok, embed} = Embeds.create_video_embed(context.space, %{visibility: :private})
+    token = sign(context.read_key, %{"sub" => context.space.hash <> embed.hash})
+    base = "/api/v1/playback/media/#{context.space.hash}#{embed.hash}"
+    path = base <> "/v2/subtitle_en_hls/playlist.m3u8"
+
+    assert get(build_conn(), path).status == 401
+    conn = Phoenix.ConnTest.get(build_conn(), path, %{token: token})
+    assert response(conn, 200) =~ "https://storage.example.test/"
+    assert conn.resp_body =~ "/#{embed.hash}/v2/translations/request/subtitle_en.vtt?expires="
+    refute conn.resp_body =~ "../"
+
+    Process.put(:subtitle_playlist_body, "#EXTM3U\n../../../other/subtitle_en.vtt\n")
+    assert Phoenix.ConnTest.get(build_conn(), path, %{token: token}).status == 404
+
+    assert {:error, :invalid_path} =
+             Media.response(
+               embed,
+               "v2/../outside.vtt",
+               base,
+               token,
+               System.system_time(:second) + 60
+             )
   end
 
   test "video responses do not add a sources field to either format", context do
