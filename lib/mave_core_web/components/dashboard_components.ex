@@ -27,6 +27,7 @@ defmodule MaveCoreWeb.DashboardComponents do
   - `Settings` - settings_panel, settings_header, settings_toggle, settings_option, settings_option_grid, color_picker
   - `Fields` - region_card, copyable_field, copy_button
   - `VideoDetail` - video_embed_panel, video_upload_panel, video_processing_panel, video_metric_card, video_data_section
+  - `ScheduledRelease` - release_notice, release_form, local_time
   """
 
   # Re-export all components from sub-modules for backwards compatibility
@@ -107,4 +108,8 @@ defmodule MaveCoreWeb.DashboardComponents do
   defdelegate video_processing_panel(assigns), to: MaveCoreWeb.DashboardComponents.VideoDetail
   defdelegate video_metric_card(assigns), to: MaveCoreWeb.DashboardComponents.VideoDetail
   defdelegate video_data_section(assigns), to: MaveCoreWeb.DashboardComponents.VideoDetail
+
+  defdelegate release_notice(assigns), to: MaveCoreWeb.DashboardComponents.ScheduledRelease
+  defdelegate release_form(assigns), to: MaveCoreWeb.DashboardComponents.ScheduledRelease
+  defdelegate local_time(assigns), to: MaveCoreWeb.DashboardComponents.ScheduledRelease
 end

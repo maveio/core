@@ -6,7 +6,7 @@ defmodule MaveCore.PublicApi do
   alias MaveCore.Assets.{AudioTrack, Subtitle, Video}
   alias MaveCore.Collections.CollectionEmbed
   alias MaveCore.Embeds
-  alias MaveCore.Embeds.{Embed, Events, SettingsSerializer}
+  alias MaveCore.Embeds.{Embed, Events, Release, SettingsSerializer}
   alias MaveCore.Flow
   alias MaveCore.Languages
   alias MaveCore.Playback.URLs
@@ -143,6 +143,7 @@ defmodule MaveCore.PublicApi do
       %{
         id: public_embed_id(space, embed),
         visibility: embed.playback_visibility,
+        release_at: Release.release_unix(embed),
         name: embed_name(embed),
         duration: current_video && current_video.duration,
         width: current_video && current_video.max_width,
@@ -160,6 +161,7 @@ defmodule MaveCore.PublicApi do
       %{
         id: public_embed_id(space, embed),
         visibility: embed.playback_visibility,
+        release_at: Release.release_unix(embed),
         embed_url: embed_url(space, embed),
         poster_image: poster_image(space, embed),
         object: "video",
@@ -533,7 +535,14 @@ defmodule MaveCore.PublicApi do
     end
   end
 
+  # Collections must not list media of a pending release.
   defp embed_payload(%Space{} = space, %Embed{type: :video} = embed) do
+    if Release.pending?(embed),
+      do: Release.manifest(%{embed | space: space}),
+      else: released_embed_payload(space, embed)
+  end
+
+  defp released_embed_payload(%Space{} = space, %Embed{type: :video} = embed) do
     current_video = current_video(embed)
     version = current_video_version(embed)
 

@@ -23,6 +23,10 @@ defmodule MaveCore.Embeds.Embed do
       values: [:public, :protecting, :private, :publishing],
       default: :public
 
+    # Pending scheduled release. Written only by `MaveCore.Embeds.Release` and
+    # the playback visibility worker, never cast from user input.
+    field :release_at, :utc_datetime_usec
+
     field :deleted_at, :utc_datetime_usec
 
     belongs_to :space, Space

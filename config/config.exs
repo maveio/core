@@ -37,6 +37,7 @@ config :mave_core, Oban,
     {Oban.Plugins.Cron,
      crontab: [
        {"* * * * *", MaveCore.Workers.FlowRecoveryWorker},
+       {"* * * * *", MaveCore.Workers.ReleaseWorker},
        {"23 * * * *", MaveCore.Workers.CliAuthorizationPruneWorker}
      ]}
   ],

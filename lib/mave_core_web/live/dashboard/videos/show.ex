@@ -7,6 +7,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   alias MaveCore.Embeds
   alias MaveCore.Embeds.Embed
   alias MaveCore.Embeds.Events, as: EmbedEvents
+  alias MaveCore.Embeds.Release
   alias MaveCore.Embeds.SettingsSerializer
   alias MaveCore.Flow.Diagnostics
   alias MaveCore.Playback.EmbedCode
@@ -43,6 +44,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
      |> assign(:page_title, gettext("Video Details"))
      |> assign(:code_preview, :script)
      |> assign(:confirmation_needed, false)
+     |> assign(:release_form_open, false)
      |> assign(:pending_action, nil)
      |> assign(:settings_open, true)
      |> assign(:current_tab, :all)
@@ -474,6 +476,49 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
     end
   end
 
+  def handle_event("open_release_form", _params, socket) do
+    {:noreply, assign(socket, :release_form_open, true)}
+  end
+
+  def handle_event("close_release_form", _params, socket) do
+    {:noreply, assign(socket, :release_form_open, false)}
+  end
+
+  def handle_event(
+        "schedule_release",
+        %{"release" => %{"at" => at}},
+        %{assigns: %{resource_embed: %Embed{} = embed}} = socket
+      ) do
+    with {:ok, release_at, _offset} <- DateTime.from_iso8601(at),
+         {:ok, updated} <- Release.schedule(embed, release_at) do
+      {:noreply,
+       socket
+       |> assign(:resource_embed, updated)
+       |> assign(:release_form_open, false)
+       |> put_flash(:info, gettext("Release scheduled"))}
+    else
+      {:error, reason} -> {:noreply, put_flash(socket, :error, release_error(reason))}
+    end
+  end
+
+  def handle_event(
+        "release_now",
+        _params,
+        %{assigns: %{resource_embed: %Embed{} = embed}} = socket
+      ) do
+    case Release.release_now(embed) do
+      {:ok, updated} ->
+        {:noreply,
+         socket
+         |> assign(:resource_embed, updated)
+         |> assign(:release_form_open, false)
+         |> put_flash(:info, gettext("The video is being published."))}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, release_error(reason))}
+    end
+  end
+
   def handle_event("change_code_preview", %{"preview" => preview}, socket) do
     {:noreply, assign(socket, :code_preview, String.to_existing_atom(preview))}
   end
@@ -725,6 +770,25 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   end
 
   defp format_number(num), do: Formatter.format_number(num)
+
+  # A scheduled release becomes public, so its snippets stay token-free.
+  defp token_snippet?(embed),
+    do: MaveCore.Playback.protected?(embed) and not Release.pending?(embed)
+
+  defp release_schedulable?(%Embed{} = embed) do
+    Release.pending?(embed) or
+      (embed.playback_visibility == :public and embed.playback_status == :public)
+  end
+
+  defp release_error(:release_in_past), do: gettext("Pick a release time in the future.")
+  defp release_error(:invalid_format), do: gettext("Pick a release date and time.")
+  defp release_error(:playback_private), do: gettext("Only public videos can be scheduled.")
+
+  defp release_error(:playback_unavailable),
+    do: gettext("Scheduled releases need private playback storage.")
+
+  defp release_error(:not_scheduled), do: gettext("This video has no scheduled release.")
+  defp release_error(_reason), do: gettext("The release could not be updated.")
 
   defp load_resource(socket, id, tab, page) do
     case Embeds.resolve_dashboard_embed(socket.assigns.current_space, id) do
@@ -1598,12 +1662,12 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
     ]
     |> Enum.reject(fn tab ->
       (dashboard_player_tag(video) == "mave-audio" and tab.name == :clip) or
-        (MaveCore.Playback.protected?(embed) and tab.name == :iframe)
+        (token_snippet?(embed) and tab.name == :iframe)
     end)
   end
 
   defp effective_code_preview(:iframe, embed) do
-    if MaveCore.Playback.protected?(embed), do: :script, else: :iframe
+    if token_snippet?(embed), do: :script, else: :iframe
   end
 
   defp effective_code_preview(type, _embed), do: type
@@ -1611,7 +1675,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   defp snippet_string(type, video, embed) do
     type = effective_code_preview(type, embed)
 
-    if MaveCore.Playback.protected?(embed) do
+    if token_snippet?(embed) do
       # Public thumbnail URLs are not suitable as private embed backgrounds.
       video = video |> Map.put(:snippet_player_poster, nil) |> Map.put(:snippet_clip_poster, nil)
 

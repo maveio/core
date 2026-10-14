@@ -232,13 +232,31 @@
           <div class="font-mono pl-2 pr-2.5 text-stone-400/50">{@video.public_id}</div>
         </div>
 
-        <.dropdown_button id="video-actions" menu_class="w-40">
+        <.dropdown_button id="video-actions" menu_class="w-44">
+          <:item
+            :if={MaveCore.Playback.available?(@current_space)}
+            id="video-schedule-release"
+            icon="hero-clock"
+            phx-click="open_release_form"
+            disabled={not release_schedulable?(@resource_embed)}
+            title={
+              if not release_schedulable?(@resource_embed),
+                do: gettext("Only public videos can be scheduled")
+            }
+          >
+            {if Release.pending?(@resource_embed),
+              do: gettext("change release"),
+              else: gettext("schedule release")}
+          </:item>
           <:item
             :if={MaveCore.Playback.available?(@current_space)}
             id="video-playback-visibility"
             icon={if @resource_embed.playback_visibility == :private, do: "hero-lock-open", else: "hero-lock-closed"}
             phx-click="toggle_playback_visibility"
-            disabled={@resource_embed.playback_status in [:protecting, :publishing]}
+            disabled={
+              @resource_embed.playback_status in [:protecting, :publishing] or
+                Release.pending?(@resource_embed)
+            }
           >
             {cond do
               @resource_embed.playback_status in [:protecting, :publishing] -> gettext("updating access…")
@@ -267,6 +285,7 @@
           line_numbers={line_numbers(@code_preview, @video, @resource_embed)}
         >
           <:guidance>
+            <.release_notice embed={@resource_embed} />
             <MaveCoreWeb.DashboardComponents.PlaybackAccess.guidance embed={@resource_embed} />
           </:guidance>
           <:player>
@@ -401,6 +420,12 @@
     uploading_poster={match?(%{stage: :processing}, @poster_upload)}
     processing_uploaded_audio_track={@processing_uploaded_audio_track}
     processing_uploaded_subtitle={@processing_uploaded_subtitle}
+  />
+
+  <.release_form
+    :if={@resource_embed && @mode == :video && MaveCore.Playback.available?(@current_space)}
+    show={@release_form_open}
+    embed={@resource_embed}
   />
 
   <.dialog
