@@ -10,6 +10,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   alias MaveCore.Embeds.SettingsSerializer
   alias MaveCore.Flow.Diagnostics
   alias MaveCore.Playback.EmbedCode
+  alias MaveCore.Playback.Password
   alias MaveCore.Spaces
   alias MaveCore.Uploads.Token
   alias MaveCore.UsageLimits
@@ -32,6 +33,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
      socket
      |> assign(:mode, :video)
      |> assign(:resource_embed, nil)
+     |> assign(:password_form, to_form(%{}, as: :playback))
+     |> assign(:password_error, nil)
      |> assign(:video_id, nil)
      |> assign(:video, nil)
      |> assign(:folder, nil)
@@ -466,12 +469,20 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
       {:ok, updated} ->
         {:noreply,
          socket
-         |> assign(:resource_embed, updated)
+         |> assign(:resource_embed, Password.for_dashboard(updated))
          |> put_flash(:info, gettext("Playback access is being updated."))}
 
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, gettext("Playback access could not be updated."))}
     end
+  end
+
+  def handle_event("set_playback_password", %{"playback" => %{"password" => password}}, socket) do
+    {:noreply, update_playback_password(socket, password)}
+  end
+
+  def handle_event("remove_playback_password", _params, socket) do
+    {:noreply, update_playback_password(socket, nil)}
   end
 
   def handle_event("change_code_preview", %{"preview" => preview}, socket) do
@@ -920,7 +931,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
 
     socket
     |> assign(:mode, :video)
-    |> assign(:resource_embed, video_embed)
+    |> assign(:resource_embed, Password.for_dashboard(video_embed))
     |> assign(:page_title, gettext("Video Details"))
     |> assign(:video_id, Embeds.dashboard_embed_id(video_embed))
     |> assign(:folder, nil)
@@ -1112,7 +1123,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
 
     socket
     |> assign(:mode, :video)
-    |> assign(:resource_embed, video_embed)
+    |> assign(:resource_embed, Password.for_dashboard(video_embed))
     |> assign(:page_title, gettext("Video Details"))
     |> assign(:video_id, Embeds.dashboard_embed_id(video_embed))
     |> assign(:folder, nil)
@@ -1197,7 +1208,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
 
     socket
     |> assign(:mode, :video)
-    |> assign(:resource_embed, video_embed)
+    |> assign(:resource_embed, Password.for_dashboard(video_embed))
     |> assign(:page_title, gettext("Video Details"))
     |> assign(:video_id, Embeds.dashboard_embed_id(video_embed))
     |> assign(:folder, nil)
@@ -1586,6 +1597,35 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
     end)
   end
 
+  defp update_playback_password(socket, password) do
+    socket =
+      socket
+      |> assign(:password_form, to_form(%{}, as: :playback))
+      |> assign(:password_error, nil)
+
+    case Password.update(socket.assigns.resource_embed, %{"password" => password}) do
+      {:ok, _updated} ->
+        {:ok, embed} =
+          Embeds.resolve_dashboard_embed(
+            socket.assigns.current_space,
+            socket.assigns.resource_embed.id
+          )
+
+        socket
+        |> assign_video_by_state(embed)
+        |> put_flash(:info, gettext("Playback access is being updated."))
+
+      {:error, :invalid_password} ->
+        assign(socket, :password_error, gettext("Enter a password of at most 1024 bytes."))
+
+      {:error, _reason} ->
+        assign(socket, :password_error, gettext("Playback access could not be updated."))
+    end
+  end
+
+  defp token_only?(embed),
+    do: MaveCore.Playback.protected?(embed) and not Password.protected?(embed)
+
   defp code_tabs(current, video, embed) do
     current = effective_code_preview(current, embed)
 
@@ -1597,13 +1637,18 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
       %{name: :vue, label: "Vue", current: current == :vue}
     ]
     |> Enum.reject(fn tab ->
-      (dashboard_player_tag(video) == "mave-audio" and tab.name == :clip) or
-        (MaveCore.Playback.protected?(embed) and tab.name == :iframe)
+      ((dashboard_player_tag(video) == "mave-audio" or Password.protected?(embed)) and
+         tab.name == :clip) or
+        (token_only?(embed) and tab.name == :iframe)
     end)
   end
 
   defp effective_code_preview(:iframe, embed) do
-    if MaveCore.Playback.protected?(embed), do: :script, else: :iframe
+    if token_only?(embed), do: :script, else: :iframe
+  end
+
+  defp effective_code_preview(:clip, embed) do
+    if Password.protected?(embed), do: :script, else: :clip
   end
 
   defp effective_code_preview(type, _embed), do: type
@@ -1611,10 +1656,13 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   defp snippet_string(type, video, embed) do
     type = effective_code_preview(type, embed)
 
-    if MaveCore.Playback.protected?(embed) do
-      # Public thumbnail URLs are not suitable as private embed backgrounds.
-      video = video |> Map.put(:snippet_player_poster, nil) |> Map.put(:snippet_clip_poster, nil)
+    # Public thumbnail URLs are not suitable as private embed backgrounds.
+    video =
+      if MaveCore.Playback.protected?(embed),
+        do: video |> Map.put(:snippet_player_poster, nil) |> Map.put(:snippet_clip_poster, nil),
+        else: video
 
+    if token_only?(embed) do
       tag =
         case type do
           :clip -> "mave-clip"

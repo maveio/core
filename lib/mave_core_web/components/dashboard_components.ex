@@ -102,6 +102,8 @@ defmodule MaveCoreWeb.DashboardComponents do
   defdelegate secret_field(assigns), to: MaveCoreWeb.DashboardComponents.Fields
   defdelegate copy_button(assigns), to: MaveCoreWeb.DashboardComponents.Fields
 
+  defdelegate password_access(assigns), to: MaveCoreWeb.DashboardComponents.PlaybackAccess
+
   defdelegate video_embed_panel(assigns), to: MaveCoreWeb.DashboardComponents.VideoDetail
   defdelegate video_upload_panel(assigns), to: MaveCoreWeb.DashboardComponents.VideoDetail
   defdelegate video_processing_panel(assigns), to: MaveCoreWeb.DashboardComponents.VideoDetail

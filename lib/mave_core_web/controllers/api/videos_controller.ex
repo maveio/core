@@ -4,6 +4,7 @@ defmodule MaveCoreWeb.Api.VideosController do
   plug(MaveCoreWeb.Plugs.ApiKeyWriteAuth when action in [:create, :update, :delete])
 
   alias MaveCore.Embeds
+  alias MaveCore.Playback.Password
   alias MaveCore.PublicApi
   alias MaveCore.Spaces.Space
 
@@ -71,16 +72,21 @@ defmodule MaveCoreWeb.Api.VideosController do
   end
 
   def create(%{assigns: %{current_space: %Space{} = space}} = conn, params) do
-    with {:ok, parent_folder_id} <- resolve_parent_folder_id(space, params),
+    with :ok <- Password.validate(space, params),
+         {:ok, parent_folder_id} <- resolve_parent_folder_id(space, params),
          :ok <-
            MaveCore.Playback.validate_visibility(space, Map.get(params, "visibility", "public")),
          :ok <- maybe_validate_input_url(params),
          {:ok, embed} <-
-           Embeds.create_video_embed(space, %{
-             name: blank_to_nil(params["name"]),
-             visibility: Map.get(params, "visibility", "public"),
-             parent_folder_id: parent_folder_id
-           }),
+           Embeds.create_video_embed(
+             space,
+             params
+             |> Map.take(["visibility", "password"])
+             |> Map.merge(%{
+               name: blank_to_nil(params["name"]),
+               parent_folder_id: parent_folder_id
+             })
+           ),
          :ok <- maybe_start_input_url_upload(space, embed, params) do
       embed = PublicApi.get_embed_by_hash(space, embed.hash) || embed
       json(conn, PublicApi.video_response(space, embed))
@@ -96,13 +102,15 @@ defmodule MaveCoreWeb.Api.VideosController do
   def update(%{assigns: %{current_space: %Space{} = space}} = conn, %{"hash" => hash} = params) do
     case PublicApi.get_embed(space, hash) do
       %Embeds.Embed{type: :video} = embed ->
-        with :ok <-
+        with :ok <- Password.validate(space, params, embed),
+             :ok <-
                MaveCore.Playback.validate_visibility(
                  space,
                  Map.get(params, "visibility", "public")
                ),
              {:ok, embed} <- maybe_rename(embed, params),
              {:ok, embed} <- maybe_move(space, embed, params),
+             {:ok, embed} <- Password.update(embed, params),
              {:ok, embed} <- maybe_playback_visibility(embed, params) do
           embed = PublicApi.get_embed(space, hash) || embed
 
@@ -145,6 +153,9 @@ defmodule MaveCoreWeb.Api.VideosController do
     do: PublicApi.collection_response(space, embed)
 
   defp serialize_embed(space, %Embeds.Embed{} = embed), do: PublicApi.video_response(space, embed)
+
+  defp maybe_put_visibility_response_status(conn, %{"password" => _}, embed),
+    do: put_visibility_response_status(conn, embed)
 
   defp maybe_put_visibility_response_status(conn, %{"visibility" => _}, embed),
     do: put_visibility_response_status(conn, embed)
@@ -237,6 +248,13 @@ defmodule MaveCoreWeb.Api.VideosController do
     do: "This collection does not seem to be part of your space."
 
   defp format_error(:not_found), do: "This video embed does not exist."
+
+  defp format_error(:invalid_password),
+    do: "password must be a non-empty string of at most 1024 bytes, or null."
+
+  defp format_error(:password_requires_private),
+    do: "Remove the password before making this video public."
+
   defp format_error(:invalid_visibility), do: "visibility must be public or private."
   defp format_error(:playback_unavailable), do: "Private playback is unavailable for this space."
   defp format_error(:embed_limit_reached), do: "This space has reached its video limit."

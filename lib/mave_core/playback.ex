@@ -8,6 +8,7 @@ defmodule MaveCore.Playback do
 
   alias MaveCore.Embeds
   alias MaveCore.Embeds.Embed
+  alias MaveCore.Playback.Password
   alias MaveCore.PublicApi
   alias MaveCore.Repo
   alias MaveCore.Spaces
@@ -20,7 +21,8 @@ defmodule MaveCore.Playback do
 
   def adapter, do: Application.get_env(:mave_core, :playback_adapter)
 
-  defp token_endpoint do
+  @doc false
+  def token_endpoint do
     module = adapter()
 
     if module && Code.ensure_loaded?(module) && function_exported?(module, :token_endpoint, 0),
@@ -65,10 +67,12 @@ defmodule MaveCore.Playback do
       space = Repo.one!(from(s in Space, where: s.id == ^embed.space_id, lock: "FOR UPDATE"))
       current = Repo.get!(Embed, embed.id)
 
-      if current.type != :video or not is_nil(current.deleted_at) or
-           (visibility == :private and not available?(space)) or is_nil(adapter()) do
+      if unavailable_visibility?(current, space, visibility) do
         Repo.rollback(:playback_unavailable)
       end
+
+      if visibility == :public and Password.protected?(current),
+        do: Repo.rollback(:password_requires_private)
 
       if current.playback_status == visibility do
         current
@@ -89,14 +93,25 @@ defmodule MaveCore.Playback do
     end)
   end
 
+  defp unavailable_visibility?(embed, space, visibility),
+    do:
+      embed.type != :video or not is_nil(embed.deleted_at) or
+        (visibility == :private and not available?(space)) or is_nil(adapter())
+
   # Call only after dashboard membership authorization; never from a public route.
   def dashboard_session(%Embed{} = embed),
     do: session(embed, System.system_time(:second) + @dashboard_ttl)
 
   def authorize(token, %Embed{} = embed) do
     case authorize_dashboard(token, embed) do
-      {:ok, expires_at} -> {:ok, expires_at}
-      _ -> authorize_jwt(token, embed)
+      {:ok, expires_at} ->
+        {:ok, expires_at}
+
+      _ ->
+        case Password.authorize(token, embed) do
+          {:ok, expires_at} -> {:ok, expires_at}
+          _ -> authorize_jwt(token, embed)
+        end
     end
   end
 

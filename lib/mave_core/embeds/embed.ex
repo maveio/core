@@ -23,6 +23,10 @@ defmodule MaveCore.Embeds.Embed do
       values: [:public, :protecting, :private, :publishing],
       default: :public
 
+    field :password_hash, :string, redact: true
+    field :password_revision, :integer, default: 0, redact: true
+    field :password_protected, :boolean, virtual: true, default: false
+
     field :deleted_at, :utc_datetime_usec
 
     belongs_to :space, Space

@@ -26,6 +26,8 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
 
   defmodule AvailablePlayback do
     def available?(_space), do: true
+    def apply_visibility(_embed, _visibility), do: :ok
+    def token_endpoint, do: MaveCoreWeb.Endpoint
   end
 
   setup do
@@ -50,6 +52,35 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     end)
 
     {:ok, db_name: db_name}
+  end
+
+  @tag :private_playback_ui
+  test "password controls preserve private access and never render credentials", %{conn: conn} do
+    original_adapter = Application.get_env(:mave_core, :playback_adapter)
+    on_exit(fn -> restore_env(:playback_adapter, original_adapter) end)
+    Application.put_env(:mave_core, :playback_adapter, AvailablePlayback)
+    {conn, space} = authenticated_conn(conn)
+    embed = video_embed_fixture(space, %{name: "Password access"})
+    {:ok, view, _html} = live(conn, "/videos/#{embed.id}")
+
+    view
+    |> form("#video-password-form", playback: %{password: "synthetic-dashboard-value"})
+    |> render_submit()
+
+    assert has_element?(view, "#remove-video-password")
+    assert has_element?(view, "#private-playback-guide", "Viewers enter")
+    assert has_element?(view, ~s([phx-value-preview="iframe"]))
+    refute has_element?(view, ~s([phx-value-preview="clip"]))
+    refute has_element?(view, "#video-playback-visibility")
+    refute has_element?(view, "#snippet-code", "YOUR_PLAYBACK_TOKEN")
+    refute render(view) =~ "synthetic-dashboard-value"
+    protected = Repo.get!(Embed, embed.id)
+    refute render(view) =~ protected.password_hash
+
+    view |> element("#remove-video-password") |> render_click()
+    refute has_element?(view, "#remove-video-password")
+    assert Repo.get!(Embed, embed.id).playback_visibility == :private
+    assert has_element?(view, "#snippet-code", "YOUR_PLAYBACK_TOKEN")
   end
 
   @tag :private_playback_ui

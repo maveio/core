@@ -83,12 +83,20 @@ defmodule MaveCoreWeb.Router do
 
   scope "/api/v1", MaveCoreWeb do
     pipe_through [:public_cors]
+    get "/playback/:id/access", Api.PlaybackController, :access, log: false
+    post "/playback/:id/password-token", Api.PlaybackController, :password_token, log: false
+    options "/playback/:id/access", Api.PlaybackController, :access, log: false
+    options "/playback/:id/password-token", Api.PlaybackController, :password_token, log: false
     get "/playback/media/:id/*path", Api.PlaybackController, :show, log: false
     options "/playback/media/:id/*path", Api.PlaybackController, :show, log: false
   end
 
   scope "/v1", MaveCoreWeb do
     pipe_through [:api_host, :public_cors]
+    get "/playback/:id/access", Api.PlaybackController, :access, log: false
+    post "/playback/:id/password-token", Api.PlaybackController, :password_token, log: false
+    options "/playback/:id/access", Api.PlaybackController, :access, log: false
+    options "/playback/:id/password-token", Api.PlaybackController, :password_token, log: false
     get "/playback/media/:id/*path", Api.PlaybackController, :show, log: false
     options "/playback/media/:id/*path", Api.PlaybackController, :show, log: false
   end
