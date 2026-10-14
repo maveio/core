@@ -172,6 +172,12 @@ defmodule MaveCoreWeb.Router do
         options path, Api.VideosController, :index
       end
 
+      options "/webhooks", Api.WebhooksController, :index, log: false
+      options "/webhooks/:id", Api.WebhooksController, :index, log: false
+      get "/webhooks", Api.WebhooksController, :index, log: false
+      post "/webhooks", Api.WebhooksController, :create, log: false
+      delete "/webhooks/:id", Api.WebhooksController, :delete, log: false
+
       get "/videos", Api.VideosController, :index
       get "/videos/:hash", Api.VideosController, :show
       post "/videos", Api.VideosController, :create
@@ -197,6 +203,12 @@ defmodule MaveCoreWeb.Router do
             ~w(/videos /videos/:hash /videos/:hash/data /videos/owner/:hash /collections /collections/:hash /spaces/:space_hash/data) do
         options path, Api.VideosController, :index
       end
+
+      options "/webhooks", Api.WebhooksController, :index, log: false
+      options "/webhooks/:id", Api.WebhooksController, :index, log: false
+      get "/webhooks", Api.WebhooksController, :index, log: false
+      post "/webhooks", Api.WebhooksController, :create, log: false
+      delete "/webhooks/:id", Api.WebhooksController, :delete, log: false
 
       get "/videos", Api.VideosController, :index
       get "/videos/:hash", Api.VideosController, :show
