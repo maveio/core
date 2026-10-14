@@ -25,4 +25,25 @@ defmodule MaveCore.Playback.MediaTest do
       assert {:error, :invalid_path} = Media.resolve_path(path, "video", ".")
     end
   end
+
+  test "internal subtitle references normalize dot segments within the authorized embed" do
+    assert {:ok, "v2/translations/request/subtitle_en.vtt"} =
+             Media.resolve_path(
+               "../translations/request/subtitle_en.vtt",
+               "video",
+               "v2/subtitle_en_hls"
+             )
+
+    for reference <- [
+          "../../../other/file.vtt",
+          "../%2e%2e/file.vtt",
+          "../../../../video/file.vtt"
+        ] do
+      assert {:error, :invalid_path} =
+               Media.resolve_path(reference, "video", "v2/subtitle_en_hls")
+    end
+
+    assert {:error, :invalid_path} =
+             Media.valid_path("v2/subtitle_en_hls/../translations/file.vtt")
+  end
 end

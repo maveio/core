@@ -398,12 +398,12 @@ defmodule MaveCore.Assets do
     end
   end
 
-  def refresh_hls_master_playlist(%Embed{} = embed) do
+  def refresh_hls_master_playlist(%Embed{} = embed, opts \\ []) do
     embed = Repo.preload(embed, [:space, asset: [:current_video]])
 
     with %Video{} <- embed.asset && embed.asset.current_video,
          {:ok, region} <- require_binary(embed.space.region || "default", :region),
-         {:ok, _playlist} <- rebuild_hls_master_playlist(embed, region) do
+         {:ok, _playlist} <- rebuild_hls_master_playlist(embed, region, opts) do
       :ok
     else
       nil -> {:error, :missing_current_video}
@@ -1018,7 +1018,7 @@ defmodule MaveCore.Assets do
     end
   end
 
-  defp rebuild_hls_master_playlist(%Embed{} = embed, region) do
+  defp rebuild_hls_master_playlist(%Embed{} = embed, region, opts \\ []) do
     dependency_outputs =
       (hls_video_variant_outputs(embed, region) ++
          [
@@ -1037,7 +1037,11 @@ defmodule MaveCore.Assets do
          ])
       |> Map.new()
 
-    step_definition = %{"id" => "hls_master", "type" => "media.build_hls_master"}
+    step_definition = %{
+      "id" => "hls_master",
+      "type" => "media.build_hls_master",
+      "params" => %{"strict" => Keyword.get(opts, :strict, false)}
+    }
 
     context = %{
       run_input: %{

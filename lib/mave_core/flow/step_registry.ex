@@ -24,7 +24,9 @@ defmodule MaveCore.Flow.StepRegistry do
     MediaTranscodeWaveformStep,
     PassThroughStep,
     SourceResolveStep,
-    StorageEnsureSpaceBucketStep
+    StorageEnsureSpaceBucketStep,
+    SubtitleLoadTranslationSourceStep,
+    SubtitlePublishTranslationStep
   }
 
   @strict_option %{
@@ -172,6 +174,20 @@ defmodule MaveCore.Flow.StepRegistry do
       category: "subtitle",
       description: "Uploads subtitle artifacts and metadata.",
       handler: PassThroughStep,
+      executor: :inline
+    },
+    "subtitle.load_translation_source" => %{
+      name: "Load Translation Source",
+      category: "subtitle",
+      description: "Normalizes an existing timed subtitle track for translation.",
+      handler: SubtitleLoadTranslationSourceStep,
+      executor: :inline
+    },
+    "subtitle.publish_translation" => %{
+      name: "Publish Translated Subtitle",
+      category: "subtitle",
+      description: "Adds one translated subtitle without replacing existing media.",
+      handler: SubtitlePublishTranslationStep,
       executor: :inline
     },
     "manifest.build" => %{

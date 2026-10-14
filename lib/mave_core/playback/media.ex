@@ -226,10 +226,31 @@ defmodule MaveCore.Playback.Media do
         true -> Path.join(directory, path)
       end
 
-    if is_binary(target) and valid_path(target) == :ok,
-      do: {:ok, target},
-      else: {:error, :invalid_path}
+    normalize_internal_path(target)
   end
+
+  # Playlist references may walk up within the embed, but never above its root.
+  # Direct playback requests still use valid_path/1 and reject all dot segments.
+  defp normalize_internal_path(path) when is_binary(path) do
+    path
+    |> String.split("/")
+    |> Enum.reduce_while([], fn
+      "..", [] -> {:halt, :invalid}
+      "..", [_ | rest] -> {:cont, rest}
+      ".", segments -> {:cont, segments}
+      segment, segments -> {:cont, [segment | segments]}
+    end)
+    |> case do
+      :invalid ->
+        {:error, :invalid_path}
+
+      segments ->
+        target = segments |> Enum.reverse() |> Enum.join("/")
+        if valid_path(target) == :ok, do: {:ok, target}, else: {:error, :invalid_path}
+    end
+  end
+
+  defp normalize_internal_path(_), do: {:error, :invalid_path}
 
   defp absolute_path?(uri),
     do: uri.scheme != nil or uri.host != nil or String.starts_with?(uri.path || "", "/")

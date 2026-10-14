@@ -14,6 +14,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   alias MaveCore.Languages
   alias MaveCore.Spaces
   alias MaveCore.Spaces.Space
+  alias MaveCore.Transcription.SubtitleTranslations
   alias MaveCore.Uploads.Token
   alias MaveCoreWeb.DashboardRoutes
   alias MaveCoreWeb.Plugs.Maintenance
@@ -50,6 +51,10 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       |> assign_new(:show_flow_details, fn -> false end)
       |> assign_new(:audio_track_form, fn -> nil end)
       |> assign_new(:subtitle_form, fn -> nil end)
+      |> assign_new(:translation_form, fn ->
+        to_form(%{"source_id" => "", "targets" => []}, as: :translation)
+      end)
+      |> assign_new(:translation_error, fn -> nil end)
 
     socket =
       cond do
@@ -62,6 +67,11 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           |> assign(:show_flow_details, false)
           |> assign(:audio_track_form, nil)
           |> assign(:subtitle_form, nil)
+          |> assign(
+            :translation_form,
+            to_form(%{"source_id" => "", "targets" => []}, as: :translation)
+          )
+          |> assign(:translation_error, nil)
 
         socket.assigns.has_changes ->
           assign(socket, :persisted_settings, incoming_settings)
@@ -75,10 +85,45 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           |> assign(:subtitle_form, nil)
       end
 
-    {:ok, socket}
+    {:ok, refresh_translation_options(socket)}
   end
 
   @impl true
+  def handle_event("change_translation", %{"translation" => params}, socket) do
+    {:noreply,
+     socket
+     |> assign(:translation_form, to_form(params, as: :translation))
+     |> refresh_translation_options()}
+  end
+
+  def handle_event("translate_subtitles", %{"translation" => params}, socket) do
+    result =
+      SubtitleTranslations.request(
+        socket.assigns.current_space,
+        socket.assigns.embed,
+        params["source_id"],
+        params["targets"] || []
+      )
+
+    socket =
+      case result do
+        {:ok, _runs} ->
+          socket
+          |> assign(:translation_error, nil)
+          |> assign(
+            :translation_form,
+            to_form(%{"source_id" => params["source_id"], "targets" => []}, as: :translation)
+          )
+
+        {:error, reason} ->
+          socket
+          |> assign(:translation_error, translation_error(reason))
+          |> assign(:translation_form, to_form(params, as: :translation))
+      end
+
+    {:noreply, refresh_translation_options(socket)}
+  end
+
   def handle_event("change_tab", %{"tab" => tab}, socket) do
     {:noreply, assign(socket, :current_tab, String.to_existing_atom(tab))}
   end
@@ -520,6 +565,10 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
               uploading_poster={@uploading_poster}
               audio_track_form={@audio_track_form}
               subtitle_form={@subtitle_form}
+              translation_form={@translation_form}
+              translation_error={@translation_error}
+              translation_targets={@translation_targets}
+              translation_status={@translation_status}
               processing_uploaded_audio_track={@processing_uploaded_audio_track}
               processing_uploaded_subtitle={@processing_uploaded_subtitle}
               current_space={@current_space}
@@ -869,6 +918,10 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   attr :uploading_poster, :boolean, required: true
   attr :audio_track_form, :map, default: nil
   attr :subtitle_form, :map, default: nil
+  attr :translation_form, :any, required: true
+  attr :translation_error, :string, default: nil
+  attr :translation_targets, :list, required: true
+  attr :translation_status, :string, default: ""
   attr :processing_uploaded_audio_track, :map, default: nil
   attr :processing_uploaded_subtitle, :map, default: nil
   attr :current_space, :map, required: true
@@ -926,6 +979,15 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         processing_uploaded_subtitle={@processing_uploaded_subtitle}
         uploads={@uploads}
         current_space={@current_space}
+        myself={@myself}
+      />
+      <.translation_options
+        :if={@show_subtitles_section && (@video.subtitles || []) != []}
+        form={@translation_form}
+        subtitles={@video.subtitles}
+        targets={@translation_targets}
+        error={@translation_error}
+        status={@translation_status}
         myself={@myself}
       />
       <.controls_section settings={@settings} myself={@myself} />
@@ -2840,6 +2902,137 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   defp audio_track_status(renditions) do
     if Enum.any?(renditions, &(&1.status == "failed")), do: "failed", else: nil
   end
+
+  attr :form, :any, required: true
+  attr :subtitles, :list, required: true
+  attr :targets, :list, required: true
+  attr :error, :string, default: nil
+  attr :status, :string, default: ""
+  attr :myself, :any, required: true
+
+  defp translation_options(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :sources,
+        Enum.map(assigns.subtitles, &{&1.label || &1.language || gettext("Subtitle"), &1.id})
+      )
+
+    ~H"""
+    <section id="subtitle-translation-section" class="px-4 pb-4 pt-2 text-sm text-stone-300">
+      <h3 class="mb-3 font-medium">{gettext("Translate subtitles")}</h3>
+      <.form
+        for={@form}
+        id="subtitle-translation-form"
+        phx-change="change_translation"
+        phx-submit="translate_subtitles"
+        phx-target={@myself}
+      >
+        <.input
+          field={@form[:source_id]}
+          type="select"
+          label={gettext("Source subtitle")}
+          prompt={gettext("Select subtitle")}
+          options={@sources}
+        />
+        <.input
+          field={@form[:targets]}
+          type="select"
+          label={gettext("Target languages")}
+          multiple
+          size="6"
+          class="block h-32 w-full rounded-md border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-200 focus:border-blue-500 focus:outline-2 focus:outline-blue-500"
+          options={@targets}
+        />
+        <p class="my-2 text-xs text-stone-400">
+          {gettext("Select one or more languages. Existing and pending languages are unavailable.")}
+        </p>
+        <button
+          id="translate-subtitles-submit"
+          type="submit"
+          class="rounded-md bg-stone-700 px-3 py-2 text-white hover:bg-stone-600 focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50"
+          disabled={@targets == []}
+          phx-disable-with={gettext("Starting…")}
+        >
+          {gettext("Translate")}
+        </button>
+      </.form>
+      <p :if={@error} id="subtitle-translation-error" role="alert" class="mt-2 text-red-400">
+        {@error}
+      </p>
+      <p
+        :if={@status != ""}
+        id="subtitle-translation-status"
+        role="status"
+        class="mt-2 text-xs text-stone-400"
+      >
+        {@status}
+      </p>
+    </section>
+    """
+  end
+
+  defp refresh_translation_options(socket) do
+    runs = SubtitleTranslations.list(socket.assigns.current_space, socket.assigns.embed)
+
+    current_video_id =
+      case socket.assigns.embed.asset do
+        %{current_video_id: id} -> id
+        _ -> nil
+      end
+
+    runs = Enum.filter(runs, &(&1.video_id == current_video_id))
+
+    targets =
+      SubtitleTranslations.target_languages(socket.assigns.current_space, socket.assigns.embed)
+
+    status =
+      runs
+      |> Enum.take(5)
+      |> Enum.map_join(" · ", fn run ->
+        "#{Languages.spoken_language(run.target) || run.target}: #{translation_status(run.status)}"
+      end)
+
+    socket |> assign(:translation_targets, targets) |> assign(:translation_status, status)
+  end
+
+  defp translation_status("succeeded"), do: gettext("completed")
+  defp translation_status("failed"), do: gettext("failed — try again")
+  defp translation_status("cancelled"), do: gettext("cancelled")
+  defp translation_status(_), do: gettext("translating")
+
+  defp translation_error(:source_subtitle_not_found),
+    do: gettext("Select a subtitle from this video.")
+
+  defp translation_error(:target_languages_required),
+    do: gettext("Select at least one target language.")
+
+  defp translation_error(:invalid_target_language),
+    do: gettext("Select supported target languages.")
+
+  defp translation_error(:target_language_exists),
+    do: gettext("A subtitle already exists in one of these languages.")
+
+  defp translation_error(:source_language_selected),
+    do: gettext("Choose a language different from the source.")
+
+  defp translation_error(:translation_already_running),
+    do: gettext("A translation into one of these languages is already running.")
+
+  defp translation_error(:video_not_ready),
+    do: gettext("Wait until this video has finished processing.")
+
+  defp translation_error(:video_still_publishing),
+    do:
+      gettext(
+        "Wait until all processing for this video has finished before translating subtitles."
+      )
+
+  defp translation_error({:translation_not_allowed, _}),
+    do: gettext("Subtitle translation is unavailable for this space.")
+
+  defp translation_error(_),
+    do: gettext("Could not start subtitle translation. Please try again.")
 
   defp language_options do
     [{"Select language", ""} | Languages.spoken_languages()]

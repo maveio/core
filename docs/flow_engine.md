@@ -44,6 +44,11 @@ flowchart LR
 
 ## API Surface
 
+Existing subtitle tracks can be translated through a separate, version-bound
+three-step flow. It preserves the video's existing media and uses a selective
+publication step. See [Subtitle translation](subtitle_translation.md) for the
+dashboard workflow, storage layout, and optional host usage policy.
+
 - `GET /v1/flow/step-types`
 - `GET /v1/flow/presets`
 - `POST /v1/flow/presets/:slug/install`

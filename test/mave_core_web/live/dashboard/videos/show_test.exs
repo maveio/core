@@ -1831,6 +1831,126 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     assert html =~ "phx-click-loading:inline-flex"
   end
 
+  test "/videos/:id starts one translation per target and hides pending languages", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    video = video_embed_fixture(space, %{name: "Translate subtitles"}) |> Repo.preload(:asset)
+
+    source =
+      Repo.insert!(%Subtitle{
+        video_id: video.asset.current_video_id,
+        language: "nl",
+        path: "#{video.hash}/subtitle_nl.vtt"
+      })
+
+    {:ok, view, _} = live(conn, "/videos/#{video.id}")
+    assert has_element?(view, "#subtitle-translation-form")
+    refute has_element?(view, "#translation_targets option[value=nl]")
+
+    Oban.Testing.with_testing_mode(:manual, fn ->
+      :sys.replace_state(view.pid, fn state ->
+        Process.put(:oban_testing, :manual)
+        state
+      end)
+
+      view
+      |> form("#subtitle-translation-form",
+        translation: %{source_id: source.id, targets: ["en", "fr"]}
+      )
+      |> render_submit()
+    end)
+
+    runs =
+      Repo.all(
+        from(r in Run, where: fragment("?->>'operation'", r.input) == "subtitle_translation")
+      )
+
+    assert Enum.sort(Enum.map(runs, & &1.input["target_language"])) == ["en", "fr"]
+    assert Enum.all?(runs, &(&1.input["video_id"] == video.asset.current_video_id))
+    assert has_element?(view, "#subtitle-translation-status[role=status]", "translating")
+    refute has_element?(view, "#translation_targets option[value=en]")
+    refute has_element?(view, "#translation_targets option[value=fr]")
+
+    view
+    |> with_target("#video-settings")
+    |> render_hook("translate_subtitles", %{
+      "translation" => %{"source_id" => source.id, "targets" => ["en"]}
+    })
+
+    assert has_element?(
+             view,
+             "#subtitle-translation-error[role=alert]",
+             "already running"
+           )
+
+    assert Repo.aggregate(Run, :count) == 2
+  end
+
+  test "/videos/:id rejects a forged subtitle source from another video", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    video = video_embed_fixture(space, %{name: "Translation scope"}) |> Repo.preload(:asset)
+
+    source =
+      Repo.insert!(%Subtitle{
+        video_id: video.asset.current_video_id,
+        language: "nl",
+        path: "#{video.hash}/subtitle_nl.vtt"
+      })
+
+    {:ok, view, _} = live(conn, "/videos/#{video.id}")
+
+    view
+    |> with_target("#video-settings")
+    |> render_hook("translate_subtitles", %{
+      "translation" => %{"source_id" => Ecto.UUID.generate(), "targets" => ["en"]}
+    })
+
+    assert has_element?(
+             view,
+             "#subtitle-translation-error[role=alert]",
+             "Select a subtitle from this video"
+           )
+
+    assert Repo.aggregate(Run, :count) == 0
+    assert Repo.get!(Subtitle, source.id)
+  end
+
+  test "/videos/:id explains why translation waits for background publication", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+
+    video =
+      video_embed_fixture(space, %{name: "Still publishing subtitles"}) |> Repo.preload(:asset)
+
+    source =
+      Repo.insert!(%Subtitle{
+        video_id: video.asset.current_video_id,
+        language: "nl",
+        path: "#{video.hash}/subtitle_nl.vtt"
+      })
+
+    {:ok, _} =
+      Flow.start_run(
+        "publish_local",
+        %{"space_hash" => space.hash, "embed_hash" => video.hash, "version" => 0},
+        enqueue: false
+      )
+
+    {:ok, view, _} = live(conn, "/videos/#{video.id}")
+
+    view
+    |> with_target("#video-settings")
+    |> render_hook("translate_subtitles", %{
+      "translation" => %{"source_id" => source.id, "targets" => ["en"]}
+    })
+
+    assert has_element?(
+             view,
+             "#subtitle-translation-error[role=alert]",
+             "all processing for this video has finished"
+           )
+
+    assert Repo.aggregate(Run, :count) == 1
+  end
+
   test "/videos/:id subtitle download returns VTT as an attachment", %{conn: conn} do
     {conn, space} = authenticated_conn(conn)
 

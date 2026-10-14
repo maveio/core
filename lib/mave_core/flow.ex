@@ -744,6 +744,25 @@ defmodule MaveCore.Flow do
     run
   end
 
+  defp broadcast_translation_state(
+         %Run{
+           input: %{
+             "operation" => "subtitle_translation",
+             "space_id" => space_id,
+             "embed_id" => embed_id
+           }
+         } = run
+       ) do
+    EmbedEvents.broadcast_updated(space_id, embed_id, %{
+      "action" => "subtitle_translation",
+      "status" => run.status
+    })
+
+    run
+  end
+
+  defp broadcast_translation_state(run), do: run
+
   defp schedule_reconciled_steps(%Run{} = run, enqueue_jobs?) do
     step_runs_by_id = Map.new(run.step_runs, fn step_run -> {step_run.step_id, step_run} end)
 
@@ -3486,6 +3505,9 @@ defmodule MaveCore.Flow do
 
   defp flow_step_job_priority(_input, _step), do: 3
 
+  # Translation publication is performed by its required selective finalizer step.
+  defp maybe_finalize_video_run(%Run{input: %{"operation" => "subtitle_translation"}}), do: :ok
+
   defp maybe_finalize_video_run(
          %Run{
            input: %{"space_hash" => space_hash, "embed_hash" => embed_hash},
@@ -3599,6 +3621,13 @@ defmodule MaveCore.Flow do
     do: true
 
   defp current_run_video?(_embed, _video), do: false
+
+  defp maybe_broadcast_reconciled_run(
+         {:ok, %Run{input: %{"operation" => "subtitle_translation"}} = run} = result
+       ) do
+    broadcast_translation_state(run)
+    result
+  end
 
   defp maybe_broadcast_reconciled_run({:ok, %Run{status: "succeeded"} = run} = result) do
     maybe_broadcast_ready_embed_update(run)
@@ -4527,6 +4556,7 @@ defmodule MaveCore.Flow do
               ] do
     with %Run{input: %{"space_hash" => space_hash, "embed_hash" => embed_hash}} = run <-
            Repo.get(Run, flow_run_id),
+         true <- run.input["operation"] != "subtitle_translation",
          step_runs when is_list(step_runs) <- list_step_runs(flow_run_id),
          %Embed{} = embed <- Embeds.get_embed_by_hashes(space_hash, embed_hash),
          %Video{} = video <- run_video(run, embed) do
@@ -4749,17 +4779,34 @@ defmodule MaveCore.Flow do
   end
 
   defp sync_subtitles(video_id, step_runs) when is_binary(video_id) do
-    from(subtitle in Subtitle, where: subtitle.video_id == ^video_id)
-    |> Repo.delete_all()
+    Repo.transaction(fn ->
+      video = Repo.get!(Video, video_id)
+      lock_video_asset!(video.asset_id)
 
-    step_runs
-    |> Enum.flat_map(&successful_subtitles/1)
-    |> Enum.uniq_by(&(Map.get(&1, "language") || Map.get(&1, "path") || Map.get(&1, "src")))
-    |> Enum.with_index()
-    |> Enum.each(fn {subtitle, index} ->
-      %Subtitle{}
-      |> Subtitle.changeset(build_subtitle_attrs(video_id, subtitle, index))
-      |> Repo.insert!()
+      # A delayed normal step may synchronize after translation has completed.
+      # Serialize with selective publication and retain those independently added tracks.
+      translated_languages =
+        from(s in Subtitle,
+          where: s.video_id == ^video_id and s.source == "translated",
+          select: s.language
+        )
+        |> Repo.all()
+
+      from(s in Subtitle,
+        where: s.video_id == ^video_id and (is_nil(s.source) or s.source != "translated")
+      )
+      |> Repo.delete_all()
+
+      step_runs
+      |> Enum.flat_map(&successful_subtitles/1)
+      |> Enum.uniq_by(&(Map.get(&1, "language") || Map.get(&1, "path") || Map.get(&1, "src")))
+      |> Enum.reject(&(normalized_track_language(&1["language"]) in translated_languages))
+      |> Enum.with_index()
+      |> Enum.each(fn {subtitle, index} ->
+        %Subtitle{}
+        |> Subtitle.changeset(build_subtitle_attrs(video_id, subtitle, index))
+        |> Repo.insert!()
+      end)
     end)
   end
 

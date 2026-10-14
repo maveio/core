@@ -24,6 +24,41 @@ defmodule MaveCore.Flow.Presets do
   end
 
   @spec fetch(String.t()) :: {:ok, map()} | {:error, :preset_not_found}
+  def fetch("translate_subtitle") do
+    {:ok,
+     %{
+       "slug" => "translate_subtitle",
+       "name" => "Translate Subtitle",
+       "description" => "Translates a version-bound subtitle and publishes only the new track.",
+       "definition" => %{
+         "steps" => [
+           %{
+             "id" => "transcribe_audio",
+             "type" => "subtitle.load_translation_source",
+             "name" => "Load Subtitle Source",
+             "depends_on" => [],
+             "required" => true
+           },
+           %{
+             "id" => "translate_subtitles",
+             "type" => "ai.translate_subtitles",
+             "name" => "Translate Subtitle",
+             "depends_on" => ["transcribe_audio"],
+             "required" => true,
+             "params" => %{"strict" => true}
+           },
+           %{
+             "id" => "publish_subtitle",
+             "type" => "subtitle.publish_translation",
+             "name" => "Publish Translated Subtitle",
+             "depends_on" => ["translate_subtitles"],
+             "required" => true
+           }
+         ]
+       }
+     }}
+  end
+
   def fetch("publish_default") do
     {:ok,
      %{
