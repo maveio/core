@@ -42,9 +42,12 @@ defmodule MaveCoreWeb.DashboardComponents.PlaybackAccess do
 
   def password_access(assigns) do
     ~H"""
-    <section id="video-password-access" class="my-6 rounded-xl border border-stone-200/10 p-5">
-      <h3 class="text-sm font-medium text-stone-200">{gettext("Video password")}</h3>
-      <p class="mt-1 text-sm text-stone-400">
+    <section
+      id="video-password-access"
+      class="my-6 rounded-xl border border-stone-200 bg-white p-5 text-stone-900"
+    >
+      <h3 class="text-sm font-medium text-stone-900">{gettext("Video password")}</h3>
+      <p class="mt-1 text-sm text-stone-600">
         {if MaveCore.Playback.Password.protected?(@embed),
           do: gettext("A password is required to watch this video."),
           else: gettext("Set a password to protect this video and its media files.")}
@@ -53,7 +56,7 @@ defmodule MaveCoreWeb.DashboardComponents.PlaybackAccess do
         for={@form}
         id="video-password-form"
         phx-submit="set_playback_password"
-        class="mt-4 flex flex-wrap items-end gap-3"
+        class="mt-4 flex flex-wrap items-end gap-3 [&_.label]:text-stone-700 [&_.fieldset]:mb-0"
       >
         <.input
           field={@form[:password]}
@@ -62,12 +65,14 @@ defmodule MaveCoreWeb.DashboardComponents.PlaybackAccess do
           autocomplete="new-password"
           required
           maxlength="1024"
+          class="block w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 shadow-sm placeholder:text-stone-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:bg-stone-100"
+          error_class="border-red-500 focus:border-red-500 focus:ring-red-500/20"
         />
         <button
           id="save-video-password"
           type="submit"
           phx-disable-with={gettext("Saving…")}
-          class="rounded-md bg-stone-100 px-3 py-2 text-sm text-stone-900 hover:bg-white transition-colors"
+          class="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {if MaveCore.Playback.Password.protected?(@embed),
             do: gettext("Change password"),
@@ -78,12 +83,12 @@ defmodule MaveCoreWeb.DashboardComponents.PlaybackAccess do
           id="remove-video-password"
           type="button"
           phx-click="remove_playback_password"
-          class="rounded-md px-3 py-2 text-sm text-stone-300 hover:bg-stone-800 transition-colors"
+          class="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
         >
           {gettext("Remove password")}
         </button>
       </.form>
-      <p :if={@error} id="video-password-error" role="alert" class="mt-2 text-sm text-red-400">
+      <p :if={@error} id="video-password-error" role="alert" class="mt-2 text-sm text-red-600">
         {@error}
       </p>
     </section>
