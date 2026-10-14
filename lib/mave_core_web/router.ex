@@ -304,6 +304,9 @@ defmodule MaveCoreWeb.Router do
       live "/cli/auth/:user_code", CliAuthLive, :authorize
     end
 
+    get "/data/export.csv", Dashboard.AnalyticsExportController, :download
+    get "/:space_id/data/export.csv", Dashboard.AnalyticsExportController, :download
+
     get "/videos/:id/subtitles/:subtitle_id/download", Dashboard.SubtitleController, :download
 
     get "/:space_id/videos/:id/subtitles/:subtitle_id/download",

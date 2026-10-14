@@ -5,7 +5,10 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   import MaveCoreWeb.DashboardComponents, except: [icon: 1]
 
   alias MaveCore.Analytics
+  alias MaveCore.Analytics.Range
+  alias MaveCore.Analytics.RangeReport
   alias MaveCore.UsageLimits
+  alias MaveCoreWeb.DashboardRoutes
   alias MaveCoreWeb.Formatter
   alias Phoenix.LiveView.AsyncResult
 
@@ -18,10 +21,16 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
      |> assign(:show_all_browsers, false)
      |> assign(:data_access_notice, nil)
      |> assign(:data_access_help, nil)
+     |> assign(:range_form, to_form(default_range_params(), as: :range))
+     |> assign(:range_error, nil)
+     |> assign(:range_report, nil)
+     |> assign(:selected_range, nil)
+     |> assign(:range_loading, false)
+     |> stream(:range_buckets, [])
      |> assign_async_defaults()}
   end
 
-  def handle_params(_params, _url, socket) do
+  def handle_params(params, _url, socket) do
     space_hash = socket.assigns.current_space.hash
 
     socket =
@@ -32,15 +41,36 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
           |> assign(:data_access_help, nil)
           |> assign_async_defaults()
           |> start_async(:fetch_stats, fn -> Analytics.space_data(space_hash) end)
+          |> load_range(params)
 
         {:error, reason} ->
           socket
           |> assign(:data_access_notice, data_access_notice(reason))
           |> assign(:data_access_help, data_access_help(reason))
           |> assign_empty_stats()
+          |> clear_range()
       end
 
     {:noreply, socket}
+  end
+
+  def handle_async(:fetch_range, {:ok, {:ok, report}}, socket) do
+    buckets = Enum.map(report.series, &Map.put(&1, :id, Date.to_iso8601(&1.date)))
+
+    {:noreply,
+     socket
+     |> assign(:range_report, Map.delete(report, :series))
+     |> assign(:range_loading, false)
+     |> stream(:range_buckets, buckets, reset: true)}
+  end
+
+  def handle_async(:fetch_range, {:exit, {:shutdown, :cancel}}, socket), do: {:noreply, socket}
+
+  def handle_async(:fetch_range, _failure, socket) do
+    {:noreply,
+     socket
+     |> assign(:range_loading, false)
+     |> assign(:range_error, gettext("Analytics are temporarily unavailable."))}
   end
 
   def handle_async(:fetch_stats, {:ok, {:ok, result}}, socket) do
@@ -72,6 +102,24 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
   def handle_async(:fetch_stats, {:exit, _reason}, socket), do: {:noreply, assign_failed(socket)}
 
+  def handle_event("select_range", %{"range" => params}, socket) do
+    case Range.parse(params) do
+      {:ok, %Range{} = range} ->
+        path = DashboardRoutes.data_path(socket.assigns.current_space)
+        {:noreply, push_patch(socket, to: path <> "?" <> URI.encode_query(Range.params(range)))}
+
+      _ ->
+        {:noreply,
+         socket
+         |> assign(:range_form, to_form(params, as: :range))
+         |> assign(:range_error, Range.error_message())}
+    end
+  end
+
+  def handle_event("reset_range", _params, socket) do
+    {:noreply, push_patch(socket, to: DashboardRoutes.data_path(socket.assigns.current_space))}
+  end
+
   def handle_event("toggle_show_all_devices", _, socket) do
     {:noreply, assign(socket, :show_all_devices, !socket.assigns.show_all_devices)}
   end
@@ -99,6 +147,101 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
       <div class="flex-1 overflow-y-auto">
         <div class="content opacity-100 scale-100">
           <div class="max-w-screen-xl px-16 mx-auto pt-8 pb-24">
+            <section :if={!@data_access_notice} id="data-date-range" class="mb-8">
+              <.form
+                for={@range_form}
+                id="analytics-range-form"
+                phx-submit="select_range"
+                class="flex flex-wrap items-end gap-4"
+              >
+                <.input field={@range_form[:from]} type="date" label={gettext("From (UTC)")} required />
+                <.input field={@range_form[:to]} type="date" label={gettext("To (UTC)")} required />
+                <.input
+                  field={@range_form[:granularity]}
+                  type="select"
+                  label={gettext("Group by")}
+                  options={[
+                    {gettext("Day"), "day"},
+                    {gettext("Week"), "week"},
+                    {gettext("Month"), "month"}
+                  ]}
+                />
+                <.dash_button id="analytics-range-submit" type="submit">{gettext("Apply dates")}</.dash_button>
+                <.dash_button
+                  :if={@selected_range}
+                  id="analytics-range-reset"
+                  type="button"
+                  phx-click="reset_range"
+                >{gettext("Reset")}</.dash_button>
+              </.form>
+              <p
+                :if={@range_error}
+                id="analytics-range-error"
+                role="alert"
+                class="mt-3 text-sm text-red-600"
+              >
+                {@range_error}
+              </p>
+              <p
+                :if={@range_loading}
+                id="analytics-range-loading"
+                role="status"
+                class="mt-4 text-sm text-stone-500"
+              >
+                {gettext("Loading selected period")}
+              </p>
+              <div :if={@range_report} class="mt-6">
+                <div class="mb-4 flex flex-wrap items-center justify-between gap-4">
+                  <p class="text-sm text-stone-500">
+                    {@range_report.from} – {@range_report.to} (UTC)
+                  </p>
+                  <.link
+                    id="analytics-csv-export"
+                    href={export_path(@current_space, @selected_range)}
+                    class="text-sm text-blue-600 hover:underline"
+                  >
+                    {gettext("Download CSV")}
+                  </.link>
+                </div>
+                <div id="analytics-range-totals" class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <.video_metric_card
+                    label={gettext("Views in period")}
+                    value={format_number(@range_report.totals.views)}
+                  />
+                  <.video_metric_card
+                    label={gettext("Watch seconds")}
+                    value={format_number(round(@range_report.totals.watch_seconds))}
+                  />
+                  <.video_metric_card
+                    label={gettext("Average completion")}
+                    value={completion_label(@range_report.totals.completion_rate)}
+                  />
+                </div>
+                <div class="mt-4 max-h-72 overflow-auto rounded-lg border border-stone-100">
+                  <table id="analytics-range-series" class="w-full text-left text-sm">
+                    <thead>
+                      <tr class="bg-stone-50 text-stone-500">
+                        <th class="p-3">{gettext("Period (UTC)")}</th><th class="p-3">
+                          {gettext("Views")}
+                        </th><th class="p-3">{gettext("Watch seconds")}</th>
+                      </tr>
+                    </thead>
+                    <tbody id="analytics-range-buckets" phx-update="stream">
+                      <tr
+                        :for={{id, bucket} <- @streams.range_buckets}
+                        id={id}
+                        class="border-t border-stone-100"
+                      >
+                        <td class="p-3">{bucket.date}</td><td class="p-3">
+                          {format_number(bucket.views)}
+                        </td><td class="p-3">{format_number(round(bucket.watch_seconds))}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+
             <div class="mb-6">
               <.subtitle label={gettext("Numbers")} icon="hero-hashtag" />
             </div>
@@ -334,6 +477,51 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
     </.async_result>
     """
   end
+
+  defp load_range(socket, params) do
+    socket = clear_range(socket)
+
+    case Range.parse(params) do
+      {:ok, nil} ->
+        assign(socket, :range_form, to_form(default_range_params(), as: :range))
+
+      {:ok, range} ->
+        space_hash = socket.assigns.current_space.hash
+
+        socket
+        |> assign(:selected_range, range)
+        |> assign(:range_form, to_form(Range.params(range), as: :range))
+        |> assign(:range_loading, true)
+        |> start_async(:fetch_range, fn -> RangeReport.fetch(space_hash, range) end)
+
+      {:error, :invalid_range} ->
+        socket
+        |> assign(:range_form, to_form(Map.take(params, ~w(from to granularity)), as: :range))
+        |> assign(:range_error, Range.error_message())
+    end
+  end
+
+  defp clear_range(socket) do
+    socket
+    |> cancel_async(:fetch_range)
+    |> assign(:selected_range, nil)
+    |> assign(:range_report, nil)
+    |> assign(:range_error, nil)
+    |> assign(:range_loading, false)
+    |> stream(:range_buckets, [], reset: true)
+  end
+
+  defp default_range_params do
+    today = Date.utc_today()
+    Range.params(%Range{from: Date.add(today, -29), to: today})
+  end
+
+  defp export_path(space, range) do
+    DashboardRoutes.data_path(space) <> "/export.csv?" <> URI.encode_query(Range.params(range))
+  end
+
+  defp completion_label(nil), do: "—"
+  defp completion_label(value), do: "#{round(value * 100)}%"
 
   defp metric_value(%AsyncResult{loading: true}), do: "..."
 
