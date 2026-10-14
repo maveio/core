@@ -52,6 +52,11 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
   test "/data formats analytics counts with dot thousands separators" do
     html =
       %{
+        range_form: Phoenix.Component.to_form(%{}, as: :range),
+        range_error: nil,
+        range_report: nil,
+        selected_range: nil,
+        range_loading: false,
         data_access_notice: nil,
         data_access_help: nil,
         views_today: async_ok(12_345),
@@ -85,6 +90,11 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
 
     html =
       %{
+        range_form: Phoenix.Component.to_form(%{}, as: :range),
+        range_error: nil,
+        range_report: nil,
+        selected_range: nil,
+        range_loading: false,
         data_access_notice: nil,
         data_access_help: nil,
         views_today: loading,

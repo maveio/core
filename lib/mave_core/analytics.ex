@@ -2,6 +2,8 @@ defmodule MaveCore.Analytics do
   @moduledoc false
 
   alias Ecto.Adapters.SQL
+  alias MaveCore.Analytics.Range
+  alias MaveCore.Analytics.RangeReport
   alias MaveCore.ClickHouseRepo
   alias MaveCore.SharedStorageSpace
 
@@ -9,6 +11,13 @@ defmodule MaveCore.Analytics do
   @min_watch_seconds 1
   @max_unique_watch_segment_seconds 60 * 60
   @sidebar_query_timeout 5_000
+
+  def space_data(space_hash, params) when is_map(params) do
+    with {:ok, range} <- Range.parse(params),
+         {:ok, data} <- space_data(space_hash) do
+      RangeReport.attach(data, space_hash, range)
+    end
+  end
 
   def space_data(space_hash) when is_binary(space_hash) do
     with {:ok, space_hash} <- parse_space_hash(space_hash) do
