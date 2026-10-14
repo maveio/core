@@ -9,7 +9,7 @@ import Config
 
 config :phoenix,
        :filter_parameters,
-       ~w(password token secret authorization credential signature api_key input_url source_url code)
+       ~w(password token secret authorization credential signature api_key input_url source_url code verifier refresh_token access_token)
 
 config :mave_core,
   ecto_repos: [MaveCore.Repo, MaveCore.ClickHouseRepo],
@@ -37,7 +37,8 @@ config :mave_core, Oban,
     {Oban.Plugins.Cron,
      crontab: [
        {"* * * * *", MaveCore.Workers.FlowRecoveryWorker},
-       {"23 * * * *", MaveCore.Workers.CliAuthorizationPruneWorker}
+       {"23 * * * *", MaveCore.Workers.CliAuthorizationPruneWorker},
+       {"37 * * * *", MaveCore.Workers.McpPruneWorker}
      ]}
   ],
   shutdown_grace_period: :timer.hours(6),
