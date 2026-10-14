@@ -486,7 +486,7 @@ defmodule MaveCore.Spaces do
 
   def list_webhooks(%Space{id: space_id}) do
     from(w in Webhook,
-      where: w.space_id == ^space_id,
+      where: w.space_id == ^space_id and is_nil(w.deleted_at),
       order_by: [desc: w.inserted_at]
     )
     |> Repo.all()
@@ -515,15 +515,18 @@ defmodule MaveCore.Spaces do
 
   def get_webhook_for_space(%Space{id: space_id}, webhook_id) when is_binary(webhook_id) do
     from(w in Webhook,
-      where: w.id == ^webhook_id and w.space_id == ^space_id
+      where: w.id == ^webhook_id and w.space_id == ^space_id and is_nil(w.deleted_at)
     )
     |> Repo.one()
   end
 
   def update_webhook(%Webhook{} = webhook, attrs) when is_map(attrs) do
-    webhook
-    |> Webhook.changeset(attrs)
-    |> Repo.update()
+    Repo.transaction(fn ->
+      case lock_active_webhook(webhook.space_id, webhook.id) do
+        nil -> Repo.rollback(:not_found)
+        active -> update_webhook_record(active, attrs)
+      end
+    end)
     |> maybe_broadcast_space_updated(webhook.space_id)
   end
 
@@ -532,9 +535,120 @@ defmodule MaveCore.Spaces do
   end
 
   def delete_webhook(%Webhook{} = webhook) do
-    webhook
-    |> Repo.delete()
+    Repo.transaction(fn ->
+      case lock_active_webhook(webhook.space_id, webhook.id) do
+        nil -> webhook
+        active -> retire_webhook(active)
+      end
+    end)
     |> maybe_broadcast_space_updated(webhook.space_id)
+  end
+
+  @doc "Registers a caller-supplied signing secret and event set idempotently within a space."
+  def register_webhook(%Space{} = space, attrs) when is_map(attrs) do
+    changeset = Webhook.registration_changeset(%Webhook{space_id: space.id}, attrs)
+
+    if changeset.valid? do
+      Repo.transaction(fn ->
+        Repo.one!(from(s in Space, where: s.id == ^space.id, lock: "FOR UPDATE"))
+        find_or_register_webhook(space, changeset)
+      end)
+      |> broadcast_webhook_registration(space.id)
+    else
+      {:error, changeset}
+    end
+  end
+
+  @doc "Removes a registration owned by this space; missing registrations are already removed."
+  def unregister_webhook(%Space{} = space, id) do
+    case LegacyShortUUID.cast(id) do
+      {:ok, id} ->
+        case get_webhook_for_space(space, id) do
+          nil -> {:ok, :not_found}
+          webhook -> delete_webhook(webhook)
+        end
+
+      :error ->
+        {:ok, :not_found}
+    end
+  end
+
+  defp find_or_register_webhook(space, changeset) do
+    webhook = Ecto.Changeset.apply_changes(changeset)
+
+    existing =
+      Repo.one(
+        from(w in Webhook,
+          where: w.space_id == ^space.id and is_nil(w.deleted_at),
+          where: w.url == ^webhook.url and w.secret == ^webhook.secret,
+          where: w.enabled_events == ^webhook.enabled_events,
+          limit: 1
+        ),
+        log: false
+      )
+
+    case existing do
+      %Webhook{} -> {existing, :existing}
+      nil -> {Repo.insert!(changeset, log: false), :created}
+    end
+  end
+
+  defp broadcast_webhook_registration({:ok, {webhook, status}} = result, space_id) do
+    if status == :created, do: maybe_broadcast_space_updated({:ok, webhook}, space_id)
+    result
+  end
+
+  defp broadcast_webhook_registration(result, _space_id), do: result
+
+  defp lock_active_webhook(space_id, id) do
+    Repo.one(
+      from(w in Webhook,
+        where: w.space_id == ^space_id and w.id == ^id and is_nil(w.deleted_at),
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp update_webhook_record(webhook, attrs) do
+    case Repo.update(Webhook.changeset(webhook, attrs), log: false) do
+      {:ok, webhook} -> webhook
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
+  defp retire_webhook(webhook) do
+    now = DateTime.utc_now()
+
+    retired =
+      webhook
+      |> Ecto.Changeset.change(enabled: false, deleted_at: now)
+      |> Repo.update!()
+
+    pending =
+      from(d in WebhookDelivery,
+        where: d.webhook_id == ^webhook.id and d.state in [:pending, :processing],
+        select: d.id
+      )
+
+    {_count, delivery_ids} =
+      Repo.update_all(pending,
+        set: [
+          state: :canceled,
+          failed_at: now,
+          next_attempt_at: nil,
+          error: "webhook removed",
+          updated_at: now
+        ]
+      )
+
+    from(j in Oban.Job,
+      where: j.worker == "MaveCore.Workers.WebhookDeliveryWorker",
+      where: j.state in ["available", "scheduled", "retryable"],
+      where: fragment("?->>'delivery_id'", j.args) in ^delivery_ids
+    )
+    |> Oban.cancel_all_jobs()
+
+    retired
   end
 
   def list_webhook_deliveries(%Space{id: space_id}, opts \\ []) do
@@ -554,7 +668,7 @@ defmodule MaveCore.Spaces do
     with {:ok, normalized_event_type} <- normalize_event_type(event_type) do
       webhooks =
         from(w in Webhook,
-          where: w.space_id == ^space.id and w.enabled == true,
+          where: w.space_id == ^space.id and w.enabled == true and is_nil(w.deleted_at),
           where: ^normalized_event_type in w.enabled_events,
           order_by: [desc: w.inserted_at]
         )
@@ -1003,13 +1117,20 @@ defmodule MaveCore.Spaces do
   end
 
   defp do_process_webhook_delivery(%WebhookDelivery{} = delivery, max_attempts) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    case claim_webhook_delivery(delivery) do
+      {:ok, %WebhookDelivery{} = claimed} ->
+        handle_webhook_delivery_result(
+          claimed,
+          claimed.attempts,
+          DateTime.utc_now(),
+          max_attempts
+        )
 
-    if is_nil(delivery.webhook) or delivery.webhook.enabled != true do
-      cancel_webhook_delivery(delivery, now)
-      {:ok, :canceled}
-    else
-      process_active_webhook_delivery(delivery, now, max_attempts)
+      {:ok, state} ->
+        {:ok, state}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1110,10 +1231,25 @@ defmodule MaveCore.Spaces do
       "attempts" => 0
     }
 
-    %WebhookDelivery{}
-    |> WebhookDelivery.create_changeset(attrs)
-    |> Repo.insert()
+    Repo.transaction(fn ->
+      case lock_active_webhook(space.id, webhook.id) do
+        %Webhook{enabled: true} ->
+          insert_active_webhook_delivery(attrs)
+
+        _ ->
+          nil
+      end
+    end)
   end
+
+  defp insert_active_webhook_delivery(attrs) do
+    case Repo.insert(WebhookDelivery.create_changeset(%WebhookDelivery{}, attrs)) do
+      {:ok, delivery} -> delivery
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
+  defp reduce_webhook_delivery({:ok, nil}, acc, _webhook, _enqueue?), do: acc
 
   defp reduce_webhook_delivery({:ok, delivery}, acc, _webhook, enqueue?) do
     log_enqueue_delivery_result(delivery.id, maybe_enqueue_delivery_job(delivery.id, enqueue?))
@@ -1164,26 +1300,35 @@ defmodule MaveCore.Spaces do
     |> Repo.update()
   end
 
-  defp process_active_webhook_delivery(delivery, now, max_attempts) do
-    attempt = delivery.attempts + 1
+  defp claim_webhook_delivery(delivery) do
+    Repo.transaction(fn ->
+      webhook = lock_active_webhook(delivery.space_id, delivery.webhook_id)
 
-    case mark_webhook_delivery_processing(delivery, attempt) do
-      {:ok, updated_delivery} ->
-        handle_webhook_delivery_result(updated_delivery, attempt, now, max_attempts)
+      current =
+        Repo.one!(from(d in WebhookDelivery, where: d.id == ^delivery.id, lock: "FOR UPDATE"))
 
-      {:error, reason} ->
-        {:error, reason}
-    end
+      claim_pending_webhook_delivery(current, webhook)
+    end)
   end
 
-  defp mark_webhook_delivery_processing(delivery, attempt) do
+  defp claim_pending_webhook_delivery(%WebhookDelivery{state: state}, _webhook)
+       when state in [:succeeded, :canceled, :failed],
+       do: state
+
+  defp claim_pending_webhook_delivery(delivery, %Webhook{enabled: true} = webhook) do
     delivery
     |> WebhookDelivery.update_changeset(%{
       state: :processing,
-      attempts: attempt,
+      attempts: delivery.attempts + 1,
       next_attempt_at: nil
     })
-    |> Repo.update()
+    |> Repo.update!()
+    |> Map.put(:webhook, webhook)
+  end
+
+  defp claim_pending_webhook_delivery(delivery, _webhook) do
+    {:ok, _delivery} = cancel_webhook_delivery(delivery, DateTime.utc_now())
+    :canceled
   end
 
   defp handle_webhook_delivery_result(delivery, attempt, now, max_attempts) do
@@ -1195,8 +1340,24 @@ defmodule MaveCore.Spaces do
         {:ok, :succeeded}
 
       {:error, reason, response} ->
-        handle_delivery_failure(delivery, attempt, now, reason, response, max_attempts)
+        finish_failed_webhook_delivery(delivery, attempt, now, reason, response, max_attempts)
     end
+  end
+
+  defp finish_failed_webhook_delivery(delivery, attempt, now, reason, response, max_attempts) do
+    {:ok, result} =
+      Repo.transaction(fn ->
+        case lock_active_webhook(delivery.space_id, delivery.webhook_id) do
+          %Webhook{enabled: true} ->
+            handle_delivery_failure(delivery, attempt, now, reason, response, max_attempts)
+
+          _ ->
+            {:ok, _delivery} = cancel_webhook_delivery(delivery, now)
+            {:ok, :canceled}
+        end
+      end)
+
+    result
   end
 
   defp mark_webhook_delivery_succeeded(delivery, response, now) do
