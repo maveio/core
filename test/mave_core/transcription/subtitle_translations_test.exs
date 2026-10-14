@@ -342,7 +342,9 @@ defmodule MaveCore.Transcription.SubtitleTranslationsTest do
           "embed_hash" => ctx.embed.hash,
           "region" => ctx.space.region,
           "version" => Embeds.current_video_version(ctx.embed)
-        }, enqueue: false)
+        },
+        enqueue: false
+      )
 
     # Represent the original source step whose output is already persisted. The
     # remaining ordinary step exercises the same post-commit metadata sync that

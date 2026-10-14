@@ -2940,6 +2940,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           type="select"
           label={gettext("Target languages")}
           multiple
+          size="6"
+          class="block h-32 w-full rounded-md border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-200 focus:border-blue-500 focus:outline-2 focus:outline-blue-500"
           options={@targets}
         />
         <p class="my-2 text-xs text-stone-400">
