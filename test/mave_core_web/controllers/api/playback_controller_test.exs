@@ -39,8 +39,10 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
     end
   end
 
-  def presigned_get_url(bucket, path, _region, opts),
-    do: {:ok, "https://storage.example.test/#{bucket}/#{path}?expires=#{opts[:expires]}"}
+  def presigned_get_url(bucket, path, _region, opts) do
+    query = URI.encode_query([{"expires", opts[:expires]} | Keyword.get(opts, :query_params, [])])
+    {:ok, "https://storage.example.test/#{bucket}/#{path}?#{query}"}
+  end
 
   setup do
     previous_origin = Application.get_env(:mave_core, :playback_origin)
@@ -237,7 +239,10 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
       |> get(base <> "/v1/h264_hd.mp4")
 
     assert conn.status == 302
-    assert hd(get_resp_header(conn, "location")) =~ "v1/h264_hd.mp4"
+    location = URI.parse(hd(get_resp_header(conn, "location")))
+    assert location.path =~ "v1/h264_hd.mp4"
+    query = URI.decode_query(location.query)
+    assert query["response-cache-control"] == "private, max-age=#{query["expires"]}"
 
     {:ok, other} = Embeds.create_video_embed(context.space)
     wrong = sign(context.read_key, %{"sub" => context.space.hash <> other.hash})

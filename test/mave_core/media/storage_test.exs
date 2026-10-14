@@ -368,6 +368,8 @@ defmodule MaveCore.Media.StorageTest do
       assert conn.method == "PUT"
       assert conn.request_path == "/space-mett/manifest.json"
       assert get_req_header(conn, "x-amz-acl") == ["public-read"]
+      assert get_req_header(conn, "cache-control") == []
+      assert get_req_header(conn, "content-disposition") == []
 
       send_resp(conn, 200, "")
     end)
@@ -380,6 +382,72 @@ defmodule MaveCore.Media.StorageTest do
                "application/json",
                "mett"
              )
+  end
+
+  test "public MP4 outputs store caching and inline playback headers" do
+    Req.default_options(plug: {Req.Test, __MODULE__})
+
+    Application.put_env(:mave_core, :storage_providers, %{
+      "mett" => [
+        access_key_id: "minioadmin",
+        secret_access_key: "minioadmin",
+        endpoint: "http://localhost:9010",
+        region: "fr-par",
+        bucket_prefix: "space-"
+      ]
+    })
+
+    Req.Test.expect(__MODULE__, 3, fn conn ->
+      expected_cache_control =
+        case conn.request_path do
+          "/space-mett/embed/v2/" <> _rest -> "public, max-age=31536000, immutable"
+          "/space-mett/embed/h264_sd.mp4" -> "public, max-age=86400"
+        end
+
+      assert get_req_header(conn, "cache-control") == [expected_cache_control]
+      assert get_req_header(conn, "content-disposition") == ["inline"]
+
+      send_resp(conn, 200, "")
+    end)
+
+    assert {:ok, ""} =
+             Storage.put_public("space-mett", "embed/v2/h264_sd.mp4", "mp4", "video/mp4", "mett")
+
+    assert {:ok, ""} =
+             Storage.put_public(
+               "space-mett",
+               "embed/v2/audio_hls/segment_000.m4s",
+               "m4s",
+               "audio/mp4",
+               "mett"
+             )
+
+    assert {:ok, ""} =
+             Storage.put_public("space-mett", "embed/h264_sd.mp4", "mp4", "video/mp4", "mett")
+  end
+
+  test "private MP4 writes do not store public caching headers" do
+    Req.default_options(plug: {Req.Test, __MODULE__})
+
+    Application.put_env(:mave_core, :storage_providers, %{
+      "mett" => [
+        access_key_id: "minioadmin",
+        secret_access_key: "minioadmin",
+        endpoint: "http://localhost:9010",
+        region: "fr-par",
+        bucket_prefix: "space-"
+      ]
+    })
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert get_req_header(conn, "cache-control") == []
+      assert get_req_header(conn, "content-disposition") == []
+
+      send_resp(conn, 200, "")
+    end)
+
+    assert {:ok, ""} =
+             Storage.put("space-mett", "embed/v2/source.mp4", "mp4", "video/mp4", "mett")
   end
 
   test "put_public retries transient transport failures" do
@@ -1274,6 +1342,8 @@ defmodule MaveCore.Media.StorageTest do
       assert conn.query_string == "uploads"
       assert get_req_header(conn, "content-type") == ["video/mp4"]
       assert get_req_header(conn, "x-amz-acl") == ["public-read"]
+      assert get_req_header(conn, "cache-control") == ["public, max-age=86400"]
+      assert get_req_header(conn, "content-disposition") == ["inline"]
 
       send_resp(
         conn,
@@ -1329,6 +1399,7 @@ defmodule MaveCore.Media.StorageTest do
     Req.Test.expect(__MODULE__, fn conn ->
       assert conn.method == "POST"
       assert get_req_header(conn, "x-amz-acl") == []
+      assert get_req_header(conn, "cache-control") == []
 
       send_resp(
         conn,
@@ -1362,7 +1433,7 @@ defmodule MaveCore.Media.StorageTest do
     assert {:ok, %{"url" => url, "headers" => headers}} =
              Storage.presigned_put_url(
                "space-qingb",
-               "embed/h264_hd_hls/segment_000.m4s",
+               "embed/v3/h264_hd_hls/segment_000.m4s",
                "qingb",
                "video/mp4",
                12_345
@@ -1373,11 +1444,15 @@ defmodule MaveCore.Media.StorageTest do
 
     assert uri.scheme == "https"
     assert uri.host == "storage.example.test"
-    assert uri.path == "/space-qingb/embed/h264_hd_hls/segment_000.m4s"
+    assert uri.path == "/space-qingb/embed/v3/h264_hd_hls/segment_000.m4s"
     assert is_binary(params["X-Amz-Signature"])
-    assert params["X-Amz-SignedHeaders"] == "content-length;content-type;host;x-amz-acl"
+
+    assert params["X-Amz-SignedHeaders"] ==
+             "cache-control;content-disposition;content-length;content-type;host;x-amz-acl"
 
     assert headers == %{
+             "cache-control" => "public, max-age=31536000, immutable",
+             "content-disposition" => "inline",
              "content-length" => "12345",
              "content-type" => "video/mp4",
              "x-amz-acl" => "public-read"
