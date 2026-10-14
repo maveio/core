@@ -27,6 +27,7 @@ import { hooks as colocatedHooks } from "phoenix-colocated/mave_core"
 import topbar from "../vendor/topbar"
 import "@lottiefiles/lottie-player"
 import { ChartHook } from "./hooks/chart"
+import { LocalTimeHook, ReleaseTimeInputHook } from "./hooks/release_time"
 import { cdn } from "./upload"
 
 let selectedEmbed = null
@@ -718,6 +719,8 @@ const liveSocket = new LiveSocket("/live", Socket, {
     thumbnail_preview: ThumbnailPreviewHook,
     auto_open_file_picker: AutoOpenFilePickerHook,
     preserve_scroll: PreserveScrollHook,
+    release_time_input: ReleaseTimeInputHook,
+    local_time: LocalTimeHook,
   },
   uploaders: { cdn },
 })

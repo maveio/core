@@ -42,11 +42,21 @@ defmodule MaveCore.Workers.PlaybackVisibilityWorker do
     case adapter.apply_visibility(embed, visibility) do
       :ok ->
         embed
-        |> Ecto.Changeset.change(playback_visibility: visibility, playback_status: visibility)
+        |> Ecto.Changeset.change(
+          playback_visibility: visibility,
+          playback_status: visibility,
+          release_at: release_at_after(embed, visibility)
+        )
         |> Repo.update!()
 
       {:error, _reason} ->
         Repo.rollback(:playback_storage_sync_failed)
     end
   end
+
+  # While a release is pending only `Release` may request public access, so
+  # confirmed public storage completes it. Rescheduling flips the status back
+  # to `:protecting` first, which applies private instead.
+  defp release_at_after(_embed, :public), do: nil
+  defp release_at_after(embed, _visibility), do: embed.release_at
 end

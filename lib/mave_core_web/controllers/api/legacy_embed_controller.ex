@@ -3,7 +3,7 @@ defmodule MaveCoreWeb.Api.LegacyEmbedController do
 
   alias MaveCore.EmbedId
   alias MaveCore.Embeds
-  alias MaveCore.Embeds.{Embed, ManifestPublisher}
+  alias MaveCore.Embeds.{Embed, ManifestPublisher, Release}
   alias MaveCore.PublicApi
   alias MaveCore.Spaces
   alias MaveCore.Spaces.Key
@@ -15,20 +15,39 @@ defmodule MaveCoreWeb.Api.LegacyEmbedController do
   def embed(conn, %{"embed_id" => embed_id}) do
     with {:ok, %{space_hash: space_hash, embed_hash: embed_hash}} <-
            EmbedId.split(String.trim(embed_id || "")),
-         %Embed{type: :video} = embed <- Embeds.get_embed_by_hashes(space_hash, embed_hash),
-         false <- MaveCore.Playback.protected?(embed),
-         {:ok, manifest} <- ManifestPublisher.current(embed) do
-      json(conn, manifest)
+         %Embed{type: :video} = embed <- Embeds.get_embed_by_hashes(space_hash, embed_hash) do
+      cond do
+        Release.pending?(embed) -> scheduled_release(conn, embed)
+        MaveCore.Playback.protected?(embed) -> missing_video(conn)
+        true -> current_manifest(conn, embed)
+      end
     else
+      _not_found -> missing_video(conn)
+    end
+  end
+
+  # Players fall back to this endpoint when storage denies the manifest. The
+  # countdown is computed client-side, so a short shared cache is safe.
+  defp scheduled_release(conn, embed) do
+    conn
+    |> put_resp_header("cache-control", "public, max-age=5")
+    |> json(Release.manifest(embed))
+  end
+
+  defp current_manifest(conn, embed) do
+    case ManifestPublisher.current(embed) do
+      {:ok, manifest} ->
+        json(conn, manifest)
+
       {:error, _reason} ->
         conn
         |> put_status(:internal_server_error)
         |> json(%{error: "Could not load embed manifest."})
-
-      _not_found ->
-        conn |> put_status(:not_found) |> json(%{error: @missing_video_error})
     end
   end
+
+  defp missing_video(conn),
+    do: conn |> put_status(:not_found) |> json(%{error: @missing_video_error})
 
   def collection(conn, %{"token" => token} = params) do
     with {:ok, %{claims: claims, space: %Space{} = space}} <- Spaces.validate_api_jwt(token, true),

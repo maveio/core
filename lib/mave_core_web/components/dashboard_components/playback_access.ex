@@ -9,7 +9,7 @@ defmodule MaveCoreWeb.DashboardComponents.PlaybackAccess do
   def guidance(assigns) do
     ~H"""
     <p
-      :if={MaveCore.Playback.protected?(@embed)}
+      :if={MaveCore.Playback.protected?(@embed) and not MaveCore.Embeds.Release.pending?(@embed)}
       id="private-playback-guide"
       class="flex items-start gap-2 px-6 py-3 text-xs text-stone-400"
     >

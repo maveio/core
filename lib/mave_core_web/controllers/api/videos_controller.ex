@@ -4,6 +4,7 @@ defmodule MaveCoreWeb.Api.VideosController do
   plug(MaveCoreWeb.Plugs.ApiKeyWriteAuth when action in [:create, :update, :delete])
 
   alias MaveCore.Embeds
+  alias MaveCore.Embeds.Release
   alias MaveCore.PublicApi
   alias MaveCore.Spaces.Space
 
@@ -74,6 +75,7 @@ defmodule MaveCoreWeb.Api.VideosController do
     with {:ok, parent_folder_id} <- resolve_parent_folder_id(space, params),
          :ok <-
            MaveCore.Playback.validate_visibility(space, Map.get(params, "visibility", "public")),
+         {:ok, release_at} <- validate_create_release(space, params),
          :ok <- maybe_validate_input_url(params),
          {:ok, embed} <-
            Embeds.create_video_embed(space, %{
@@ -81,6 +83,7 @@ defmodule MaveCoreWeb.Api.VideosController do
              visibility: Map.get(params, "visibility", "public"),
              parent_folder_id: parent_folder_id
            }),
+         {:ok, embed} <- maybe_schedule_created(embed, release_at),
          :ok <- maybe_start_input_url_upload(space, embed, params) do
       embed = PublicApi.get_embed_by_hash(space, embed.hash) || embed
       json(conn, PublicApi.video_response(space, embed))
@@ -96,14 +99,16 @@ defmodule MaveCoreWeb.Api.VideosController do
   def update(%{assigns: %{current_space: %Space{} = space}} = conn, %{"hash" => hash} = params) do
     case PublicApi.get_embed(space, hash) do
       %Embeds.Embed{type: :video} = embed ->
-        with :ok <-
+        with {:ok, params} <- release_params(embed, params),
+             :ok <-
                MaveCore.Playback.validate_visibility(
                  space,
                  Map.get(params, "visibility", "public")
                ),
              {:ok, embed} <- maybe_rename(embed, params),
              {:ok, embed} <- maybe_move(space, embed, params),
-             {:ok, embed} <- maybe_playback_visibility(embed, params) do
+             {:ok, embed} <- maybe_playback_visibility(embed, params),
+             {:ok, embed} <- maybe_release(embed, params) do
           embed = PublicApi.get_embed(space, hash) || embed
 
           conn
@@ -149,6 +154,9 @@ defmodule MaveCoreWeb.Api.VideosController do
   defp maybe_put_visibility_response_status(conn, %{"visibility" => _}, embed),
     do: put_visibility_response_status(conn, embed)
 
+  defp maybe_put_visibility_response_status(conn, %{"release_at" => _}, embed),
+    do: put_visibility_response_status(conn, embed)
+
   defp maybe_put_visibility_response_status(conn, _params, _embed), do: conn
 
   defp put_visibility_response_status(conn, %{playback_status: status})
@@ -165,6 +173,105 @@ defmodule MaveCoreWeb.Api.VideosController do
 
   defp maybe_playback_visibility(_embed, %{"visibility" => _}), do: {:error, :invalid_visibility}
   defp maybe_playback_visibility(embed, _params), do: {:ok, embed}
+
+  # Validated before any change is applied. Unchanged values from a GET body
+  # (the current release time and visibility) are accepted as no-ops, so
+  # responses can be sent back as updates.
+  defp release_params(embed, %{"release_at" => value} = params) do
+    with {:ok, release_at} <- parse_optional_release_at(value) do
+      cond do
+        release_at == nil and not Release.pending?(embed) ->
+          {:ok, Map.delete(params, "release_at")}
+
+        release_at != nil and Release.release_unix(embed) == DateTime.to_unix(release_at) ->
+          {:ok, params |> Map.delete("release_at") |> drop_unchanged_visibility(embed)}
+
+        true ->
+          params
+          |> Map.put("release_at", release_at)
+          |> drop_unchanged_visibility(embed)
+          |> reject_visibility_change()
+      end
+    end
+  end
+
+  defp release_params(_embed, params), do: {:ok, params}
+
+  defp parse_optional_release_at(nil), do: {:ok, nil}
+  defp parse_optional_release_at(value), do: parse_release_at(value)
+
+  defp drop_unchanged_visibility(params, embed) do
+    if params["visibility"] == to_string(embed.playback_visibility),
+      do: Map.delete(params, "visibility"),
+      else: params
+  end
+
+  defp reject_visibility_change(%{"visibility" => _}), do: {:error, :release_with_visibility}
+  defp reject_visibility_change(params), do: {:ok, params}
+
+  # `release_at: null` releases a pending video immediately.
+  defp maybe_release(embed, %{"release_at" => nil}), do: Release.release_now(embed)
+
+  defp maybe_release(embed, %{"release_at" => %DateTime{} = release_at}),
+    do: Release.schedule(embed, release_at)
+
+  defp maybe_release(embed, _params), do: {:ok, embed}
+
+  defp validate_create_release(space, %{"release_at" => value} = params)
+       when not is_nil(value) do
+    with :ok <- public_release(params),
+         {:ok, release_at} <- parse_release_at(value),
+         :ok <- future_release(release_at) do
+      if MaveCore.Playback.available?(space),
+        do: {:ok, release_at},
+        else: {:error, :playback_unavailable}
+    end
+  end
+
+  defp validate_create_release(_space, _params), do: {:ok, nil}
+
+  defp public_release(%{"visibility" => visibility}) when visibility not in [nil, "public"],
+    do: {:error, :release_with_visibility}
+
+  defp public_release(_params), do: :ok
+
+  defp maybe_schedule_created(embed, nil), do: {:ok, embed}
+
+  # Do not leave a video behind when the request as a whole fails.
+  defp maybe_schedule_created(embed, release_at) do
+    with {:error, reason} <- Release.schedule(embed, release_at) do
+      {:ok, _deleted} = Embeds.delete_embed(embed)
+      {:error, reason}
+    end
+  end
+
+  defp future_release(release_at) do
+    if DateTime.compare(release_at, DateTime.utc_now()) == :gt,
+      do: :ok,
+      else: {:error, :release_in_past}
+  end
+
+  # Accepts Unix seconds (as in other API timestamps) or ISO 8601 with offset.
+  defp parse_release_at(value) when is_integer(value) and value > 0,
+    do: DateTime.from_unix(value) |> invalid_release_on_error()
+
+  defp parse_release_at(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {unix, ""} ->
+        parse_release_at(unix)
+
+      _ ->
+        case DateTime.from_iso8601(value) do
+          {:ok, datetime, _offset} -> {:ok, datetime}
+          _ -> {:error, :invalid_release_at}
+        end
+    end
+  end
+
+  defp parse_release_at(_value), do: {:error, :invalid_release_at}
+
+  defp invalid_release_on_error({:ok, datetime}), do: {:ok, datetime}
+  defp invalid_release_on_error(_error), do: {:error, :invalid_release_at}
 
   defp resolve_collection(params, space),
     do: PublicApi.resolve_collection_id(space, params["collection"])
@@ -239,6 +346,23 @@ defmodule MaveCoreWeb.Api.VideosController do
   defp format_error(:not_found), do: "This video embed does not exist."
   defp format_error(:invalid_visibility), do: "visibility must be public or private."
   defp format_error(:playback_unavailable), do: "Private playback is unavailable for this space."
+
+  defp format_error(:invalid_release_at),
+    do: "release_at must be Unix seconds or an ISO 8601 timestamp with a time zone."
+
+  defp format_error(:release_in_past), do: "release_at must be in the future."
+
+  defp format_error(:release_with_visibility),
+    do: "A scheduled release is public once released; it cannot change visibility."
+
+  defp format_error(:release_scheduled),
+    do: "This video has a scheduled release. Release it or change release_at first."
+
+  defp format_error(:playback_private),
+    do: "Only public videos can be scheduled for release."
+
+  defp format_error(:not_scheduled), do: "This video has no scheduled release."
+
   defp format_error(:embed_limit_reached), do: "This space has reached its video limit."
   defp format_error(error) when is_binary(error), do: error
   defp format_error(_error), do: "Could not update this video."
