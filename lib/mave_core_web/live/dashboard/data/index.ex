@@ -152,14 +152,27 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
                 for={@range_form}
                 id="analytics-range-form"
                 phx-submit="select_range"
-                class="flex flex-wrap items-end gap-4"
+                class="flex flex-wrap items-end gap-4 [&_.label]:text-stone-700 [&_.label]:opacity-100"
               >
-                <.input field={@range_form[:from]} type="date" label={gettext("From (UTC)")} required />
-                <.input field={@range_form[:to]} type="date" label={gettext("To (UTC)")} required />
+                <.input
+                  field={@range_form[:from]}
+                  type="date"
+                  label={gettext("From (UTC)")}
+                  class="block h-10 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 [color-scheme:light]"
+                  required
+                />
+                <.input
+                  field={@range_form[:to]}
+                  type="date"
+                  label={gettext("To (UTC)")}
+                  class="block h-10 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 [color-scheme:light]"
+                  required
+                />
                 <.input
                   field={@range_form[:granularity]}
                   type="select"
                   label={gettext("Group by")}
+                  class="block h-10 w-full min-w-32 rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 [color-scheme:light]"
                   options={[
                     {gettext("Day"), "day"},
                     {gettext("Week"), "week"},
