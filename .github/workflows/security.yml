@@ -141,6 +141,12 @@ jobs:
           mix audit
       - name: Run complete test suite
         run: mix test
+      - name: Test the remote MCP client against Core
+        run: |
+          npm ci --prefix examples/mcp-client
+          npm run check --prefix examples/mcp-client
+          npm audit --prefix examples/mcp-client --audit-level=high
+          mix test examples/mcp-client/interop_test.exs
       - name: Test release tooling
         run: python3 -m unittest discover -s .github/scripts -v
 

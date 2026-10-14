@@ -72,3 +72,6 @@ npm-debug.log
 
 # Python release tooling
 __pycache__/
+
+# Remote MCP client example dependencies
+/examples/mcp-client/node_modules/

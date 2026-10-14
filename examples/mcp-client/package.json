@@ -1,0 +1,10 @@
+{
+  "name": "mave-mcp-client-example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A remote Mave MCP client with browser OAuth and PKCE",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node client.mjs", "check": "node --check client.mjs" },
+  "dependencies": { "@modelcontextprotocol/sdk": "^1.29.0" }
+}
