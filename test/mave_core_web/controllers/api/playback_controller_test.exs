@@ -5,6 +5,7 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
   alias MaveCore.Assets.{AudioTrack, Subtitle}
   alias MaveCore.Embeds.SettingsSerializer
   alias MaveCore.Playback.Media
+  alias MaveCore.Playback.Password
   alias MaveCore.Workers.PlaybackVisibilityWorker
 
   def available?(_space), do: Process.get(:playback_available, true)
@@ -73,7 +74,14 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
     space = user.current_space_membership.space
     {:ok, key} = Spaces.create_key(space)
     {:ok, read_key} = Spaces.create_key(space, %{access_level: "read_only"})
-    %{space: space, key: key, read_key: read_key}
+    unique = System.unique_integer([:positive])
+
+    %{
+      space: space,
+      key: key,
+      read_key: read_key,
+      password_ip: {10, div(unique, 65_536), rem(div(unique, 256), 256), rem(unique, 256)}
+    }
   end
 
   test "private creation protects storage before returning, and default creation stays public",
@@ -443,6 +451,275 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
     foreign = "http://storage.example.test:9000/space-other/#{embed.hash}/v1/subtitle_en.vtt"
     assert {:error, :invalid_path} = Media.resolve_path(foreign, embed, ".")
   end
+
+  test "password creation protects storage and exposes only a boolean", context do
+    conn = api(context.key) |> post("/api/v1/videos", %{password: "synthetic-viewer-value"})
+
+    assert %{"id" => id, "password_protected" => true, "visibility" => "private"} =
+             json_response(conn, 200)
+
+    embed = PublicApi.get_embed(context.space, id)
+    assert_receive {:storage_visibility, _, :private}
+    assert Argon2.verify_pass("synthetic-viewer-value", embed.password_hash)
+    refute conn.resp_body =~ "password_hash"
+    refute conn.resp_body =~ "synthetic-viewer-value"
+    refute inspect(embed) =~ embed.password_hash
+    safe = Password.for_dashboard(embed)
+    assert is_nil(safe.password_hash)
+    assert Password.protected?(safe)
+
+    for prefix <- ["/api/v1", "/v1"] do
+      conn = get(build_conn(), "#{prefix}/playback/#{id}/access")
+      assert json_response(conn, 200) == %{"password_protected" => true}
+      assert get_resp_header(conn, "cache-control") == ["private, no-store"]
+    end
+  end
+
+  test "password token grants direct-storage playback and revokes on rotation or removal",
+       context do
+    {:ok, embed} = Embeds.create_video_embed(context.space, %{password: "synthetic-viewer-value"})
+    id = context.space.hash <> embed.hash
+    base = "/api/v1/playback/media/#{id}"
+
+    conn =
+      password_conn(context)
+      |> post("/v1/playback/#{id}/password-token", %{password: "synthetic-viewer-value"})
+
+    assert %{"token" => token, "expires_at" => expires_at} = json_response(conn, 200)
+    assert_in_delta expires_at, System.system_time(:second) + 14_400, 3
+    assert {:ok, ^expires_at} = MaveCore.Playback.authorize(token, embed)
+    media = Phoenix.ConnTest.get(build_conn(), base <> "/v1/h264_hd.mp4", %{token: token})
+    assert media.status == 302
+    assert redirected_to(media) =~ "https://storage.example.test/"
+    assert redirected_to(media) =~ "expires=14"
+
+    for path <- [
+          "manifest.json",
+          "playlist.m3u8",
+          "v1/h264_hd.mp4",
+          "v1/h264_hd_hls/segment.ts",
+          "v1/subtitle_en.vtt"
+        ] do
+      assert get(build_conn(), base <> "/" <> path).status == 401
+    end
+
+    {:ok, other} = Embeds.create_video_embed(context.space)
+    assert {:error, :unauthorized} = MaveCore.Playback.authorize(token, other)
+
+    {:ok, rotated} =
+      Password.update(embed, %{password: "synthetic-rotated-value"})
+
+    assert {:error, :unauthorized} = MaveCore.Playback.authorize(token, embed)
+
+    {:ok, session} =
+      Password.issue(MaveCore.Playback.get_embed(id), "synthetic-rotated-value")
+
+    assert {:ok, _} = MaveCore.Playback.authorize(session.token, rotated)
+    {:ok, removed} = Password.update(rotated, %{password: nil})
+    assert removed.playback_status == :private
+    refute Password.protected?(removed)
+    assert {:error, :unauthorized} = MaveCore.Playback.authorize(session.token, rotated)
+
+    assert Phoenix.ConnTest.get(build_conn(), base <> "/playlist.m3u8", %{token: token}).status ==
+             401
+  end
+
+  test "storage protection must finish before granting a password token", context do
+    {:ok, embed} = Embeds.create_video_embed(context.space)
+    id = context.space.hash <> embed.hash
+
+    Oban.Testing.with_testing_mode(:manual, fn ->
+      conn =
+        api(context.key) |> put("/api/v1/videos/#{id}", %{password: "synthetic-viewer-value"})
+
+      assert %{"password_protected" => true, "visibility" => "public"} = json_response(conn, 202)
+
+      conn =
+        password_conn(context)
+        |> post("/api/v1/playback/#{id}/password-token", %{password: "synthetic-viewer-value"})
+
+      assert json_response(conn, 409) == %{"error" => "protection_pending"}
+      Process.put(:playback_storage_result, {:error, :cache_purge_failed})
+
+      assert {:error, _} =
+               PlaybackVisibilityWorker.perform(%Oban.Job{args: %{"embed_id" => embed.id}})
+
+      conn =
+        password_conn(context)
+        |> post("/api/v1/playback/#{id}/password-token", %{password: "synthetic-viewer-value"})
+
+      assert conn.status == 409
+    end)
+
+    Process.put(:playback_storage_result, :ok)
+    assert :ok = PlaybackVisibilityWorker.perform(%Oban.Job{args: %{"embed_id" => embed.id}})
+
+    conn =
+      password_conn(context)
+      |> post("/api/v1/playback/#{id}/password-token", %{password: "synthetic-viewer-value"})
+
+    assert conn.status == 200
+  end
+
+  test "password updates preserve API write permission and reject public transitions", context do
+    {:ok, embed} = Embeds.create_video_embed(context.space, %{password: "synthetic-viewer-value"})
+    path = "/api/v1/videos/#{embed.hash}"
+    assert put(api(context.read_key), path, %{password: nil}).status == 403
+    assert put(api(context.key), path, %{visibility: "public"}).status == 400
+    assert put(api(context.key), path, %{visibility: "public", password: nil}).status == 400
+
+    assert {:error, :password_requires_private} =
+             MaveCore.Playback.request_visibility(embed, :public)
+
+    conn = put(api(context.key), path, %{name: "Still protected"})
+    assert json_response(conn, 200)["password_protected"]
+
+    assert PublicApi.get_embed(context.space, embed.hash).password_revision ==
+             embed.password_revision
+
+    conn = put(api(context.key), path, %{password: nil})
+    assert %{"password_protected" => false, "visibility" => "private"} = json_response(conn, 200)
+    assert put(api(context.key), path, %{visibility: "public"}).status == 200
+  end
+
+  test "invalid passwords and unavailable playback cannot mutate a video", context do
+    {:ok, embed} = Embeds.create_video_embed(context.space)
+
+    for invalid <- ["", 123, false, %{}, String.duplicate("a", 1025)] do
+      assert put(api(context.key), "/api/v1/videos/#{embed.hash}", %{password: invalid}).status ==
+               400
+    end
+
+    Process.put(:playback_available, false)
+
+    assert put(api(context.key), "/api/v1/videos/#{embed.hash}", %{
+             password: "synthetic-viewer-value"
+           }).status == 400
+
+    refute PublicApi.get_embed(context.space, embed.hash)
+           |> Password.protected?()
+
+    assert post(api(context.key), "/api/v1/videos", %{password: "synthetic-viewer-value"}).status ==
+             400
+  end
+
+  test "password requests have bounded attempts and do not trust forwarded IPs", context do
+    {:ok, embed} = Embeds.create_video_embed(context.space, %{password: "synthetic-viewer-value"})
+    path = "/api/v1/playback/#{context.space.hash}#{embed.hash}/password-token"
+
+    for attempt <- 1..5 do
+      conn =
+        password_conn(context)
+        |> put_req_header("x-forwarded-for", "192.0.2.#{attempt}")
+        |> post(path, %{password: "synthetic-wrong-value"})
+
+      assert json_response(conn, 401) == %{"error" => "invalid_password"}
+    end
+
+    # Canonicalizing IDs prevents bypass by switching to a UUID alias.
+    conn =
+      password_conn(context)
+      |> post("/v1/playback/#{embed.id}/password-token", %{password: "synthetic-viewer-value"})
+
+    assert json_response(conn, 429) == %{"error" => "rate_limited"}
+    assert [_] = get_resp_header(conn, "retry-after")
+  end
+
+  test "the IP limit applies across different videos and malformed identifiers", context do
+    for _video <- 1..6 do
+      {:ok, embed} = Embeds.create_video_embed(context.space)
+
+      for _attempt <- 1..5 do
+        conn =
+          post(password_conn(context), "/api/v1/playback/#{embed.id}/password-token", %{
+            password: "synthetic-wrong-value"
+          })
+
+        assert conn.status == 401
+      end
+    end
+
+    conn =
+      post(password_conn(context), "/api/v1/playback/#{Ecto.UUID.generate()}/password-token", %{
+        password: "synthetic-wrong-value"
+      })
+
+    assert json_response(conn, 429) == %{"error" => "rate_limited"}
+  end
+
+  test "a newly unavailable space refuses password issuance", context do
+    {:ok, embed} = Embeds.create_video_embed(context.space, %{password: "synthetic-viewer-value"})
+    Process.put(:playback_available, false)
+
+    conn =
+      post(
+        password_conn(context),
+        "/api/v1/playback/#{context.space.hash}#{embed.hash}/password-token",
+        %{password: "synthetic-viewer-value"}
+      )
+
+    assert json_response(conn, 503) == %{"error" => "playback_unavailable"}
+  end
+
+  test "password tokens have a distinct purpose and reject expired claims", context do
+    {:ok, embed} = Embeds.create_video_embed(context.space, %{password: "synthetic-viewer-value"})
+
+    claims = %{
+      embed_id: embed.id,
+      space_id: embed.space_id,
+      revision: embed.password_revision,
+      expires_at: System.system_time(:second) - 1
+    }
+
+    token = Phoenix.Token.sign(MaveCoreWeb.Endpoint, "password-playback-v1", claims)
+    assert {:error, :unauthorized} = MaveCore.Playback.authorize(token, embed)
+
+    wrong_purpose =
+      Phoenix.Token.sign(MaveCoreWeb.Endpoint, "password-playback-other", %{
+        claims
+        | expires_at: System.system_time(:second) + 600
+      })
+
+    assert {:error, :unauthorized} = MaveCore.Playback.authorize(wrong_purpose, embed)
+
+    assert {:ok, _} =
+             MaveCore.Playback.authorize(MaveCore.Playback.dashboard_session(embed).token, embed)
+  end
+
+  test "missing and deleted embeds do not disclose media metadata", context do
+    {:ok, embed} = Embeds.create_video_embed(context.space)
+    id = context.space.hash <> embed.hash
+
+    assert json_response(get(build_conn(), "/api/v1/playback/#{id}/access"), 200) == %{
+             "password_protected" => false
+           }
+
+    conn =
+      post(password_conn(context), "/api/v1/playback/#{id}/password-token", %{
+        password: "synthetic-wrong-value"
+      })
+
+    assert json_response(conn, 401) == %{"error" => "invalid_password"}
+    {:ok, _} = Embeds.delete_embed(embed)
+
+    assert json_response(get(build_conn(), "/api/v1/playback/#{id}/access"), 404) == %{
+             "error" => "not_found"
+           }
+  end
+
+  test "password endpoint permits JSON CORS preflight" do
+    conn =
+      build_conn()
+      |> put_req_header("origin", "https://player.example.test")
+      |> put_req_header("access-control-request-method", "POST")
+      |> put_req_header("access-control-request-headers", "content-type")
+      |> options("/api/v1/playback/aaaaabbbbbccccc/password-token")
+
+    assert conn.status == 204
+    assert get_resp_header(conn, "access-control-allow-origin") == ["*"]
+  end
+
+  defp password_conn(context), do: %{build_conn() | remote_ip: context.password_ip}
 
   defp api(key),
     do:

@@ -48,7 +48,8 @@ defmodule MaveCoreWeb.Plugs.EventIngestRateLimit do
     end
   end
 
-  defp client_ip_string(conn) do
+  @doc false
+  def client_ip_string(conn) do
     remote_ip = normalize_ip(conn.remote_ip)
 
     if trusted_proxy?(remote_ip) do

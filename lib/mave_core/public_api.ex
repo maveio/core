@@ -9,6 +9,7 @@ defmodule MaveCore.PublicApi do
   alias MaveCore.Embeds.{Embed, Events, SettingsSerializer}
   alias MaveCore.Flow
   alias MaveCore.Languages
+  alias MaveCore.Playback.Password
   alias MaveCore.Playback.URLs
   alias MaveCore.PublicHttpUrl
   alias MaveCore.Repo
@@ -143,6 +144,7 @@ defmodule MaveCore.PublicApi do
       %{
         id: public_embed_id(space, embed),
         visibility: embed.playback_visibility,
+        password_protected: Password.protected?(embed),
         name: embed_name(embed),
         duration: current_video && current_video.duration,
         width: current_video && current_video.max_width,
@@ -160,6 +162,7 @@ defmodule MaveCore.PublicApi do
       %{
         id: public_embed_id(space, embed),
         visibility: embed.playback_visibility,
+        password_protected: Password.protected?(embed),
         embed_url: embed_url(space, embed),
         poster_image: poster_image(space, embed),
         object: "video",

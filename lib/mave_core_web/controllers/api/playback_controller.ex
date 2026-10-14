@@ -4,7 +4,38 @@ defmodule MaveCoreWeb.Api.PlaybackController do
   alias MaveCore.Embeds.Embed
   alias MaveCore.Playback
   alias MaveCore.Playback.Media
+  alias MaveCore.Playback.Password
   alias MaveCoreWeb.Api.ImageController
+  alias MaveCoreWeb.Plugs.PasswordPlaybackRateLimit
+
+  def access(conn, %{"id" => id}) do
+    conn = private_response(conn)
+
+    case Playback.get_embed(id) do
+      %Embed{} = embed -> json(conn, %{password_protected: Password.protected?(embed)})
+      _ -> conn |> put_status(:not_found) |> json(%{error: "not_found"})
+    end
+  end
+
+  def password_token(conn, %{"id" => id} = params) do
+    conn = private_response(conn)
+    embed = Playback.get_embed(id)
+    conn = PasswordPlaybackRateLimit.call(conn, embed && embed.id)
+
+    if conn.halted do
+      conn
+    else
+      case Password.issue(embed, params["password"]) do
+        {:ok, session} -> json(conn, session)
+        {:error, :protection_pending} -> password_error(conn, 409, "protection_pending")
+        {:error, :playback_unavailable} -> password_error(conn, 503, "playback_unavailable")
+        _ -> password_error(conn, 401, "invalid_password")
+      end
+    end
+  end
+
+  defp password_error(conn, status, error),
+    do: conn |> put_status(status) |> json(%{error: error})
 
   def show(conn, %{"id" => id, "path" => path} = params) do
     conn = private_response(conn)

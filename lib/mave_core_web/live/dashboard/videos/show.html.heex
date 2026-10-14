@@ -234,7 +234,7 @@
 
         <.dropdown_button id="video-actions" menu_class="w-40">
           <:item
-            :if={MaveCore.Playback.available?(@current_space)}
+            :if={MaveCore.Playback.available?(@current_space) and not MaveCore.Playback.Password.protected?(@resource_embed)}
             id="video-playback-visibility"
             icon={if @resource_embed.playback_visibility == :private, do: "hero-lock-open", else: "hero-lock-closed"}
             phx-click="toggle_playback_visibility"
@@ -259,6 +259,12 @@
 
     <div class="flex-1 overflow-y-auto">
       <div class="max-w-screen-xl mx-auto px-16 pt-8 pb-24">
+        <.password_access
+          :if={MaveCore.Playback.available?(@current_space)}
+          embed={@resource_embed}
+          form={@password_form}
+          error={@password_error}
+        />
         <.video_embed_panel
           player_dom_id={@player_dom_id}
           audio_only={match?(%{original: %{audio_only: true}}, @video) and !@replace_mode}

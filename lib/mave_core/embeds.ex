@@ -17,6 +17,7 @@ defmodule MaveCore.Embeds do
   alias MaveCore.Media.RenditionSizing
   alias MaveCore.Media.Storage
   alias MaveCore.Playback.Media, as: PlaybackMedia
+  alias MaveCore.Playback.Password
   alias MaveCore.Repo
   alias MaveCore.Spaces
   alias MaveCore.Spaces.Space
@@ -91,6 +92,8 @@ defmodule MaveCore.Embeds do
     Repo.transaction(fn ->
       with {:ok, current_space} <- lock_active_space(space.id),
            :ok <- UsageLimits.can_create_video_embed?(current_space),
+           {:ok, visibility, password_hash} <-
+             Password.creation_access(current_space, attrs, visibility),
            :ok <- MaveCore.Playback.validate_visibility(current_space, visibility),
            {:ok, asset} <-
              %Asset{}
@@ -106,7 +109,8 @@ defmodule MaveCore.Embeds do
                version: 2,
                archived: archived
              })
-             |> Repo.insert(),
+             |> Changeset.change(password_hash: password_hash)
+             |> Repo.insert(log: false),
            {:ok, embed} <- MaveCore.Playback.initialize_visibility(embed, visibility),
            :ok <- maybe_attach_to_parent(embed, current_space.id, parent_folder_id) do
         preload_embed(embed)
