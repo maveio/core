@@ -34,6 +34,11 @@ config :mave_core, MaveCore.Mailer, adapter: Swoosh.Adapters.Test
 config :swoosh, :api_client, false
 
 config :mave_core, :email_validation, checker: MaveCore.TestSupport.EmailCheckerStub
+
+config :mave_core,
+       :language_detection_provider,
+       MaveCore.TestSupport.LanguageDetectionProviderStub
+
 config :mave_core, :storage_module, MaveCore.TestSupport.FlowStorageAdapterStub
 config :mave_core, :shared_storage_space_hash, "trial"
 

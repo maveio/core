@@ -46,7 +46,8 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
          :ok <- continue_unless_target_language(source_language, target_language),
          {:ok, transcription} <-
            load_transcription(storage_adapter, bucket, transcribe_output, region),
-         source_language = source_language || detect_language_from_text(transcription.text),
+         source_language =
+           source_language || detect_language_from_text(transcription.text, transcribe_output),
          :ok <- continue_unless_target_language(source_language, target_language),
          {:ok, translation} <-
            translate(translation_provider, transcription, source_language, target_language),
@@ -458,7 +459,10 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
 
   defp source_language_from_output(_), do: nil
 
-  defp detect_language_from_text(text) when is_binary(text), do: LanguageDetector.detect(text)
+  defp detect_language_from_text(_text, %{"transcription_language_detection_attempted" => true}),
+    do: nil
+
+  defp detect_language_from_text(text, _output), do: LanguageDetector.detect(text)
 
   defp same_base_language?(left, right) do
     base_language(left) == base_language(right)

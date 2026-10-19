@@ -458,14 +458,24 @@ coordinates the request while the booster performs the encode.
 ## Subtitle language selection
 
 An explicit `transcription_language` takes precedence, followed by the transcription
-provider's language. If neither is available, Core uses local transcript detection
-only when its confidence is at least 0.8, then falls back to audio-track metadata.
-An inconclusive result uses `und` (Unknown language), rather than assuming English.
+provider's language. If neither is available, Core asks Mistral's chat model to
+identify the transcript language. It samples at most 6,000 characters across the
+beginning, middle and end, accepts only a validated language code, and allows the
+model to return an unknown result. Detection uses the existing `MISTRAL_API_KEY`,
+a 15-second receive timeout and no automatic retries.
+
+If detection fails or is inconclusive, audio-track metadata remains a fallback;
+otherwise the result uses `und` (Unknown language), rather than assuming English.
+An explicit or provider-supplied language does not trigger an extra chat request.
+Translation reuses the result without repeating an inconclusive detection.
 
 The transcription step records `transcription_language_source` (`requested`,
-`provider`, `text_detection`, `audio_track`, or `unknown`) and
-`transcription_provider_language` so the selected label can be traced without
-another transcription request.
+`provider`, `text_detection`, `audio_track`, or `unknown`),
+`transcription_provider_language`, and `transcription_language_detection_attempted`.
+The default detector is `MaveCore.Transcription.MistralLanguageDetector` with
+`mistral-small-latest`. Alternative implementations can be configured through
+`:language_detection_provider` (a `detect/1` function returning `{:ok, code_or_nil}`
+or `{:error, reason}`); `:language_detection_model` selects the Mistral model.
 
 ## Useful Test Inputs
 

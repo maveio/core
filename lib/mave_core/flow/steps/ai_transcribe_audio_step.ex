@@ -58,7 +58,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
              region,
              requested_language
            ),
-         {language, language_source} =
+         {language, language_source, detection_attempted?} =
            subtitle_language(
              detected_language,
              requested_language,
@@ -108,6 +108,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
         |> Map.merge(mode_meta)
         |> Map.put("transcription_language", language)
         |> Map.put("transcription_language_source", language_source)
+        |> Map.put("transcription_language_detection_attempted", detection_attempted?)
 
       artifacts =
         [
@@ -625,11 +626,19 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
          transcription_text
        ) do
     cond do
-      language = normalize_optional_language(requested_language) -> {language, "requested"}
-      language = normalize_optional_language(detected_language) -> {language, "provider"}
-      language = LanguageDetector.detect(transcription_text) -> {language, "text_detection"}
-      language = transcode_audio_language(transcode_audio_output) -> {language, "audio_track"}
-      true -> {"und", "unknown"}
+      language = normalize_optional_language(requested_language) -> {language, "requested", false}
+      language = normalize_optional_language(detected_language) -> {language, "provider", false}
+      true -> subtitle_language_from_text(transcription_text, transcode_audio_output)
+    end
+  end
+
+  defp subtitle_language_from_text(text, audio_output) do
+    attempted? = is_binary(text) and String.trim(text) != ""
+
+    cond do
+      language = LanguageDetector.detect(text) -> {language, "text_detection", attempted?}
+      language = transcode_audio_language(audio_output) -> {language, "audio_track", attempted?}
+      true -> {"und", "unknown", attempted?}
     end
   end
 
