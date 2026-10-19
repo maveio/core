@@ -596,8 +596,8 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                         </div>
                       </.data_table_grid_cell>
                       <.data_table_grid_cell label={gettext("Timing / Executor")}>
-                        <div class="text-stone-500">{timing_total(step)}</div>
                         <.timing_bar timing={step} id={"step-timing-#{run.id}-#{step.step_id}"} />
+                        <div class="text-stone-500">{timing_total(step)}</div>
                         <div class="mt-1 text-[0.68rem] text-stone-300">
                           {timing_breakdown(step)}
                         </div>
@@ -1400,13 +1400,13 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
     assigns = assign(assigns, :timing, RunTiming.breakdown(assigns.run))
 
     ~H"""
-    <div class="font-medium tabular-nums text-stone-600">{timing_total(@run)}</div>
     <.timing_bar
       :if={@timing}
       timing={@timing}
       id={"run-timing-#{@run.id}"}
       dependency_label={gettext("Dependencies / orchestration")}
     />
+    <div class="font-medium tabular-nums text-stone-600">{timing_total(@run)}</div>
     <div :if={@timing} class="mt-1 text-[0.68rem] text-stone-400">
       {timing_breakdown(@timing)}
     </div>
@@ -1448,7 +1448,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
       id={@id}
       role="img"
       aria-label={timing_breakdown(@timing)}
-      class="mt-2 flex h-2 overflow-hidden rounded-sm bg-stone-100"
+      class="mb-2 flex h-2 overflow-hidden rounded-sm bg-stone-100"
     >
       <span
         :for={segment <- @segments}
