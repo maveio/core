@@ -327,7 +327,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
               <.data_table_grid_header_cell>{gettext("State")}</.data_table_grid_header_cell>
               <.data_table_grid_header_cell>{gettext("Space")}</.data_table_grid_header_cell>
               <.data_table_grid_header_cell>{gettext("Video")}</.data_table_grid_header_cell>
-              <.data_table_grid_header_cell>{gettext("Work")}</.data_table_grid_header_cell>
+              <.data_table_grid_header_cell>{gettext("Steps")}</.data_table_grid_header_cell>
               <.data_table_grid_header_cell>{gettext("Timing")}</.data_table_grid_header_cell>
               <.data_table_grid_header_cell>{gettext("Error")}</.data_table_grid_header_cell>
             </:header>
@@ -353,7 +353,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                     phx-value-run-id={run.id}
                     aria-controls={"run-steps-#{run.id}"}
                     aria-expanded={expanded_run?(@expanded_run_ids, run.id)}
-                    class="mt-px flex h-5 w-5 flex-none items-center justify-center rounded-sm text-stone-300 transition hover:bg-stone-100 hover:text-stone-500"
+                    class="mt-px flex cursor-pointer h-5 w-5 flex-none items-center justify-center rounded-sm text-stone-300 transition hover:bg-stone-100 hover:text-stone-500"
                     title={gettext("Steps")}
                   >
                     <MaveCoreWeb.DashboardComponents.icon
@@ -399,24 +399,15 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                   </span>
                   <.run_embed_action
                     embed_hash={run.public_embed_id || run.embed_hash}
-                    label={run.video_title}
                     action={open_action(run)}
                   />
-                  <div
-                    :if={run.video_title}
-                    class="mt-1 truncate font-mono text-[0.68rem] text-stone-400"
-                  >
-                    {run.public_embed_id || run.embed_hash}
-                  </div>
                   <div class="mt-1 truncate text-xs text-stone-300">
                     {run.template_slug || gettext("custom")}
                     <span :if={run.flow_version_number}>v{run.flow_version_number}</span>
                   </div>
                   <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                    <span class="text-stone-300">{steps_label(run.steps)}</span>
                     <.gpu_encoding_booster_badge steps={run.steps} />
                     <.encoding_booster_badge steps={run.steps} />
-                    <.run_open_action action={open_action(run)} />
                     <.inspection_actions actions={inspection_actions_for(run)} />
                     <button
                       :if={run.recoverable?}
@@ -443,7 +434,29 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                   </div>
                 </.data_table_grid_cell>
 
-                <.data_table_grid_cell label={gettext("Work")}>
+                <.data_table_grid_cell label={gettext("Steps")}>
+                  <button
+                    id={"step-summary-#{run.id}"}
+                    type="button"
+                    phx-click="toggle_steps"
+                    phx-value-run-id={run.id}
+                    aria-controls={"run-steps-#{run.id}"}
+                    aria-expanded={expanded_run?(@expanded_run_ids, run.id)}
+                    class="mb-2 flex cursor-pointer flex-wrap items-center gap-x-2 text-xs text-stone-500 hover:text-stone-700"
+                  >
+                    <span>{gettext("%{done}/%{total} done",
+                      done: Enum.count(run.steps, &(&1.step_status in ["succeeded", "skipped"])),
+                      total: length(run.steps)
+                    )}</span>
+                    <span
+                      :if={Enum.any?(run.steps, &(&1.step_status == "failed"))}
+                      class="font-medium text-red-500"
+                    >
+                      {gettext("%{count} failed",
+                        count: Enum.count(run.steps, &(&1.step_status == "failed"))
+                      )}
+                    </span>
+                  </button>
                   <div :if={run.active_steps != []} class="mb-2 space-y-1">
                     <div
                       :for={step <- Enum.take(run.active_steps, 3)}
@@ -507,7 +520,17 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                 </.data_table_grid_cell>
 
                 <.data_table_grid_cell label={gettext("Error")}>
-                  <div class="truncate text-xs text-red-400/80">{run.error || "-"}</div>
+                  <div id={"run-errors-#{run.id}"} class="space-y-2 text-xs">
+                    <div :for={error <- run_errors(run)} class="min-w-0">
+                      <div :if={error.step_id} class="mb-0.5 font-mono font-medium text-red-600">
+                        {error.step_id}
+                      </div>
+                      <div class="whitespace-pre-wrap break-words text-red-600 [overflow-wrap:anywhere]">
+                        {error.message}
+                      </div>
+                    </div>
+                    <span :if={run_errors(run) == []} class="text-stone-300">-</span>
+                  </div>
                 </.data_table_grid_cell>
               </.data_table_grid_row>
 
@@ -611,7 +634,9 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                         </div>
                       </.data_table_grid_cell>
                       <.data_table_grid_cell label={gettext("Error")}>
-                        <div class="truncate text-red-400/80">{step.error || "-"}</div>
+                        <div class="whitespace-pre-wrap break-words text-red-600 [overflow-wrap:anywhere]">
+                          {step.error || "-"}
+                        </div>
                       </.data_table_grid_cell>
                     </.data_table_grid_row>
                   </.data_table_grid>
@@ -632,7 +657,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   end
 
   defp flow_runs_grid_columns do
-    "@5xl:grid-cols-[6.5rem_minmax(7rem,0.8fr)_minmax(11rem,1.15fr)_minmax(10rem,1fr)_minmax(9rem,0.9fr)_minmax(9rem,1fr)]"
+    "@5xl:grid-cols-[6.5rem_minmax(7rem,0.8fr)_minmax(10rem,1fr)_minmax(11rem,1.1fr)_minmax(7rem,0.7fr)_minmax(13rem,1.4fr)]"
   end
 
   defp flow_run_steps_grid_columns do
@@ -908,7 +933,6 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   end
 
   attr(:embed_hash, :string, default: nil)
-  attr(:label, :string, default: nil)
   attr(:action, :map, default: nil)
 
   defp run_embed_action(%{embed_hash: embed_hash, action: %{method: :post, to: to}} = assigns)
@@ -921,10 +945,10 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
       <input :for={{name, value} <- @hidden} type="hidden" name={name} value={value} />
       <button
         type="submit"
-        title={@label || @embed_hash}
-        class="block max-w-full truncate text-sm font-medium text-blue-500 hover:text-blue-600"
+        title={@embed_hash}
+        class="block max-w-full truncate font-mono text-xs text-blue-500 hover:text-blue-600"
       >
-        {@label || @embed_hash}
+        {@embed_hash}
       </button>
     </.form>
     """
@@ -935,46 +959,17 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
     ~H"""
     <.link
       navigate={@action.to}
-      title={@label || @embed_hash}
-      class="block truncate text-sm font-medium text-blue-500 hover:text-blue-600"
+      title={@embed_hash}
+      class="block truncate font-mono text-xs text-blue-500 hover:text-blue-600"
     >
-      {@label || @embed_hash}
+      {@embed_hash}
     </.link>
     """
   end
 
   defp run_embed_action(assigns) do
     ~H"""
-    <div class="truncate text-sm text-stone-600">{@label || @embed_hash || "-"}</div>
-    """
-  end
-
-  attr(:action, :map, default: nil)
-
-  defp run_open_action(%{action: %{method: :post, to: to}} = assigns) when is_binary(to) do
-    hidden = Map.get(assigns.action, :hidden, [])
-    assigns = assign(assigns, :hidden, hidden)
-
-    ~H"""
-    <.form for={%{}} action={@action.to} method="post">
-      <input :for={{name, value} <- @hidden} type="hidden" name={name} value={value} />
-      <button type="submit" class="text-blue-400 hover:text-blue-500">
-        {Map.get(@action, :label) || gettext("Open")}
-      </button>
-    </.form>
-    """
-  end
-
-  defp run_open_action(%{action: %{method: :get, to: to}} = assigns) when is_binary(to) do
-    ~H"""
-    <.link navigate={@action.to} class="text-blue-400 hover:text-blue-500">
-      {Map.get(@action, :label) || gettext("Open")}
-    </.link>
-    """
-  end
-
-  defp run_open_action(assigns) do
-    ~H"""
+    <div class="truncate font-mono text-xs text-stone-600">{@embed_hash || "-"}</div>
     """
   end
 
@@ -1206,9 +1201,19 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   defp short_id(id) when is_binary(id), do: String.slice(id, 0, 8)
   defp short_id(_id), do: "-"
 
-  defp steps_label([_step]), do: gettext("1 step")
-  defp steps_label(steps) when is_list(steps), do: "#{length(steps)} #{gettext("steps")}"
-  defp steps_label(_steps), do: gettext("0 steps")
+  defp run_errors(run) do
+    errors =
+      for step <- run.steps, is_binary(step.error) and step.error != "" do
+        %{step_id: step.step_id, message: step.error}
+      end
+
+    if is_binary(run.error) and run.error != "" and
+         not Enum.any?(errors, &(&1.message == run.error)) do
+      errors ++ [%{step_id: nil, message: run.error}]
+    else
+      errors
+    end
+  end
 
   defp normalize_performance(nil) do
     %{
