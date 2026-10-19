@@ -209,6 +209,11 @@ defmodule MaveCore.Flow.DiagnosticsTest do
 
     assert [metric] = diagnostics.performance.ffmpeg_metrics
     assert metric.hardware_profile == "scaleway-gp1-s"
+    assert metric.executor == "flame"
+    assert metric.speed_samples == 1
+    assert metric.p50_step_elapsed_ms == 240_000
+    assert metric.p95_step_elapsed_ms == 240_000
+    assert metric.p50_ffmpeg_elapsed_ms == 24_800
     assert metric.step_type == "manifest.build"
     assert metric.codec == "h264"
     assert metric.size == "ladder"
@@ -219,6 +224,54 @@ defmodule MaveCore.Flow.DiagnosticsTest do
     assert metric.p10_speed_x == 2.4
     assert metric.avg_fps == 72.5
     assert metric.p95_ffmpeg_elapsed_ms == 24_800
+  end
+
+  test "encoding performance separates executors and includes work without realtime speed" do
+    space = create_user_space!("ops-executor-performance")
+    now = DateTime.utc_now()
+
+    for {executor, hardware, duration, speed, elapsed} <- [
+          {"encoding_booster", "app-host-a", 10_000, 2.4, 5_000},
+          {"encoding_booster", "app-host-b", 30_000, nil, 15_000},
+          {"encoding_booster", "app-host-c", 5_000, 0, 0},
+          {"gpu_encoding_booster", "app-host-a", 3_000, 4.0, 1_000},
+          {"flame", "local-media", 20_000, 1.2, 12_000}
+        ] do
+      run = create_succeeded_run!(space.hash, "Performance#{duration}")
+
+      Repo.get_by!(StepRun, flow_run_id: run.id, step_id: "manifest")
+      |> StepRun.changeset(%{
+        step_type: "media.transcode_video",
+        started_at: DateTime.add(now, -duration, :millisecond),
+        completed_at: now,
+        execution_metadata: %{
+          "executor" => executor,
+          "runtime" => %{"hardware_profile" => hardware},
+          "progress" => %{
+            "source" => "ffmpeg",
+            "status" => "completed",
+            "codec" => "h264",
+            "size" => "hd",
+            "speed_x" => speed,
+            "ffmpeg_elapsed_ms" => elapsed
+          }
+        }
+      })
+      |> Repo.update!()
+    end
+
+    metrics = Diagnostics.global_diagnostics().performance.ffmpeg_metrics
+    assert length(metrics) == 3
+    cpu = Enum.find(metrics, &(&1.executor == "encoding_booster"))
+    assert cpu.hardware_profile == nil
+    assert cpu.count == 3
+    assert cpu.speed_samples == 1
+    assert cpu.p50_speed_x == 2.4
+    assert cpu.p50_ffmpeg_elapsed_ms == 10_000
+    assert cpu.p50_step_elapsed_ms == 10_000
+    assert cpu.p95_step_elapsed_ms == 28_000
+    assert Enum.find(metrics, &(&1.executor == "gpu_encoding_booster")).hardware_profile == nil
+    assert Enum.find(metrics, &(&1.executor == "flame")).hardware_profile == "local-media"
   end
 
   test "global diagnostics can drill into runs by step type" do

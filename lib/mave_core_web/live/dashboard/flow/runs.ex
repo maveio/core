@@ -638,7 +638,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
       |> assign(:queue_bottleneck, top_metric(performance.step_metrics, :p95_queue_wait_ms))
       |> assign(:execution_bottleneck, top_metric(performance.step_metrics, :p95_execution_ms))
       |> assign(:visible_step_metrics, Enum.take(performance.step_metrics, 6))
-      |> assign(:visible_ffmpeg_metrics, Enum.take(performance.ffmpeg_metrics, 12))
+      |> assign(:visible_ffmpeg_metrics, performance.ffmpeg_metrics)
 
     ~H"""
     <div class="mt-6">
@@ -785,29 +785,40 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
         </div>
       </div>
 
-      <div class="mt-4 overflow-hidden rounded-md ring-1 ring-stone-200/60 bg-white shadow-sm">
+      <div
+        id="encoding-performance"
+        class="mt-4 overflow-hidden rounded-md ring-1 ring-stone-200/60 bg-white shadow-sm"
+      >
         <div class="flex items-center justify-between border-b border-stone-200/60 px-4 py-3">
-          <div class="text-sm font-medium text-stone-600">{gettext("FFmpeg by hardware")}</div>
+          <div class="text-sm font-medium text-stone-600">{gettext("Encoding performance")}</div>
           <div class="text-[0.68rem] uppercase tracking-wide text-stone-300">{@period_label}</div>
         </div>
+        <p class="border-b border-stone-200/60 px-4 py-3 text-xs text-stone-400">
+          {gettext(
+            "Speed is media time processed per second. Step time includes processing, transfers and uploads, excluding queue time. Hardware is shown only when reported by the executing worker."
+          )}
+        </p>
         <div
           :if={@visible_ffmpeg_metrics != []}
           class="grid grid-cols-[minmax(12rem,0.9fr)_minmax(16rem,1.4fr)_5rem_repeat(4,minmax(7rem,0.7fr))] gap-4 border-b border-stone-200/60 bg-stone-50 px-4 py-2 text-[0.68rem] uppercase tracking-wide text-stone-400"
         >
-          <div>{gettext("Hardware")}</div>
+          <div>{gettext("Execution")}</div>
           <div>{gettext("Workload")}</div>
           <div>{gettext("Count")}</div>
           <div>{gettext("Median speed")}</div>
-          <div>{gettext("P10 speed")}</div>
-          <div>{gettext("Avg FPS")}</div>
-          <div>{gettext("P95 FFmpeg")}</div>
+          <div>{gettext("Median FFmpeg")}</div>
+          <div>{gettext("Median step")}</div>
+          <div>{gettext("P95 step")}</div>
         </div>
         <div
           :for={metric <- @visible_ffmpeg_metrics}
           class="grid grid-cols-[minmax(12rem,0.9fr)_minmax(16rem,1.4fr)_5rem_repeat(4,minmax(7rem,0.7fr))] gap-4 border-b border-stone-200/40 px-4 py-3 text-xs text-stone-500 last:border-b-0"
         >
-          <div class="min-w-0 truncate font-mono text-stone-600">
-            {metric.hardware_profile}
+          <div class="min-w-0 text-stone-600">
+            <div>{encoding_executor_label(metric.executor)}</div>
+            <div class="mt-1 truncate text-[0.68rem] text-stone-400">
+              {metric.hardware_profile || gettext("Hardware not reported")}
+            </div>
           </div>
           <div class="min-w-0">
             <div class="truncate font-mono text-stone-600">{metric.step_type}</div>
@@ -816,10 +827,15 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
             </div>
           </div>
           <div>{format_count(metric.count)}</div>
-          <div>{format_speed(metric.p50_speed_x)}</div>
-          <div>{format_speed(metric.p10_speed_x)}</div>
-          <div>{format_fps(metric.avg_fps)}</div>
-          <div>{format_duration(metric.p95_ffmpeg_elapsed_ms)}</div>
+          <div>
+            {format_speed(metric.p50_speed_x)}
+            <div :if={metric.speed_samples != metric.count} class="mt-1 text-[0.68rem] text-stone-400">
+              {gettext("%{count} measured", count: metric.speed_samples)}
+            </div>
+          </div>
+          <div>{format_duration(metric.p50_ffmpeg_elapsed_ms)}</div>
+          <div>{format_duration(metric.p50_step_elapsed_ms)}</div>
+          <div>{format_duration(metric.p95_step_elapsed_ms)}</div>
         </div>
         <div :if={@visible_ffmpeg_metrics == []} class="px-4 py-6 text-sm text-stone-300">
           {gettext("No completed FFmpeg performance samples yet.")}
@@ -1602,6 +1618,12 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
 
   defp performance_elapsed_part(_progress), do: nil
 
+  defp encoding_executor_label("encoding_booster"), do: gettext("CPU booster")
+  defp encoding_executor_label("gpu_encoding_booster"), do: gettext("GPU booster")
+  defp encoding_executor_label("flame"), do: "FLAME"
+  defp encoding_executor_label("inline"), do: gettext("App worker")
+  defp encoding_executor_label(_executor), do: gettext("Unknown executor")
+
   defp ffmpeg_workload_label(metric) do
     [
       present_metric_part(metric.codec),
@@ -1622,10 +1644,14 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
 
   defp ffmpeg_output_profile(%{size: size}), do: present_metric_part(size)
 
-  defp preset_label(preset) when is_binary(preset) and preset != "-", do: "preset #{preset}"
+  defp preset_label(preset) when is_binary(preset) and preset not in ["", "-", "nil"],
+    do: "preset #{preset}"
+
   defp preset_label(_preset), do: nil
 
-  defp present_metric_part(value) when is_binary(value) and value != "-", do: value
+  defp present_metric_part(value) when is_binary(value) and value not in ["", "-", "nil"],
+    do: value
+
   defp present_metric_part(_value), do: nil
 
   defp format_speed(value) when is_number(value), do: "#{Float.round(value * 1.0, 2)}×"
@@ -1636,8 +1662,6 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
 
     if value == trunc(value), do: "#{trunc(value)} fps", else: "#{value} fps"
   end
-
-  defp format_fps(_value), do: "-"
 
   defp duration_part(_label, nil), do: nil
   defp duration_part(label, ms) when is_integer(ms), do: "#{label} #{format_duration(ms)}"
