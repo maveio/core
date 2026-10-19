@@ -80,7 +80,7 @@ defmodule MaveCore.MixProject do
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
-      {:bandit, "~> 1.12.5"},
+      {:bandit, "~> 1.13.1"},
       {:flame_k8s_backend, "~> 0.5.7"},
       {:ch, "~> 0.8.3"},
       {:broadway, "~> 1.0"},
