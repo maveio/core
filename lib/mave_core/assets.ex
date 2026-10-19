@@ -1255,26 +1255,7 @@ defmodule MaveCore.Assets do
   defp normalize_codec(codec, _filename) when is_atom(codec),
     do: codec |> Atom.to_string() |> String.downcase()
 
-  defp normalize_language(nil), do: nil
-
-  defp normalize_language(language) when is_binary(language) do
-    normalized =
-      language
-      |> String.trim()
-      |> String.downcase()
-      |> String.replace("-", "_")
-
-    cond do
-      normalized == "" -> nil
-      byte_size(normalized) >= 2 -> String.slice(normalized, 0, 2)
-      true -> nil
-    end
-  end
-
-  defp normalize_language(language) when is_atom(language),
-    do: normalize_language(Atom.to_string(language))
-
-  defp normalize_language(_), do: nil
+  defp normalize_language(language), do: Languages.normalize_media_language(language)
 
   defp external_poster?(%Embed{settings: settings}) do
     external_poster = settings && settings.external_poster

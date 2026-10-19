@@ -11,6 +11,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeAudioStep do
 
   alias MaveCore.EncodingBooster
   alias MaveCore.Flow.Steps.Support, as: StepSupport
+  alias MaveCore.Languages
   alias MaveCore.Media.{Signature, Storage}
 
   @supported_modes ~w(auto copy ffmpeg)
@@ -50,7 +51,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeAudioStep do
     codec = normalize_param(Map.get(params, "codec"), "mp3")
     container = normalize_param(Map.get(params, "container"), container_for_codec(codec))
     label = normalize_param(Map.get(params, "label"), "Original")
-    language = normalize_param(Map.get(params, "language"), nil)
+    language = Languages.normalize_media_language(Map.get(params, "language"))
     default_track = normalize_boolean(Map.get(params, "default"), true)
     mode = StepSupport.normalize_mode(run_input, "media_transcode_audio_mode", @supported_modes)
     strict? = StepSupport.strict_enabled?(params, run_input, "media_transcode_audio_strict")
@@ -969,23 +970,8 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeAudioStep do
     |> normalize_language(fallback)
   end
 
-  defp normalize_language(nil, fallback), do: fallback
-
-  defp normalize_language(language, fallback) when is_binary(language) do
-    normalized =
-      language
-      |> String.trim()
-      |> String.downcase()
-      |> String.replace("-", "_")
-
-    cond do
-      normalized == "" -> fallback
-      byte_size(normalized) >= 2 -> String.slice(normalized, 0, 2)
-      true -> fallback
-    end
-  end
-
-  defp normalize_language(_language, fallback), do: fallback
+  defp normalize_language(language, fallback),
+    do: Languages.normalize_media_language(language) || fallback
 
   defp map_get(nil, _key), do: nil
 

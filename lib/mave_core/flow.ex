@@ -32,6 +32,7 @@ defmodule MaveCore.Flow do
   alias MaveCore.Flow.Presets
   alias MaveCore.Flow.Steps.MediaTranscodeWaveformStep
   alias MaveCore.Flow.Steps.Support, as: StepSupport
+  alias MaveCore.Languages
   alias MaveCore.LegacyShortUUID
   alias MaveCore.Media.Storage
   alias MaveCore.Repo
@@ -4935,21 +4936,7 @@ defmodule MaveCore.Flow do
   defp normalized_subtitle_path(path) when is_binary(path) and path != "", do: path
   defp normalized_subtitle_path(_path), do: nil
 
-  defp normalized_track_language(value) when is_binary(value) do
-    normalized =
-      value
-      |> String.trim()
-      |> String.downcase()
-      |> String.replace("-", "_")
-
-    cond do
-      normalized in ["", "un", "und"] -> nil
-      byte_size(normalized) >= 2 -> String.slice(normalized, 0, 2)
-      true -> nil
-    end
-  end
-
-  defp normalized_track_language(_value), do: nil
+  defp normalized_track_language(value), do: Languages.normalize_media_language(value)
 
   defp db_rendition_type(%{"type" => "image", "role" => role}) do
     case role do
