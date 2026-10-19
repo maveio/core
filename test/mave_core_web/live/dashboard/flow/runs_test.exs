@@ -78,6 +78,28 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert has_element?(view, "#run-row-#{deleted_run.id}")
   end
 
+  test "performance is collapsed by default and preserves its state while filtering", %{
+    conn: conn
+  } do
+    {admin, conn} = authenticated_conn(conn, "runs-calm-admin@mave.io")
+    run = create_failed_run!(admin.current_space_membership.space.hash, "CalmHistory")
+    {:ok, view, _html} = live(conn, "/flow/runs")
+
+    assert has_element?(view, "#run-row-#{run.id}")
+    assert has_element?(view, "#toggle-performance[aria-expanded=false]")
+    refute has_element?(view, "#flow-performance-panel")
+
+    view |> element("#toggle-performance") |> render_click()
+    assert has_element?(view, "#flow-performance-panel")
+    view |> element("#video-filter-existing") |> render_click()
+    assert has_element?(view, "#flow-performance-panel")
+    assert has_element?(view, "#toggle-performance[aria-expanded=true]")
+
+    view |> element("#toggle-performance") |> render_click()
+    refute has_element?(view, "#flow-performance-panel")
+    assert has_element?(view, "#toggle-performance[aria-expanded=false]")
+  end
+
   test "/flow/runs renders durable dependency, queue, execution, and total timing data", %{
     conn: conn
   } do
@@ -97,6 +119,10 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert html =~ "Runs"
     assert html =~ "Timing"
     assert html =~ "Performance"
+    refute has_element?(view, "#flow-performance-panel")
+    assert has_element?(view, "#toggle-performance[aria-expanded=false]")
+    html = view |> element("#toggle-performance") |> render_click()
+    assert has_element?(view, "#toggle-performance[aria-expanded=true]")
     assert html =~ "Throughput"
     assert html =~ "Slowest steps"
     assert html =~ "Flow p95"
@@ -105,7 +131,6 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert html =~ "Last 24h"
     assert html =~ "P95 queue"
     assert html =~ "inspect-step-manifest-build"
-    assert html =~ "flame / compute-node-1"
     assert html =~ "FailedRuntime"
     assert html =~ "2 steps"
     assert html =~ "total 10m"
@@ -122,9 +147,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
       |> element("#inspect-step-manifest-build")
       |> render_click()
 
-    assert html =~ "Inspecting"
     assert html =~ "manifest.build"
-    assert html =~ "in the runs below"
     assert html =~ "Clear"
     assert html =~ "FailedRuntime"
 
@@ -133,6 +156,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert html =~ "source.resolve"
     assert html =~ "manifest.build"
     assert html =~ "Executor"
+    assert html =~ "flame / compute-node-1"
     assert html =~ "inline / api-node-1"
     assert html =~ "flame-runner-a"
     assert html =~ "flame call 4m"
@@ -239,8 +263,9 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     run = create_succeeded_run!(space.hash, "FfmpegRuntime")
     put_ffmpeg_performance!(run.id)
 
-    {:ok, view, html} = live(conn, "/flow/runs?status=succeeded")
+    {:ok, view, _html} = live(conn, "/flow/runs?status=succeeded")
 
+    html = view |> element("#toggle-performance") |> render_click()
     assert html =~ "Encoding performance"
     assert html =~ "scaleway-gp1-s"
     assert html =~ "Median speed"
@@ -248,9 +273,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert html =~ "Median step"
     assert html =~ "P95 step"
     assert html =~ "FLAME"
-    assert html =~ "2.4× realtime"
-    assert html =~ "72.5 fps"
-    assert html =~ "24s FFmpeg"
+    assert html =~ "2.4×"
     assert html =~ "sd, hd"
     assert html =~ "preset veryfast"
 
@@ -272,6 +295,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
 
     step |> StepRun.changeset(%{execution_metadata: metadata}) |> Repo.update!()
     {:ok, view, _html} = live(conn, "/flow/runs")
+    view |> element("#toggle-performance") |> render_click()
     assert has_element?(view, "#encoding-performance", "CPU booster")
     assert has_element?(view, "#encoding-performance", "Hardware not reported")
     refute has_element?(view, "#encoding-performance", "dispatch-worker-hardware")
@@ -320,11 +344,11 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert html =~ "Booster used"
     assert html =~ "Booster → FLAME (busy)"
     assert html =~ "Booster not used"
-    assert html =~ "~2.4× realtime / 24s FFmpeg"
     refute html =~ "~42% encoding (estimated)"
 
     html = render_click(view, "toggle_steps", %{"run-id" => used_run.id})
     assert html =~ "Booster used"
+    assert html =~ "~2.4× realtime / 24s FFmpeg"
   end
 
   test "/flow/runs identifies GPU booster use and CPU fallback", %{conn: conn} do
@@ -424,7 +448,6 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
 
     {:ok, _view, html} = live(conn, "/flow/runs?status=succeeded&step_type=source.resolve")
 
-    assert html =~ "Inspecting"
     assert html =~ "source.resolve"
     assert html =~ "SourceRuntime"
     assert html =~ "step total 30s"
@@ -465,14 +488,14 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
 
     assert html =~ "BucketRuntime"
     assert html =~ "OldBucketRuntime"
-    assert html =~ bucket_id
+    view |> element("#toggle-performance") |> render_click()
+    assert has_element?(view, "##{bucket_id}")
 
     html =
       view
       |> element("##{bucket_id}")
       |> render_click()
 
-    assert html =~ "Inspecting"
     assert html =~ "UTC"
     assert html =~ "Clear time"
     assert html =~ "BucketRuntime"

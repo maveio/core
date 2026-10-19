@@ -19,6 +19,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
      |> assign(:page_title, gettext("Runs"))
      |> assign(:operations_enabled, Admin.dashboard_enabled_for?(socket.assigns.current_user))
      |> assign(:operations, nil)
+     |> assign(:performance_open, false)
      |> assign(:retrying, nil)
      |> assign(:recovering, nil)
      |> assign(:page, 1)
@@ -83,6 +84,10 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
            socket.assigns.video_status
          )
      )}
+  end
+
+  def handle_event("toggle_performance", _params, socket) do
+    {:noreply, update(socket, :performance_open, &(!&1))}
   end
 
   def handle_event("toggle_steps", %{"run-id" => run_id}, socket) do
@@ -176,70 +181,88 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
         class="min-h-0 flex-1 overflow-y-auto"
       >
         <div class="max-w-screen-xl px-16 mx-auto pt-8 pb-24">
-          <div class="grid grid-cols-6 gap-3">
-            <.ops_stat
-              label={gettext("All")}
-              value={@operations.status_counts.total}
-              patch={runs_path(1, "all", @step_type, @time_window, @video_status)}
-              active={@status == "all"}
-            />
-            <.ops_stat
-              label={gettext("Queued")}
-              value={@operations.status_counts.queued}
-              patch={runs_path(1, "queued", @step_type, @time_window, @video_status)}
-              active={@status == "queued"}
-            />
-            <.ops_stat
-              label={gettext("Running")}
-              value={@operations.status_counts.running}
-              detail={
-                gettext(
-                  "%{executing} executing · %{awaiting} awaiting work · %{published} playable/background",
-                  executing: @operations.status_counts.executing,
-                  awaiting: @operations.status_counts.awaiting_work,
-                  published: @operations.status_counts.published_background
-                )
-              }
-              patch={runs_path(1, "running", @step_type, @time_window, @video_status)}
-              active={@status == "running"}
-            />
-            <.ops_stat
-              label={gettext("Succeeded")}
-              value={@operations.status_counts.succeeded}
-              patch={runs_path(1, "succeeded", @step_type, @time_window, @video_status)}
-              active={@status == "succeeded"}
-            />
-            <.ops_stat
-              label={gettext("Failed")}
-              value={@operations.status_counts.failed}
-              patch={runs_path(1, "failed", @step_type, @time_window, @video_status)}
-              active={@status == "failed"}
-              tone="error"
-            />
-            <.ops_stat
-              label={gettext("Cancelled")}
-              value={@operations.status_counts.cancelled}
-              patch={runs_path(1, "cancelled", @step_type, @time_window, @video_status)}
-              active={@status == "cancelled"}
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <nav aria-label={gettext("Run status")} class="flex flex-wrap items-center gap-1">
+              <.ops_stat
+                label={gettext("All")}
+                value={@operations.status_counts.total}
+                patch={runs_path(1, "all", @step_type, @time_window, @video_status)}
+                active={@status == "all"}
+              />
+              <.ops_stat
+                label={gettext("Queued")}
+                value={@operations.status_counts.queued}
+                patch={runs_path(1, "queued", @step_type, @time_window, @video_status)}
+                active={@status == "queued"}
+              />
+              <.ops_stat
+                label={gettext("Running")}
+                value={@operations.status_counts.running}
+                detail={
+                  gettext(
+                    "%{executing} executing · %{awaiting} awaiting work · %{published} playable/background",
+                    executing: @operations.status_counts.executing,
+                    awaiting: @operations.status_counts.awaiting_work,
+                    published: @operations.status_counts.published_background
+                  )
+                }
+                patch={runs_path(1, "running", @step_type, @time_window, @video_status)}
+                active={@status == "running"}
+              />
+              <.ops_stat
+                label={gettext("Succeeded")}
+                value={@operations.status_counts.succeeded}
+                patch={runs_path(1, "succeeded", @step_type, @time_window, @video_status)}
+                active={@status == "succeeded"}
+              />
+              <.ops_stat
+                label={gettext("Failed")}
+                value={@operations.status_counts.failed}
+                patch={runs_path(1, "failed", @step_type, @time_window, @video_status)}
+                active={@status == "failed"}
+                tone="error"
+              />
+              <.ops_stat
+                label={gettext("Cancelled")}
+                value={@operations.status_counts.cancelled}
+                patch={runs_path(1, "cancelled", @step_type, @time_window, @video_status)}
+                active={@status == "cancelled"}
+              />
+            </nav>
+
+            <button
+              id="toggle-performance"
+              type="button"
+              phx-click="toggle_performance"
+              aria-expanded={to_string(@performance_open)}
+              aria-controls="flow-performance-panel"
+              class="inline-flex items-center gap-1.5 text-xs text-stone-400 transition hover:text-stone-600"
+            >
+              <MaveCoreWeb.DashboardComponents.icon name="hero-chart-bar" class="size-4" />
+              {gettext("Performance")}
+              <MaveCoreWeb.DashboardComponents.icon
+                name="hero-chevron-down"
+                class={["size-3 transition-transform", @performance_open && "rotate-180"]}
+              />
+            </button>
+          </div>
+
+          <div :if={@performance_open} id="flow-performance-panel" class="mt-4">
+            <.performance_panel
+              performance={@operations.performance}
+              status={@status}
+              selected_step_type={@step_type}
+              selected_time_window={@time_window}
+              video_status={@video_status}
             />
           </div>
 
-          <.performance_panel
-            performance={@operations.performance}
-            status={@status}
-            selected_step_type={@step_type}
-            selected_time_window={@time_window}
-            video_status={@video_status}
-          />
-
           <div
             :if={@step_type}
-            class="mt-4 flex items-center justify-between rounded-md border border-blue-200/70 bg-blue-50/70 px-4 py-3 text-sm"
+            class="mt-3 inline-flex items-center gap-3 rounded bg-stone-100 px-2.5 py-1.5 text-xs"
           >
-            <div class="min-w-0 text-blue-700">
-              {gettext("Inspecting")}
+            <div class="min-w-0 text-stone-500">
               <span class="font-mono">{@step_type}</span>
-              <span class="text-blue-400">{gettext("in the runs below")}</span>
             </div>
             <.link
               patch={runs_path(1, @status, nil, @time_window, @video_status)}
@@ -251,12 +274,10 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
 
           <div
             :if={@time_window}
-            class="mt-4 flex items-center justify-between rounded-md border border-blue-200/70 bg-blue-50/70 px-4 py-3 text-sm"
+            class="mt-3 inline-flex items-center gap-3 rounded bg-stone-100 px-2.5 py-1.5 text-xs"
           >
-            <div class="min-w-0 text-blue-700">
-              {gettext("Inspecting")}
+            <div class="min-w-0 text-stone-500">
               <span class="font-mono">{time_window_label(@time_window)}</span>
-              <span class="text-blue-400">{gettext("in the runs below")}</span>
             </div>
             <.link
               patch={runs_path(1, @status, @step_type, nil, @video_status)}
@@ -414,15 +435,6 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                   <div class="truncate text-sm text-stone-500">{run.step_type || "-"}</div>
                   <div class="mt-1 truncate font-mono text-[0.68rem] text-stone-300">
                     {run.step_id || "-"} - {run.step_status || run.status}
-                  </div>
-                  <div class="mt-1 truncate text-[0.68rem] text-stone-300">
-                    {execution_label(run.execution_metadata)}
-                  </div>
-                  <div
-                    :if={ffmpeg_performance_label(run.execution_metadata)}
-                    class="mt-1 truncate text-[0.68rem] text-blue-400"
-                  >
-                    {ffmpeg_performance_label(run.execution_metadata)}
                   </div>
                   <div
                     :if={execution_progress_percent(run.execution_metadata, run.step_status)}
@@ -596,26 +608,22 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
     ~H"""
     <.link
       patch={@patch}
+      title={@detail}
+      aria-current={if @active, do: "page", else: nil}
       class={[
-        "rounded-md border px-4 py-3 transition",
-        @active && "border-blue-400 bg-blue-50/60 shadow-sm",
-        !@active && "border-stone-200/60 hover:border-blue-300 hover:bg-stone-50"
+        "inline-flex items-center gap-2 rounded-md px-3 py-2 text-xs transition",
+        @active && "bg-stone-100 text-stone-700",
+        !@active && "text-stone-400 hover:bg-stone-50 hover:text-stone-600"
       ]}
     >
-      <div class={["text-xs", @active && "text-blue-500", !@active && "text-stone-300"]}>
-        {@label}
-      </div>
-      <div class={[
-        "mt-2 text-2xl font-medium",
-        @active && "text-blue-600",
-        !@active && @tone == "error" && "text-red-500",
-        !@active && @tone != "error" && "text-stone-600"
+      <span>{@label}</span>
+      <span class={[
+        "tabular-nums",
+        @tone == "error" && @value > 0 && "text-red-400",
+        @tone != "error" && "text-stone-500"
       ]}>
-        {@value}
-      </div>
-      <div :if={@detail} class="mt-1 text-[0.68rem] text-stone-400">
-        {@detail}
-      </div>
+        {format_count(@value)}
+      </span>
     </.link>
     """
   end
