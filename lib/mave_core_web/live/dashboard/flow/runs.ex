@@ -25,7 +25,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
      |> assign(:page, 1)
      |> assign(:total_pages, 0)
      |> assign(:status, "all")
-     |> assign(:video_status, "all")
+     |> assign(:video_status, "existing")
      |> assign(:step_type, nil)
      |> assign(:time_window, nil)
      |> assign(:expanded_run_ids, MapSet.new())
@@ -184,7 +184,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
           <div class="flex flex-wrap items-center justify-between gap-3">
             <nav aria-label={gettext("Run status")} class="flex flex-wrap items-center gap-1">
               <.ops_stat
-                label={gettext("All")}
+                label={gettext("All runs")}
                 value={@operations.status_counts.total}
                 patch={runs_path(1, "all", @step_type, @time_window, @video_status)}
                 active={@status == "all"}
@@ -293,9 +293,9 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
               <.link
                 :for={
                   {label, value} <- [
-                    {gettext("All videos"), "all"},
-                    {gettext("Existing videos"), "existing"},
-                    {gettext("Deleted videos"), "deleted"}
+                    {gettext("Not deleted"), "existing"},
+                    {gettext("Deleted"), "deleted"},
+                    {gettext("All videos"), "all"}
                   ]
                 }
                 id={"video-filter-#{value}"}
@@ -632,7 +632,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   attr(:status, :string, default: "all")
   attr(:selected_step_type, :string, default: nil)
   attr(:selected_time_window, :any, default: nil)
-  attr(:video_status, :string, default: "all")
+  attr(:video_status, :string, default: "existing")
 
   defp performance_panel(assigns) do
     performance = normalize_performance(assigns.performance)
@@ -1057,7 +1057,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
       %{}
       |> maybe_put("page", page, page > 1)
       |> maybe_put("status", status, status != "all")
-      |> maybe_put("video_status", video_status, video_status != "all")
+      |> maybe_put("video_status", video_status, video_status != "existing")
       |> maybe_put("step_type", step_type, is_binary(step_type) and step_type != "")
       |> maybe_put(
         "time_from",
@@ -1079,8 +1079,8 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   defp maybe_put(params, key, value, true), do: Map.put(params, key, value)
   defp maybe_put(params, _key, _value, false), do: params
 
-  defp parse_video_status(status) when status in ["existing", "deleted"], do: status
-  defp parse_video_status(_status), do: "all"
+  defp parse_video_status(status) when status in ["all", "existing", "deleted"], do: status
+  defp parse_video_status(_status), do: "existing"
 
   defp parse_status(status) when status in @statuses, do: status
   defp parse_status(_status), do: "all"

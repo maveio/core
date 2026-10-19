@@ -52,7 +52,7 @@ defmodule MaveCore.Flow.Diagnostics do
       generated_at: now,
       stale_minutes: stale_minutes,
       since_hours: since_hours,
-      status_counts: status_counts(nil),
+      status_counts: status_counts(nil, video_status),
       performance: performance_summary(nil, since, since_hours, now),
       status: status,
       step_type_filter: step_type,
@@ -99,7 +99,7 @@ defmodule MaveCore.Flow.Diagnostics do
       generated_at: now,
       stale_minutes: stale_minutes,
       since_hours: since_hours,
-      status_counts: status_counts(space),
+      status_counts: status_counts(space, video_status),
       performance: performance_summary(space, since, since_hours, now),
       status: status,
       step_type_filter: step_type,
@@ -440,10 +440,11 @@ defmodule MaveCore.Flow.Diagnostics do
     |> Repo.one()
   end
 
-  defp status_counts(space_or_nil) do
+  defp status_counts(space_or_nil, video_status) do
     counts =
       Run
       |> maybe_filter_space(space_or_nil)
+      |> maybe_filter_video_status(video_status)
       |> group_by([run], run.status)
       |> select([run], {run.status, count(run.id)})
       |> Repo.all()
@@ -453,6 +454,7 @@ defmodule MaveCore.Flow.Diagnostics do
       Run
       |> where([run], run.status == "running")
       |> maybe_filter_space(space_or_nil)
+      |> maybe_filter_video_status(video_status)
       |> join(:left, [run], step_run in StepRun, on: step_run.flow_run_id == run.id)
       |> select([run, step_run], %{
         executing:
