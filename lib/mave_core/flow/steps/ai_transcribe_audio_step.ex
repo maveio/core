@@ -15,27 +15,6 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
   alias MaveCore.Media.Storage
   alias MaveCore.Transcription.LanguageDetector
 
-  @language_stopwords %{
-    "nl" => ~w(
-      de het een en van voor met dat die dit op aan als ook niet wel naar je jij we wij
-      te om maar zijn is was wordt door bij uit over nog dan hier daar
-    ),
-    "en" => ~w(
-      the a and of for with that this on in to is are was were be by from at it not
-      as you we they your our their have has had
-    ),
-    "de" => ~w(
-      der die das und ist nicht ein eine mit von auf zu im den dem des für aus auch
-      wir sie ich du
-    ),
-    "fr" => ~w(
-      le la les de des et est pour avec dans sur que qui un une du au aux pas nous vous
-    ),
-    "es" => ~w(
-      el la los las de del y es para con que en un una por no se como
-    )
-  }
-
   @impl true
   def run(step_definition, context) do
     run_input = Map.get(context, :run_input, %{})
@@ -79,7 +58,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
              region,
              requested_language
            ),
-         language =
+         {language, language_source} =
            subtitle_language(
              detected_language,
              requested_language,
@@ -128,6 +107,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
         }
         |> Map.merge(mode_meta)
         |> Map.put("transcription_language", language)
+        |> Map.put("transcription_language_source", language_source)
 
       artifacts =
         [
@@ -231,8 +211,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
            ),
          {:ok, vtt_body} <- transcription_to_vtt(transcription, inspect_output),
          {:ok, subtitle_json} <- transcription_to_json(transcription) do
-      language =
-        normalize_optional_language(transcription[:language] || requested_language)
+      language = normalize_optional_language(transcription[:language])
 
       meta =
         transcription
@@ -374,6 +353,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
     %{
       "provider" => inspect(provider),
       "transcription_language" => normalize_optional_language(language),
+      "transcription_provider_language" => normalize_optional_language(language),
       "transcription_text" => text,
       "transcription_segments_count" => length(segments || [])
     }
@@ -622,20 +602,16 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
   end
 
   defp normalize_optional_language(language) when is_binary(language) do
-    language
-    |> String.trim()
-    |> case do
-      "" ->
+    normalized = language |> String.trim() |> String.downcase() |> String.replace("_", "-")
+
+    case Languages.normalize_media_language(normalized) do
+      nil ->
         nil
 
-      trimmed ->
-        trimmed
-        |> String.downcase()
-        |> String.replace("_", "-")
-        |> case do
-          "un" -> nil
-          "und" -> nil
-          normalized -> normalized
+      code ->
+        case String.split(normalized, "-", parts: 2) do
+          [_base, region] -> "#{code}-#{region}"
+          [_base] -> code
         end
     end
   end
@@ -648,11 +624,13 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
          transcode_audio_output,
          transcription_text
        ) do
-    normalize_optional_language(detected_language) ||
-      detect_language_from_text(transcription_text) ||
-      normalize_optional_language(requested_language) ||
-      transcode_audio_language(transcode_audio_output) ||
-      "en"
+    cond do
+      language = normalize_optional_language(requested_language) -> {language, "requested"}
+      language = normalize_optional_language(detected_language) -> {language, "provider"}
+      language = LanguageDetector.detect(transcription_text) -> {language, "text_detection"}
+      language = transcode_audio_language(transcode_audio_output) -> {language, "audio_track"}
+      true -> {"und", "unknown"}
+    end
   end
 
   defp transcode_audio_language(%{"audio_tracks" => tracks}) when is_list(tracks) do
@@ -669,37 +647,11 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
 
   defp transcode_audio_language(_), do: nil
 
-  defp detect_language_from_text(text) when is_binary(text) do
-    LanguageDetector.detect(text) || heuristic_language_from_text(text)
-  end
-
-  defp detect_language_from_text(_), do: nil
-
-  defp heuristic_language_from_text(text) when is_binary(text) do
-    words =
-      text
-      |> String.downcase()
-      |> String.replace(~r/[^[:alpha:]\s'-]/u, " ")
-      |> String.split(~r/\s+/, trim: true)
-
-    if length(words) < 3 do
-      nil
-    else
-      {language, score} =
-        @language_stopwords
-        |> Enum.map(fn {language, stopwords} ->
-          count = Enum.count(words, &(&1 in stopwords))
-          {language, count}
-        end)
-        |> Enum.max_by(fn {_language, count} -> count end, fn -> {nil, 0} end)
-
-      if score > 0, do: language, else: nil
-    end
-  end
-
   defp normalize_label(label, _language) when is_binary(label) and label != "" do
     String.trim(label)
   end
+
+  defp normalize_label(_label, "und"), do: "Unknown language"
 
   defp normalize_label(_label, language) do
     language

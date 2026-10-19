@@ -283,7 +283,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
     assert output["transcription_language"] == "nl"
   end
 
-  test "falls back to english when provider returns an unknown language code" do
+  test "keeps the language unknown when provider and short text are inconclusive" do
     step_definition = %{
       "id" => "transcribe_audio",
       "type" => "ai.transcribe_audio"
@@ -323,10 +323,10 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
 
     assert {:ok, output, _artifacts} = AiTranscribeAudioStep.run(step_definition, context)
     assert output["status"] == "ok"
-    assert output["language"] == "nl"
-    assert output["subtitle"]["label"] == "Dutch"
-    assert output["transcription_language"] == "nl"
-    assert output["subtitle_key"] == "LeDE9v86ye/subtitle_nl.vtt"
+    assert output["language"] == "und"
+    assert output["subtitle"]["label"] == "Unknown language"
+    assert output["transcription_language"] == "und"
+    assert output["subtitle_key"] == "LeDE9v86ye/subtitle_und.vtt"
   end
 
   test "falls back to english when language is unknown and transcript text does not detect another language" do
@@ -375,6 +375,55 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
     assert output["subtitle_key"] == "LeDE9v86ye/subtitle_en.vtt"
   end
 
+  test "detects Italian from the transcript when the provider omits its language" do
+    context = language_context(nil, italian_text())
+
+    assert {:ok, output, _artifacts} =
+             AiTranscribeAudioStep.run(%{"id" => "transcribe_audio"}, context)
+
+    assert output["language"] == "it"
+    assert output["subtitle"]["label"] == "Italian"
+    assert output["transcription_language_source"] == "text_detection"
+    assert output["transcription_provider_language"] == nil
+  end
+
+  test "uses the provider language before audio tags or text detection" do
+    context = language_context("ita", "la de un", audio_language: "es")
+
+    assert {:ok, output, _artifacts} =
+             AiTranscribeAudioStep.run(%{"id" => "transcribe_audio"}, context)
+
+    assert output["language"] == "it"
+    assert output["transcription_language_source"] == "provider"
+    assert output["transcription_provider_language"] == "it"
+  end
+
+  test "an explicit language setting takes precedence over the provider" do
+    context = language_context("es", italian_text(), requested_language: "it")
+
+    assert {:ok, output, _artifacts} =
+             AiTranscribeAudioStep.run(%{"id" => "transcribe_audio"}, context)
+
+    assert output["language"] == "it"
+    assert output["transcription_language_source"] == "requested"
+    assert output["transcription_provider_language"] == "es"
+  end
+
+  test "ambiguous text uses audio metadata or remains unknown" do
+    for {audio_language, expected, source} <- [
+          {"it", "it", "audio_track"},
+          {nil, "und", "unknown"}
+        ] do
+      context = language_context(nil, "ciao", audio_language: audio_language)
+
+      assert {:ok, output, _artifacts} =
+               AiTranscribeAudioStep.run(%{"id" => "transcribe_audio"}, context)
+
+      assert output["language"] == expected
+      assert output["transcription_language_source"] == source
+    end
+  end
+
   test "returns error in strict mode when transcription input is missing" do
     step_definition = %{
       "id" => "transcribe_audio",
@@ -398,6 +447,40 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
 
   defp restore_env(key, nil), do: Application.delete_env(:mave_core, key)
   defp restore_env(key, value), do: Application.put_env(:mave_core, key, value)
+
+  defp italian_text do
+    "La nostra azienda si occupa di offrire un servizio di qualità per tutte le persone che desiderano imparare qualcosa di nuovo."
+  end
+
+  defp language_context(provider_language, text, opts \\ []) do
+    Application.put_env(:mave_core, :transcription_provider, __MODULE__.LanguageProviderStub)
+    Process.put(:language_test_response, %{text: text, language: provider_language, segments: []})
+    key = "LanguageTest/audio.mp3"
+
+    {:ok, _} =
+      FlowStorageAdapterStub.put("space-abcde", key, "language-test-audio", "audio/mpeg", nil)
+
+    %{
+      run_input: %{
+        "space_hash" => "abcde",
+        "embed_hash" => "LanguageTest",
+        "transcription_language" => Keyword.get(opts, :requested_language)
+      },
+      dependency_outputs: %{
+        "inspect_media" => %{"duration" => 8.0},
+        "transcode_audio" => %{
+          "key" => key,
+          "audio_tracks" => [
+            %{"default" => true, "language" => Keyword.get(opts, :audio_language)}
+          ]
+        }
+      }
+    }
+  end
+
+  defmodule LanguageProviderStub do
+    def transcribe("language-test-audio", _opts), do: {:ok, Process.get(:language_test_response)}
+  end
 
   defmodule TranscriptionProviderStub do
     def transcribe("mp3-binary", opts) do

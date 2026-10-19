@@ -455,6 +455,18 @@ Core includes the matching encoder image source and configuration guidance in
 [`deploy/encoding-booster`](../deploy/encoding-booster/README.md). Oban
 coordinates the request while the booster performs the encode.
 
+## Subtitle language selection
+
+An explicit `transcription_language` takes precedence, followed by the transcription
+provider's language. If neither is available, Core uses local transcript detection
+only when its confidence is at least 0.8, then falls back to audio-track metadata.
+An inconclusive result uses `und` (Unknown language), rather than assuming English.
+
+The transcription step records `transcription_language_source` (`requested`,
+`provider`, `text_detection`, `audio_track`, or `unknown`) and
+`transcription_provider_language` so the selected label can be traced without
+another transcription request.
+
 ## Useful Test Inputs
 
 - `source_body` + `source_content_type`: bypass remote fetch and run with inline bytes.
