@@ -1418,27 +1418,31 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   attr(:dependency_label, :string, default: nil)
 
   defp timing_bar(assigns) do
-    segments = [
+    phases = [
       %{
         key: "deps",
+        kind: :dependency,
         label: assigns.dependency_label || gettext("Dependencies"),
         ms: assigns.timing.step_dependency_wait_ms,
         class: "bg-stone-300"
       },
       %{
         key: "queue",
+        kind: :queue,
         label: gettext("Queue"),
         ms: assigns.timing.step_queue_wait_ms,
         class: "bg-amber-400"
       },
       %{
         key: "exec",
+        kind: :execution,
         label: gettext("Execution"),
         ms: assigns.timing.step_execution_ms,
         class: "bg-blue-400"
       }
     ]
 
+    segments = timing_segments(assigns.timing, phases)
     total = Enum.reduce(segments, 0, fn segment, sum -> sum + max(segment.ms || 0, 0) end)
     assigns = assign(assigns, segments: segments, total: total)
 
@@ -1454,13 +1458,43 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
         :for={segment <- @segments}
         :if={is_integer(segment.ms) and segment.ms > 0}
         id={"#{@id}-#{segment.key}"}
-        title={"#{segment.label}: #{format_duration(segment.ms)}"}
-        class={["h-full", segment.class]}
+        title={timing_segment_title(segment)}
+        data-phase={segment.phase}
+        data-from-ms={Map.get(segment, :from_ms)}
+        data-to-ms={Map.get(segment, :to_ms)}
+        class={["h-full min-w-0 border-r border-white/50 last:border-r-0", segment.class]}
         style={"width: #{duration_percent(segment.ms, @total)}%;"}
       ></span>
     </div>
     """
   end
+
+  defp timing_segments(%{segments: segments}, phases) do
+    segments
+    |> Enum.with_index()
+    |> Enum.map(fn {segment, index} ->
+      phase = Enum.find(phases, &(&1.kind == segment.kind))
+
+      Map.merge(phase, %{
+        key: "#{phase.key}-#{index}",
+        phase: phase.key,
+        ms: segment.to_ms - segment.from_ms,
+        from_ms: segment.from_ms,
+        to_ms: segment.to_ms,
+        step_ids: segment.step_ids
+      })
+    end)
+  end
+
+  defp timing_segments(_timing, phases), do: Enum.map(phases, &Map.put(&1, :phase, &1.key))
+
+  defp timing_segment_title(%{from_ms: from, to_ms: to, step_ids: steps} = segment) do
+    range = "#{format_duration(from)}–#{format_duration(to)}"
+    label = "#{segment.label}: #{format_duration(segment.ms)}"
+    Enum.join([range, label] ++ steps, " · ")
+  end
+
+  defp timing_segment_title(segment), do: "#{segment.label}: #{format_duration(segment.ms)}"
 
   defp execution_label(metadata) when is_map(metadata) do
     executor = Map.get(metadata, "executor") || "-"
