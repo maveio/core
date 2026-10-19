@@ -4812,6 +4812,82 @@ defmodule MaveCore.FlowTest do
     assert get_in(transcribe_step.output, ["subtitle", "language"]) == "en"
   end
 
+  test "finalization normalizes persisted audio and subtitle language codes" do
+    {:ok, template} =
+      Flow.create_template(%{
+        "slug" => "media-languages-#{System.unique_integer([:positive])}",
+        "name" => "Media Languages"
+      })
+
+    {:ok, _version} =
+      Flow.create_version(template.id, %{
+        "definition" => %{
+          "steps" => [
+            %{"id" => "audio", "type" => "media.transcode_audio", "name" => "Audio"},
+            %{"id" => "subtitles", "type" => "ai.transcribe_audio", "name" => "Subtitles"}
+          ]
+        }
+      })
+
+    space = space_fixture()
+    {:ok, embed} = Embeds.create_video_embed(space, %{name: "Media Languages"})
+
+    {:ok, embed} =
+      Embeds.begin_video_upload(space.hash, embed.hash, %{
+        "title" => "Media Languages.mp4",
+        "source_url" => "https://example.com/media.mp4",
+        "upload_size" => 15
+      })
+
+    {:ok, run} =
+      Flow.start_run(
+        template.slug,
+        %{"space_hash" => space.hash, "embed_hash" => embed.hash},
+        enqueue: false
+      )
+
+    tracks =
+      for {language, index} <- Enum.with_index(["jpn", "ger", "haw", "und", "xxx"]) do
+        %{
+          "language" => language,
+          "filename" => "track_#{index}.mp3",
+          "codec" => "mp3",
+          "label" => "https://example.com/audio-label"
+        }
+      end
+
+    for {step_id, output} <- [
+          {"audio", %{"status" => "ok", "audio_tracks" => tracks}},
+          {"subtitles",
+           %{
+             "status" => "ok",
+             "subtitles" => [%{"language" => "fre", "path" => "subtitle_fr.vtt"}]
+           }}
+        ] do
+      Repo.get_by!(StepRun, flow_run_id: run.id, step_id: step_id)
+      |> StepRun.changeset(%{status: "succeeded", output: output})
+      |> Repo.update!()
+    end
+
+    assert {:ok, %{status: "succeeded"}} = Flow.reconcile_run(run.id, enqueue_jobs: false)
+    video_id = embed.asset.current_video_id
+    tracks = Repo.all(from(track in AudioTrack, where: track.video_id == ^video_id))
+    languages = Map.new(tracks, &{&1.filename, &1.language})
+
+    assert languages == %{
+             "track_0.mp3" => "ja",
+             "track_1.mp3" => "de",
+             "track_2.mp3" => "haw",
+             "track_3.mp3" => nil,
+             "track_4.mp3" => nil
+           }
+
+    assert Enum.all?(tracks, &(&1.label == "https://example.com/audio-label"))
+
+    assert [%Subtitle{language: "fr"}] =
+             Repo.all(from(s in Subtitle, where: s.video_id == ^video_id))
+  end
+
   test "run_inline projects inspect metadata and finished renditions onto the current video" do
     assert {:ok, _installed} = Flow.install_preset("publish_local")
 
@@ -4886,6 +4962,7 @@ defmodule MaveCore.FlowTest do
           "media_package_hls_audio_strict" => false,
           "media_build_hls_master_strict" => false,
           "transcription_text" => "Hello world from projected upload",
+          "transcription_language" => "en",
           "media_probe" => %{
             "duration" => 12.5,
             "size_bytes" => 654_321,
@@ -4900,6 +4977,10 @@ defmodule MaveCore.FlowTest do
               },
               %{
                 "codec_type" => "audio",
+                "tags" => %{
+                  "language" => "jpn",
+                  "title" => "https://example.com/audio-label"
+                },
                 "bit_rate" => "128000"
               }
             ]
@@ -4984,7 +5065,8 @@ defmodule MaveCore.FlowTest do
     assert audio_track.codec == "mp3"
     assert audio_track.filename == "audio.mp3"
     assert audio_track.default == true
-    assert audio_track.language == "en"
+    assert audio_track.language == "ja"
+    assert audio_track.label == "https://example.com/audio-label"
 
     subtitles =
       Subtitle

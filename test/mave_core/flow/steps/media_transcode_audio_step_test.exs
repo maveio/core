@@ -549,9 +549,9 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeAudioStepTest do
                 "codec_type" => "audio",
                 "codec_name" => "aac",
                 "disposition" => %{"default" => 1},
-                "tags" => %{"language" => "en"}
+                "tags" => %{"language" => "jpn", "title" => "https://example.com/audio-label"}
               },
-              %{"codec_type" => "audio", "codec_name" => "aac", "tags" => %{"language" => "nl"}}
+              %{"codec_type" => "audio", "codec_name" => "aac", "tags" => %{"language" => "dut"}}
             ]
           }
         }
@@ -564,7 +564,8 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeAudioStepTest do
 
       [default_track, second_track] = output["audio_tracks"]
       assert default_track["default"] == true
-      assert default_track["language"] == "en"
+      assert default_track["language"] == "ja"
+      assert default_track["label"] == "https://example.com/audio-label"
       assert default_track["filename"] == "audio.mp3"
       assert second_track["default"] == false
       assert second_track["language"] == "nl"
