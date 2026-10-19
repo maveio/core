@@ -946,7 +946,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
       <button
         type="submit"
         title={@embed_hash}
-        class="block max-w-full truncate font-mono text-xs text-blue-500 hover:text-blue-600"
+        class="block max-w-full cursor-pointer truncate font-mono text-xs text-blue-500 hover:text-blue-600"
       >
         {@embed_hash}
       </button>
@@ -960,7 +960,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
     <.link
       navigate={@action.to}
       title={@embed_hash}
-      class="block truncate font-mono text-xs text-blue-500 hover:text-blue-600"
+      class="block cursor-pointer truncate font-mono text-xs text-blue-500 hover:text-blue-600"
     >
       {@embed_hash}
     </.link>
