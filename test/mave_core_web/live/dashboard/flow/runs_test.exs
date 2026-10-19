@@ -127,6 +127,38 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert has_element?(view, "#run-steps-#{run.id}")
   end
 
+  test "run timing shows the time split without counting parallel execution twice", %{conn: conn} do
+    {admin, conn} = authenticated_conn(conn, "timing-bars@mave.io")
+    space = admin.current_space_membership.space
+    run = create_succeeded_run!(space.hash, "RunTiming")
+    {:ok, view, _html} = live(conn, "/flow/runs")
+
+    assert has_element?(
+             view,
+             "#run-timing-#{run.id}-deps[title='Dependencies / orchestration: 2m 40s']"
+           )
+
+    assert has_element?(view, "#run-timing-#{run.id}-queue[title='Queue: 3m 10s']")
+    assert has_element?(view, "#run-timing-#{run.id}-exec[title='Execution: 4m 10s']")
+
+    update_step_run!(run.id, "source", %{
+      scheduled_at: run.started_at,
+      started_at: run.started_at,
+      completed_at: run.completed_at
+    })
+
+    Flow.Events.broadcast_updated(run.id, %{})
+    render(view)
+
+    assert has_element?(
+             view,
+             "#run-timing-#{run.id}-exec[title='Execution: 10m'][style='width: 100.0%;']"
+           )
+
+    refute has_element?(view, "#run-timing-#{run.id}-queue")
+    refute has_element?(view, "#run-timing-#{run.id}-deps")
+  end
+
   test "performance is collapsed by default and preserves its state while filtering", %{
     conn: conn
   } do
@@ -183,8 +215,6 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert html =~ "FailedRuntime"
     assert has_element?(view, "#step-summary-#{run.id}", "/2 done")
     assert html =~ "total 10m"
-    assert html =~ "step total 9m"
-    assert html =~ "deps 2m / queue 3m / exec 4m"
     assert html =~ "Metrics run"
     assert html =~ "https://grafana.example/runs/#{run.id}"
     assert has_element?(view, "#flow-runs-scroll[phx-hook='preserve_scroll']")
@@ -212,6 +242,9 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert html =~ "Metrics manifest"
     assert html =~ "https://grafana.example/steps/manifest"
     assert html =~ "attempt 1"
+    assert has_element?(view, "#step-timing-#{run.id}-manifest-deps[title='Dependencies: 2m']")
+    assert has_element?(view, "#step-timing-#{run.id}-manifest-queue[title='Queue: 3m']")
+    assert has_element?(view, "#step-timing-#{run.id}-manifest-exec[title='Execution: 4m']")
     assert has_element?(view, "#step-summary-#{run.id}", "/2 done")
   end
 
@@ -227,8 +260,6 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     refute has_element?(view, "#run-row-#{run.id}", "manifest.build")
     assert has_element?(view, "#step-summary-#{run.id}", "/2 done")
     assert html =~ "total 10m"
-    assert html =~ "step total 9m"
-    assert html =~ "deps 2m / queue 3m / exec 4m"
 
     html = render_click(view, "toggle_steps", %{"run-id" => run.id})
 
@@ -561,13 +592,14 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     {admin, conn} = authenticated_conn(conn, "runs-step-drilldown-admin@mave.io")
     space = admin.current_space_membership.space
 
-    _run = create_succeeded_run!(space.hash, "SourceRuntime")
+    run = create_succeeded_run!(space.hash, "SourceRuntime")
 
-    {:ok, _view, html} = live(conn, "/flow/runs?status=succeeded&step_type=source.resolve")
+    {:ok, view, html} = live(conn, "/flow/runs?status=succeeded&step_type=source.resolve")
 
     assert html =~ "source.resolve"
     assert html =~ "SourceRuntime"
-    assert html =~ "step total 30s"
+    html = view |> element("#toggle-run-#{run.id}") |> render_click()
+    assert has_element?(view, "#run-step-#{run.id}-source", "total 30s")
     assert html =~ "deps 10s / queue 10s / exec 10s"
   end
 
@@ -575,16 +607,17 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     {admin, conn} = authenticated_conn(conn, "runs-cold-start-admin@mave.io")
     space = admin.current_space_membership.space
 
-    _run =
+    run =
       create_succeeded_run!(space.hash, "ColdStartRuntime",
         seconds: [run: 615, manifest: 163, dependency: 46, queue: 62]
       )
 
-    {:ok, _view, html} = live(conn, "/flow/runs?status=succeeded")
+    {:ok, view, html} = live(conn, "/flow/runs?status=succeeded")
 
     assert html =~ "ColdStartRuntime"
     assert html =~ "total 10m 15s"
-    assert html =~ "step total 2m 43s"
+    html = view |> element("#toggle-run-#{run.id}") |> render_click()
+    assert has_element?(view, "#run-step-#{run.id}-manifest", "total 2m 43s")
     assert html =~ "deps 46s / queue 1m 2s / exec 55s"
   end
 

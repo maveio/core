@@ -8,6 +8,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   alias MaveCore.Flow.Admin
   alias MaveCore.Flow.Diagnostics
   alias MaveCore.Flow.Events, as: FlowEvents
+  alias MaveCoreWeb.Dashboard.Flow.RunTiming
   alias MaveCoreWeb.DashboardRoutes
 
   @per_page 25
@@ -462,7 +463,10 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                         ]}
                       ></span>
                     </span>
-                    <span id={"step-summary-label-#{run.id}"} class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span
+                      id={"step-summary-label-#{run.id}"}
+                      class="flex flex-wrap items-center gap-x-2 gap-y-1"
+                    >
                       <span>{gettext("%{done}/%{total} done",
                         done: step_count(run.steps, ["succeeded", "skipped"]),
                         total: length(run.steps)
@@ -500,13 +504,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                 </.data_table_grid_cell>
 
                 <.data_table_grid_cell label={gettext("Timing")} class="text-xs">
-                  <div class="text-stone-500">{timing_total(run)}</div>
-                  <div class="mt-1 text-[0.68rem] text-stone-300">
-                    {timing_step_total_detail(run)}
-                  </div>
-                  <div class="mt-1 text-[0.68rem] text-stone-300">
-                    {timing_breakdown(run)}
-                  </div>
+                  <.run_timing run={run} />
                 </.data_table_grid_cell>
 
                 <.data_table_grid_cell label={gettext("Error")}>
@@ -599,6 +597,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                       </.data_table_grid_cell>
                       <.data_table_grid_cell label={gettext("Timing / Executor")}>
                         <div class="text-stone-500">{timing_total(step)}</div>
+                        <.timing_bar timing={step} id={"step-timing-#{run.id}-#{step.step_id}"} />
                         <div class="mt-1 text-[0.68rem] text-stone-300">
                           {timing_breakdown(step)}
                         </div>
@@ -1390,15 +1389,78 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
     end
   end
 
-  defp timing_step_total_detail(%{
-         step_ready_total_ms: step_ready_total_ms,
-         run_duration_ms: run_duration_ms
-       })
-       when is_integer(step_ready_total_ms) and is_integer(run_duration_ms) do
-    "#{gettext("step")} #{gettext("total")} #{format_duration(step_ready_total_ms)}"
+  defp duration_percent(ms, total) when is_integer(ms) and total > 0,
+    do: Float.round(min(max(ms, 0) / total * 100, 100.0), 2)
+
+  defp duration_percent(_ms, _total), do: 0.0
+
+  attr(:run, :map, required: true)
+
+  defp run_timing(assigns) do
+    assigns = assign(assigns, :timing, RunTiming.breakdown(assigns.run))
+
+    ~H"""
+    <div class="font-medium tabular-nums text-stone-600">{timing_total(@run)}</div>
+    <.timing_bar
+      :if={@timing}
+      timing={@timing}
+      id={"run-timing-#{@run.id}"}
+      dependency_label={gettext("Dependencies / orchestration")}
+    />
+    <div :if={@timing} class="mt-1 text-[0.68rem] text-stone-400">
+      {timing_breakdown(@timing)}
+    </div>
+    """
   end
 
-  defp timing_step_total_detail(_run), do: nil
+  attr(:timing, :map, required: true)
+  attr(:id, :string, required: true)
+  attr(:dependency_label, :string, default: nil)
+
+  defp timing_bar(assigns) do
+    segments = [
+      %{
+        key: "deps",
+        label: assigns.dependency_label || gettext("Dependencies"),
+        ms: assigns.timing.step_dependency_wait_ms,
+        class: "bg-stone-300"
+      },
+      %{
+        key: "queue",
+        label: gettext("Queue"),
+        ms: assigns.timing.step_queue_wait_ms,
+        class: "bg-amber-400"
+      },
+      %{
+        key: "exec",
+        label: gettext("Execution"),
+        ms: assigns.timing.step_execution_ms,
+        class: "bg-blue-400"
+      }
+    ]
+
+    total = Enum.reduce(segments, 0, fn segment, sum -> sum + max(segment.ms || 0, 0) end)
+    assigns = assign(assigns, segments: segments, total: total)
+
+    ~H"""
+    <div
+      :if={@total > 0}
+      id={@id}
+      role="img"
+      aria-label={timing_breakdown(@timing)}
+      class="mt-2 flex h-2 overflow-hidden rounded-sm bg-stone-100"
+    >
+      <span
+        :for={segment <- @segments}
+        :if={is_integer(segment.ms) and segment.ms > 0}
+        id={"#{@id}-#{segment.key}"}
+        title={"#{segment.label}: #{format_duration(segment.ms)}"}
+        class={["h-full", segment.class]}
+        style={"width: #{duration_percent(segment.ms, @total)}%;"}
+      ></span>
+    </div>
+    """
+  end
 
   defp execution_label(metadata) when is_map(metadata) do
     executor = Map.get(metadata, "executor") || "-"
