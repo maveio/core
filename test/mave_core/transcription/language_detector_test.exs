@@ -3,23 +3,28 @@ defmodule MaveCore.Transcription.LanguageDetectorTest do
 
   alias MaveCore.Transcription.LanguageDetector
 
-  test "recognizes Italian independently of shared Spanish stopwords" do
-    text =
-      "La nostra azienda si occupa di offrire un servizio di qualità per tutte le persone che desiderano imparare qualcosa di nuovo."
-
-    assert LanguageDetector.detect(text) == "it"
+  test "uses the configured provider and normalizes returned language codes" do
+    Process.put(:language_detection_result, {:ok, "ita"})
+    assert LanguageDetector.detect("  Un testo italiano.  ") == "it"
+    assert_received {:language_detection_called, "Un testo italiano."}
   end
 
-  test "recognizes Spanish when there is enough evidence" do
-    text =
-      "Nuestra empresa ofrece un servicio de calidad para todas las personas que desean aprender algo nuevo y compartir sus experiencias con los demás."
-
-    assert LanguageDetector.detect(text) == "es"
-  end
-
-  test "abstains on short ambiguous text and missing input" do
-    for text <- ["ciao", "la de un", "12345", "", "   ", nil] do
-      assert LanguageDetector.detect(text) == nil
+  test "accepts European languages beyond the audio model's published language list" do
+    for code <- ~w(pl sv da fi cs el hu ro uk) do
+      Process.put(:language_detection_result, {:ok, code})
+      assert LanguageDetector.detect("Transcript sample") == code
     end
+  end
+
+  test "keeps uncertain, invalid and failed provider responses unknown" do
+    for result <- [{:ok, nil}, {:ok, "und"}, {:ok, "invalid"}, {:error, :timeout}, :unexpected] do
+      Process.put(:language_detection_result, result)
+      assert LanguageDetector.detect("Transcript sample") == nil
+    end
+  end
+
+  test "does not call the provider for empty or missing text" do
+    for text <- ["", "   ", nil], do: assert(LanguageDetector.detect(text) == nil)
+    refute_received {:language_detection_called, _}
   end
 end

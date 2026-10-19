@@ -168,6 +168,42 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStepTest do
     assert output["subtitle_key"] == "LeDE9v86ye/subtitle_en.vtt"
   end
 
+  test "does not repeat an inconclusive language detection from transcription" do
+    key = "LanguageTest/subtitle_und.json"
+
+    {:ok, _} =
+      FlowStorageAdapterStub.put_public(
+        "space-abcde",
+        key,
+        Jason.encode!(%{
+          "text" => "Ciao",
+          "segments" => [%{"start" => 0.0, "end" => 1.0, "text" => "Ciao"}]
+        }),
+        "application/json",
+        nil
+      )
+
+    context = %{
+      run_input: %{"space_hash" => "abcde", "embed_hash" => "LanguageTest"},
+      dependency_outputs: %{
+        "transcribe_audio" => %{
+          "status" => "ok",
+          "language" => "und",
+          "subtitle_json_key" => key,
+          "transcription_language_detection_attempted" => true
+        }
+      }
+    }
+
+    assert {:ok, output, _artifacts} =
+             AiTranslateSubtitlesStep.run(%{"id" => "translate_subtitles"}, context)
+
+    assert output["status"] == "ok"
+    assert_received {:translate_called, _, opts}
+    assert opts[:source_language] == nil
+    refute_received {:language_detection_called, _}
+  end
+
   test "returns unavailable output in non-strict mode when transcription is missing" do
     context = %{
       run_input: %{"space_hash" => "ubg50", "embed_hash" => "LeDE9v86ye"},

@@ -99,8 +99,7 @@ defmodule MaveCore.MixProject do
       {:oauth2, "~> 2.1.1"},
       {:joken, "~> 2.6"},
       {:ueberauth, "~> 0.10.8"},
-      {:ueberauth_google, "~> 0.12.1"},
-      {:whatlangex, "~> 0.4.0"}
+      {:ueberauth_google, "~> 0.12.1"}
     ]
   end
 

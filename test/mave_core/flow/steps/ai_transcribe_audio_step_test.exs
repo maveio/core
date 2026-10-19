@@ -329,7 +329,9 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
     assert output["subtitle_key"] == "LeDE9v86ye/subtitle_und.vtt"
   end
 
-  test "falls back to english when language is unknown and transcript text does not detect another language" do
+  test "uses transcript language detection when provider language is unknown" do
+    Process.put(:language_detection_result, {:ok, "en"})
+
     step_definition = %{
       "id" => "transcribe_audio",
       "type" => "ai.transcribe_audio"
@@ -376,6 +378,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
   end
 
   test "detects Italian from the transcript when the provider omits its language" do
+    Process.put(:language_detection_result, {:ok, "it"})
     context = language_context(nil, italian_text())
 
     assert {:ok, output, _artifacts} =
@@ -384,6 +387,8 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
     assert output["language"] == "it"
     assert output["subtitle"]["label"] == "Italian"
     assert output["transcription_language_source"] == "text_detection"
+    assert output["transcription_language_detection_attempted"]
+    assert_received {:language_detection_called, _}
     assert output["transcription_provider_language"] == nil
   end
 
@@ -395,6 +400,8 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
 
     assert output["language"] == "it"
     assert output["transcription_language_source"] == "provider"
+    refute output["transcription_language_detection_attempted"]
+    refute_received {:language_detection_called, _}
     assert output["transcription_provider_language"] == "it"
   end
 
@@ -406,7 +413,23 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
 
     assert output["language"] == "it"
     assert output["transcription_language_source"] == "requested"
+    refute output["transcription_language_detection_attempted"]
+    refute_received {:language_detection_called, _}
     assert output["transcription_provider_language"] == "es"
+  end
+
+  test "failed language detection does not discard a successful transcription" do
+    Process.put(:language_detection_result, {:error, :timeout})
+    context = language_context(nil, italian_text())
+
+    assert {:ok, output, _artifacts} =
+             AiTranscribeAudioStep.run(%{"id" => "transcribe_audio"}, context)
+
+    assert output["status"] == "ok"
+    assert output["language"] == "und"
+    assert output["transcription_language_detection_attempted"]
+    assert_received {:language_detection_called, _}
+    refute_received {:language_detection_called, _}
   end
 
   test "ambiguous text uses audio metadata or remains unknown" do
