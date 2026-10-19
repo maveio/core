@@ -793,11 +793,6 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
           <div class="text-sm font-medium text-stone-600">{gettext("Encoding performance")}</div>
           <div class="text-[0.68rem] uppercase tracking-wide text-stone-300">{@period_label}</div>
         </div>
-        <p class="border-b border-stone-200/60 px-4 py-3 text-xs text-stone-400">
-          {gettext(
-            "Speed is media time processed per second. Step time includes processing, transfers and uploads, excluding queue time. Hardware is shown only when reported by the executing worker."
-          )}
-        </p>
         <div
           :if={@visible_ffmpeg_metrics != []}
           class="grid grid-cols-[minmax(12rem,0.9fr)_minmax(16rem,1.4fr)_5rem_repeat(4,minmax(7rem,0.7fr))] gap-4 border-b border-stone-200/60 bg-stone-50 px-4 py-2 text-[0.68rem] uppercase tracking-wide text-stone-400"
