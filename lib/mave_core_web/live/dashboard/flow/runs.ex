@@ -24,6 +24,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
      |> assign(:page, 1)
      |> assign(:total_pages, 0)
      |> assign(:status, "all")
+     |> assign(:video_status, "all")
      |> assign(:step_type, nil)
      |> assign(:time_window, nil)
      |> assign(:expanded_run_ids, MapSet.new())
@@ -35,6 +36,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
       {:noreply,
        socket
        |> assign(:status, parse_status(params["status"]))
+       |> assign(:video_status, parse_video_status(params["video_status"]))
        |> assign(:step_type, parse_step_type(params["step_type"]))
        |> assign(:time_window, parse_time_window(params["time_from"], params["time_to"]))
        |> load_operations(parse_page(params["page"]))}
@@ -61,7 +63,8 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
            max(socket.assigns.page - 1, 1),
            socket.assigns.status,
            socket.assigns.step_type,
-           socket.assigns.time_window
+           socket.assigns.time_window,
+           socket.assigns.video_status
          )
      )}
   end
@@ -76,7 +79,8 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
            next_page,
            socket.assigns.status,
            socket.assigns.step_type,
-           socket.assigns.time_window
+           socket.assigns.time_window,
+           socket.assigns.video_status
          )
      )}
   end
@@ -95,6 +99,13 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
          |> assign(:retrying, nil)
          |> load_operations(socket.assigns.page)
          |> put_flash(:info, gettext("Flow step retried"))}
+
+      {:error, :video_deleted} ->
+        {:noreply,
+         socket
+         |> assign(:retrying, nil)
+         |> load_operations(socket.assigns.page)
+         |> put_flash(:error, gettext("This video has been deleted."))}
 
       {:error, :subtree_in_progress} ->
         {:noreply,
@@ -123,6 +134,13 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
          |> assign(:recovering, nil)
          |> load_operations(socket.assigns.page)
          |> put_flash(:info, gettext("Flow recovery started"))}
+
+      {:error, :video_deleted} ->
+        {:noreply,
+         socket
+         |> assign(:recovering, nil)
+         |> load_operations(socket.assigns.page)
+         |> put_flash(:error, gettext("This video has been deleted."))}
 
       {:error, :subtree_in_progress} ->
         {:noreply,
@@ -162,13 +180,13 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
             <.ops_stat
               label={gettext("All")}
               value={@operations.status_counts.total}
-              patch={runs_path(1, "all", @step_type, @time_window)}
+              patch={runs_path(1, "all", @step_type, @time_window, @video_status)}
               active={@status == "all"}
             />
             <.ops_stat
               label={gettext("Queued")}
               value={@operations.status_counts.queued}
-              patch={runs_path(1, "queued", @step_type, @time_window)}
+              patch={runs_path(1, "queued", @step_type, @time_window, @video_status)}
               active={@status == "queued"}
             />
             <.ops_stat
@@ -182,26 +200,26 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                   published: @operations.status_counts.published_background
                 )
               }
-              patch={runs_path(1, "running", @step_type, @time_window)}
+              patch={runs_path(1, "running", @step_type, @time_window, @video_status)}
               active={@status == "running"}
             />
             <.ops_stat
               label={gettext("Succeeded")}
               value={@operations.status_counts.succeeded}
-              patch={runs_path(1, "succeeded", @step_type, @time_window)}
+              patch={runs_path(1, "succeeded", @step_type, @time_window, @video_status)}
               active={@status == "succeeded"}
             />
             <.ops_stat
               label={gettext("Failed")}
               value={@operations.status_counts.failed}
-              patch={runs_path(1, "failed", @step_type, @time_window)}
+              patch={runs_path(1, "failed", @step_type, @time_window, @video_status)}
               active={@status == "failed"}
               tone="error"
             />
             <.ops_stat
               label={gettext("Cancelled")}
               value={@operations.status_counts.cancelled}
-              patch={runs_path(1, "cancelled", @step_type, @time_window)}
+              patch={runs_path(1, "cancelled", @step_type, @time_window, @video_status)}
               active={@status == "cancelled"}
             />
           </div>
@@ -211,6 +229,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
             status={@status}
             selected_step_type={@step_type}
             selected_time_window={@time_window}
+            video_status={@video_status}
           />
 
           <div
@@ -223,7 +242,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
               <span class="text-blue-400">{gettext("in the runs below")}</span>
             </div>
             <.link
-              patch={runs_path(1, @status, nil, @time_window)}
+              patch={runs_path(1, @status, nil, @time_window, @video_status)}
               class="text-xs text-blue-500 hover:text-blue-600"
             >
               {gettext("Clear")}
@@ -240,11 +259,36 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
               <span class="text-blue-400">{gettext("in the runs below")}</span>
             </div>
             <.link
-              patch={runs_path(1, @status, @step_type, nil)}
+              patch={runs_path(1, @status, @step_type, nil, @video_status)}
               class="text-xs text-blue-500 hover:text-blue-600"
             >
               {gettext("Clear")}
             </.link>
+          </div>
+
+          <div class="mt-6 flex flex-wrap items-center justify-between gap-3">
+            <h2 class="text-sm font-medium text-stone-600">{gettext("Run history")}</h2>
+            <nav aria-label={gettext("Filter run history by video")} class="flex flex-wrap gap-2">
+              <.link
+                :for={
+                  {label, value} <- [
+                    {gettext("All videos"), "all"},
+                    {gettext("Existing videos"), "existing"},
+                    {gettext("Deleted videos"), "deleted"}
+                  ]
+                }
+                id={"video-filter-#{value}"}
+                patch={runs_path(1, @status, @step_type, @time_window, value)}
+                aria-current={if @video_status == value, do: "true", else: nil}
+                class={[
+                  "rounded-md px-3 py-1.5 text-xs transition",
+                  @video_status == value && "bg-blue-50 text-blue-600",
+                  @video_status != value && "text-stone-400 hover:bg-stone-100 hover:text-stone-600"
+                ]}
+              >
+                {label}
+              </.link>
+            </nav>
           </div>
 
           <div :if={@operations.attention_runs == []} class="mt-6">
@@ -320,6 +364,13 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                 </.data_table_grid_cell>
 
                 <.data_table_grid_cell label={gettext("Video")}>
+                  <span
+                    :if={run.video_deleted?}
+                    id={"deleted-video-#{run.id}"}
+                    class="mb-1 inline-flex rounded bg-stone-100 px-2 py-0.5 text-xs text-stone-500"
+                  >
+                    {gettext("Video deleted")}
+                  </span>
                   <.run_embed_action
                     embed_hash={run.public_embed_id || run.embed_hash}
                     action={open_action(run)}
@@ -445,7 +496,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                         <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                           <.inspection_actions actions={inspection_actions_for(run, step)} />
                           <button
-                            :if={retryable_step?(step)}
+                            :if={not run.video_deleted? and retryable_step?(step)}
                             id={"retry-step-#{run.id}-#{step.step_id}"}
                             type="button"
                             phx-click="retry_step"
@@ -573,6 +624,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   attr(:status, :string, default: "all")
   attr(:selected_step_type, :string, default: nil)
   attr(:selected_time_window, :any, default: nil)
+  attr(:video_status, :string, default: "all")
 
   defp performance_panel(assigns) do
     performance = normalize_performance(assigns.performance)
@@ -633,7 +685,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
             <div class="text-xs text-stone-300">
               <.link
                 :if={@selected_time_window}
-                patch={runs_path(1, @status, @selected_step_type, nil)}
+                patch={runs_path(1, @status, @selected_step_type, nil, @video_status)}
                 class="mr-3 text-blue-400 hover:text-blue-500"
               >
                 {gettext("Clear time")}
@@ -646,7 +698,15 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
               <div :for={bucket <- @performance.throughput} class="flex min-w-0 flex-1 items-end">
                 <.link
                   id={"throughput-bucket-#{bucket_key(bucket)}"}
-                  patch={runs_path(1, @status, @selected_step_type, bucket_time_window(bucket))}
+                  patch={
+                    runs_path(
+                      1,
+                      @status,
+                      @selected_step_type,
+                      bucket_time_window(bucket),
+                      @video_status
+                    )
+                  }
                   class={[
                     "relative flex h-24 w-full items-end overflow-hidden rounded-sm bg-stone-100 transition hover:bg-blue-50",
                     selected_time_bucket?(@selected_time_window, bucket) &&
@@ -703,7 +763,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
             <.link
               :if={metric.step_type}
               id={"inspect-step-#{step_type_dom_id(metric.step_type)}"}
-              patch={runs_path(1, @status, metric.step_type, @selected_time_window)}
+              patch={runs_path(1, @status, metric.step_type, @selected_time_window, @video_status)}
               class={[
                 "hover:text-blue-500",
                 @selected_step_type == metric.step_type && "text-blue-600",
@@ -887,7 +947,8 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
         limit: @per_page,
         status: socket.assigns.status,
         step_type: socket.assigns.step_type,
-        time_window: socket.assigns.time_window
+        time_window: socket.assigns.time_window,
+        video_status: socket.assigns.video_status
       )
 
     socket
@@ -909,7 +970,8 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
         Diagnostics.run_diagnostics(flow_run_id,
           status: socket.assigns.status,
           step_type: socket.assigns.step_type,
-          time_window: socket.assigns.time_window
+          time_window: socket.assigns.time_window,
+          video_status: socket.assigns.video_status
         )
 
       operations =
@@ -971,11 +1033,12 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   defp status_count_key("cancelled"), do: :cancelled
   defp status_count_key(_status), do: nil
 
-  defp runs_path(page, status, step_type, time_window) do
+  defp runs_path(page, status, step_type, time_window, video_status) do
     params =
       %{}
       |> maybe_put("page", page, page > 1)
       |> maybe_put("status", status, status != "all")
+      |> maybe_put("video_status", video_status, video_status != "all")
       |> maybe_put("step_type", step_type, is_binary(step_type) and step_type != "")
       |> maybe_put(
         "time_from",
@@ -996,6 +1059,9 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
 
   defp maybe_put(params, key, value, true), do: Map.put(params, key, value)
   defp maybe_put(params, _key, _value, false), do: params
+
+  defp parse_video_status(status) when status in ["existing", "deleted"], do: status
+  defp parse_video_status(_status), do: "all"
 
   defp parse_status(status) when status in @statuses, do: status
   defp parse_status(_status), do: "all"
@@ -1613,6 +1679,8 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   end
 
   defp relative_time(_datetime), do: "-"
+
+  defp open_action(%{video_deleted?: true}), do: nil
 
   defp open_action(run) do
     case Application.get_env(:mave_core, :flow_runs_open_action) do

@@ -2430,6 +2430,17 @@ defmodule MaveCore.Flow do
     Repo.rollback(:run_cancelled)
   end
 
+  defp ensure_retryable_run!(%Run{input: %{"embed_hash" => embed_hash}})
+       when is_binary(embed_hash) do
+    if Repo.exists?(
+         from(embed in Embed, where: embed.hash == ^embed_hash and not is_nil(embed.deleted_at))
+       ) do
+      Repo.rollback(:video_deleted)
+    end
+
+    :ok
+  end
+
   defp ensure_retryable_run!(%Run{}), do: :ok
 
   defp load_step_run_for_claim(flow_run_id, step_id) do
@@ -3641,8 +3652,8 @@ defmodule MaveCore.Flow do
   defp reset_step_subtree(flow_run_id, step_id) do
     Repo.transaction(fn ->
       run = load_run_for_retry(flow_run_id)
-      run = promote_recovery_source!(run)
       ensure_retryable_run!(run)
+      run = promote_recovery_source!(run)
       definition = run.flow_version.definition || %{}
       _ = fetch_step_definition!(definition, step_id)
 
@@ -3663,8 +3674,8 @@ defmodule MaveCore.Flow do
   defp reset_recoverable_subtrees(flow_run_id) do
     Repo.transaction(fn ->
       run = load_run_for_retry(flow_run_id)
-      run = promote_recovery_source!(run)
       ensure_retryable_run!(run)
+      run = promote_recovery_source!(run)
       definition = run.flow_version.definition || %{}
 
       recovery_root_step_ids =
