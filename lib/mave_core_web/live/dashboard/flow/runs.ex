@@ -236,7 +236,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
               phx-click="toggle_performance"
               aria-expanded={to_string(@performance_open)}
               aria-controls="flow-performance-panel"
-              class="inline-flex items-center gap-1.5 text-xs text-stone-400 transition hover:text-stone-600"
+              class="inline-flex cursor-pointer items-center gap-1.5 text-xs text-stone-400 transition hover:text-stone-600"
             >
               <MaveCoreWeb.DashboardComponents.icon name="hero-chart-bar" class="size-4" />
               {gettext("Performance")}
