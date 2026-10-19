@@ -9,6 +9,7 @@ defmodule MaveCore.Flow.DiagnosticsTest do
   alias MaveCore.Flow.Run
   alias MaveCore.Flow.StepRun
   alias MaveCore.Repo
+  alias MaveCore.Spaces.Domain
   alias MaveCore.Spaces.Space
 
   @definition %{
@@ -99,6 +100,59 @@ defmodule MaveCore.Flow.DiagnosticsTest do
     assert run.embed.id == embed.id
     assert run.dashboard_embed_id == Embeds.dashboard_embed_id(embed)
     assert run.public_embed_id == "#{space.hash}#{embed.hash}"
+  end
+
+  test "concurrent shared-space runs keep their owning domains and deterministic active work" do
+    first_space = create_trial_space!("concurrent-first")
+    second_space = create_trial_space!("concurrent-second")
+    {:ok, first_embed} = Embeds.create_video_embed(first_space, %{"name" => "First video"})
+    {:ok, second_embed} = Embeds.create_video_embed(second_space, %{"name" => "Second video"})
+
+    for {space, domain} <- [
+          {first_space, "z.example.com"},
+          {first_space, "a.example.com"},
+          {second_space, "other.example.com"}
+        ] do
+      Repo.insert!(%Domain{space_id: space.id, domain: domain})
+    end
+
+    first = create_succeeded_run!(first_space.hash, first_embed.hash)
+    second = create_succeeded_run!(second_space.hash, second_embed.hash)
+
+    for run <- [first, second] do
+      run |> Run.changeset(%{status: "running", completed_at: nil}) |> Repo.update!()
+
+      for step <- Repo.all(from s in StepRun, where: s.flow_run_id == ^run.id) do
+        step |> StepRun.changeset(%{status: "executing", completed_at: nil}) |> Repo.update!()
+      end
+    end
+
+    overview = Diagnostics.global_diagnostics(status: "running", video_status: "existing")
+    first_summary = Enum.find(overview.attention_runs, &(&1.id == first.id))
+    second_summary = Enum.find(overview.attention_runs, &(&1.id == second.id))
+    assert first_summary.space_id == first_space.id
+    assert first_summary.space_domain == "a.example.com"
+    assert first_summary.video_title == "First video"
+    assert second_summary.space_id == second_space.id
+    assert second_summary.space_domain == "other.example.com"
+    assert Enum.map(first_summary.active_steps, & &1.step_id) == ["source", "manifest"]
+    assert first_summary.step_id == "source"
+
+    step = Repo.get_by!(StepRun, flow_run_id: first.id, step_id: "source")
+
+    step
+    |> StepRun.changeset(%{execution_metadata: %{"progress" => %{"percent" => 37.0}}})
+    |> Repo.update!()
+
+    refreshed = Diagnostics.run_diagnostics(first.id)
+    assert refreshed.space_domain == first_summary.space_domain
+    assert refreshed.step_id == first_summary.step_id
+    assert Enum.map(refreshed.active_steps, & &1.step_id) == ["source", "manifest"]
+    assert Diagnostics.run_diagnostics(second.id).space_domain == second_summary.space_domain
+
+    missing = create_succeeded_run!(first_space.hash, "UnknownEmbed")
+    assert Diagnostics.run_diagnostics(missing.id).space_id == nil
+    assert Diagnostics.run_diagnostics(missing.id).space_domain == nil
   end
 
   test "video filters preserve history and filter before pagination, including shared spaces" do

@@ -327,12 +327,17 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
               <.data_table_grid_header_cell>{gettext("State")}</.data_table_grid_header_cell>
               <.data_table_grid_header_cell>{gettext("Space")}</.data_table_grid_header_cell>
               <.data_table_grid_header_cell>{gettext("Video")}</.data_table_grid_header_cell>
-              <.data_table_grid_header_cell>{gettext("Step")}</.data_table_grid_header_cell>
+              <.data_table_grid_header_cell>{gettext("Work")}</.data_table_grid_header_cell>
               <.data_table_grid_header_cell>{gettext("Timing")}</.data_table_grid_header_cell>
               <.data_table_grid_header_cell>{gettext("Error")}</.data_table_grid_header_cell>
             </:header>
 
-            <%= for run <- @operations.attention_runs do %>
+            <div
+              :for={run <- @operations.attention_runs}
+              :key={run.id}
+              id={"run-entry-#{run.id}"}
+              class="[&:not(:last-child)>[role=row]]:border-b"
+            >
               <.data_table_grid_row
                 id={"run-row-#{run.id}"}
                 columns={flow_runs_grid_columns()}
@@ -394,8 +399,15 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                   </span>
                   <.run_embed_action
                     embed_hash={run.public_embed_id || run.embed_hash}
+                    label={run.video_title}
                     action={open_action(run)}
                   />
+                  <div
+                    :if={run.video_title}
+                    class="mt-1 truncate font-mono text-[0.68rem] text-stone-400"
+                  >
+                    {run.public_embed_id || run.embed_hash}
+                  </div>
                   <div class="mt-1 truncate text-xs text-stone-300">
                     {run.template_slug || gettext("custom")}
                     <span :if={run.flow_version_number}>v{run.flow_version_number}</span>
@@ -431,13 +443,46 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                   </div>
                 </.data_table_grid_cell>
 
-                <.data_table_grid_cell label={gettext("Step")}>
-                  <div class="truncate text-sm text-stone-500">{run.step_type || "-"}</div>
-                  <div class="mt-1 truncate font-mono text-[0.68rem] text-stone-300">
+                <.data_table_grid_cell label={gettext("Work")}>
+                  <div :if={run.active_steps != []} class="mb-2 space-y-1">
+                    <div
+                      :for={step <- Enum.take(run.active_steps, 3)}
+                      :key={step.step_id}
+                      id={"active-step-#{run.id}-#{step.step_id}"}
+                      class="flex min-w-0 items-center justify-between gap-2 text-xs"
+                    >
+                      <span class="truncate text-stone-600">{step.step_id}</span>
+                      <span class="shrink-0 tabular-nums text-blue-500">
+                        {execution_progress_label(step.execution_metadata)}
+                      </span>
+                    </div>
+                    <button
+                      :if={length(run.active_steps) > 3}
+                      type="button"
+                      phx-click="toggle_steps"
+                      phx-value-run-id={run.id}
+                      class="cursor-pointer text-xs text-stone-400 hover:text-stone-600"
+                    >
+                      {gettext("+%{count} running", count: length(run.active_steps) - 3)}
+                    </button>
+                  </div>
+                  <div
+                    :if={run.active_steps == [] or @step_type}
+                    class="truncate text-sm text-stone-500"
+                  >
+                    {run.step_type || "-"}
+                  </div>
+                  <div
+                    :if={run.active_steps == [] or @step_type}
+                    class="mt-1 truncate font-mono text-[0.68rem] text-stone-300"
+                  >
                     {run.step_id || "-"} - {run.step_status || run.status}
                   </div>
                   <div
-                    :if={execution_progress_percent(run.execution_metadata, run.step_status)}
+                    :if={
+                      run.active_steps == [] and
+                        execution_progress_percent(run.execution_metadata, run.step_status)
+                    }
                     class="mt-1 flex items-center gap-2 text-[0.68rem] text-blue-500"
                   >
                     <div class="h-1.5 w-20 overflow-hidden rounded-full bg-stone-200">
@@ -572,7 +617,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                   </.data_table_grid>
                 </div>
               </div>
-            <% end %>
+            </div>
           </.data_table_grid>
         </div>
       </div>
@@ -863,6 +908,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   end
 
   attr(:embed_hash, :string, default: nil)
+  attr(:label, :string, default: nil)
   attr(:action, :map, default: nil)
 
   defp run_embed_action(%{embed_hash: embed_hash, action: %{method: :post, to: to}} = assigns)
@@ -875,10 +921,10 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
       <input :for={{name, value} <- @hidden} type="hidden" name={name} value={value} />
       <button
         type="submit"
-        title={@embed_hash}
-        class="block max-w-full truncate font-mono text-xs text-blue-500 hover:text-blue-600"
+        title={@label || @embed_hash}
+        class="block max-w-full truncate text-sm font-medium text-blue-500 hover:text-blue-600"
       >
-        {@embed_hash}
+        {@label || @embed_hash}
       </button>
     </.form>
     """
@@ -889,17 +935,17 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
     ~H"""
     <.link
       navigate={@action.to}
-      title={@embed_hash}
-      class="block truncate font-mono text-xs text-blue-500 hover:text-blue-600"
+      title={@label || @embed_hash}
+      class="block truncate text-sm font-medium text-blue-500 hover:text-blue-600"
     >
-      {@embed_hash}
+      {@label || @embed_hash}
     </.link>
     """
   end
 
   defp run_embed_action(assigns) do
     ~H"""
-    <div class="truncate font-mono text-xs text-stone-500">{@embed_hash || "-"}</div>
+    <div class="truncate text-sm text-stone-600">{@label || @embed_hash || "-"}</div>
     """
   end
 
