@@ -98,9 +98,33 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     {:ok, view, _html} = live(conn, "/flow/runs")
 
     assert has_element?(view, "#step-summary-#{run.id}", "2 failed")
+
+    assert has_element?(
+             view,
+             "#step-progress-#{run.id}-source[data-status=failed][title='source: failed']"
+           )
+
+    assert has_element?(view, "#step-progress-#{run.id}-manifest[data-status=failed]")
     assert has_element?(view, "#run-errors-#{run.id}", "source transfer failed")
     assert has_element?(view, "#run-errors-#{run.id}", "ffmpeg exited 1")
     refute has_element?(view, "#run-steps-#{run.id}")
+  end
+
+  test "step overview distinguishes skipped steps from work that did not run", %{conn: conn} do
+    {admin, conn} = authenticated_conn(conn, "step-summary@mave.io")
+    run = create_failed_run!(admin.current_space_membership.space.hash, "StepSummary")
+    update_step_run!(run.id, "source", %{status: "skipped"})
+    update_step_run!(run.id, "manifest", %{status: "queued", error: nil})
+
+    {:ok, view, _html} = live(conn, "/flow/runs")
+
+    assert has_element?(view, "#step-summary-#{run.id}", "1 skipped")
+    assert has_element?(view, "#step-summary-#{run.id}", "1 not run")
+    refute has_element?(view, "#step-summary-#{run.id}", "waiting")
+    assert has_element?(view, "#step-progress-#{run.id}-source[data-status=skipped]")
+    assert has_element?(view, "#step-progress-#{run.id}-manifest[data-status=queued]")
+    view |> element("#step-summary-#{run.id}") |> render_click()
+    assert has_element?(view, "#run-steps-#{run.id}")
   end
 
   test "performance is collapsed by default and preserves its state while filtering", %{
@@ -200,7 +224,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     {:ok, view, html} = live(conn, "/flow/runs?status=succeeded")
 
     assert html =~ "SucceededRuntime"
-    assert html =~ "manifest.build"
+    refute has_element?(view, "#run-row-#{run.id}", "manifest.build")
     assert has_element?(view, "#step-summary-#{run.id}", "/2 done")
     assert html =~ "total 10m"
     assert html =~ "step total 9m"
@@ -509,6 +533,9 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     render(view)
     refute has_element?(view, "#active-step-#{first.id}-source")
     assert has_element?(view, "#active-step-#{second.id}-source")
+    assert has_element?(view, "#step-progress-#{first.id}-source[data-status=succeeded]")
+    assert has_element?(view, "#step-progress-#{second.id}-source[data-status=executing]")
+    assert has_element?(view, "#step-summary-#{first.id}", "1/2 done")
     assert has_element?(view, "#active-step-#{first.id}-manifest", "55%")
   end
 
