@@ -598,9 +598,10 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                       <.data_table_grid_cell label={gettext("Timing / Executor")}>
                         <.timing_bar timing={step} id={"step-timing-#{run.id}-#{step.step_id}"} />
                         <div class="text-stone-500">{timing_total(step)}</div>
-                        <div class="mt-1 text-[0.68rem] text-stone-300">
-                          {timing_breakdown(step)}
-                        </div>
+                        <.timing_legend
+                          timing={step}
+                          id={"step-timing-legend-#{run.id}-#{step.step_id}"}
+                        />
                         <div class="truncate text-stone-500">
                           {execution_label(step.execution_metadata)}
                         </div>
@@ -1407,9 +1408,12 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
       dependency_label={gettext("Dependencies / orchestration")}
     />
     <div class="font-medium tabular-nums text-stone-600">{timing_total(@run)}</div>
-    <div :if={@timing} class="mt-1 text-[0.68rem] text-stone-400">
-      {timing_breakdown(@timing)}
-    </div>
+    <.timing_legend
+      :if={@timing}
+      timing={@timing}
+      id={"run-timing-legend-#{@run.id}"}
+      dependency_label={gettext("Dependencies / orchestration")}
+    />
     """
   end
 
@@ -1418,30 +1422,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   attr(:dependency_label, :string, default: nil)
 
   defp timing_bar(assigns) do
-    phases = [
-      %{
-        key: "deps",
-        kind: :dependency,
-        label: assigns.dependency_label || gettext("Dependencies"),
-        ms: assigns.timing.step_dependency_wait_ms,
-        class: "bg-stone-300"
-      },
-      %{
-        key: "queue",
-        kind: :queue,
-        label: gettext("Queue"),
-        ms: assigns.timing.step_queue_wait_ms,
-        class: "bg-amber-400"
-      },
-      %{
-        key: "exec",
-        kind: :execution,
-        label: gettext("Execution"),
-        ms: assigns.timing.step_execution_ms,
-        class: "bg-blue-400"
-      }
-    ]
-
+    phases = timing_phases(assigns.timing, assigns.dependency_label)
     segments = timing_segments(assigns.timing, phases)
     total = Enum.reduce(segments, 0, fn segment, sum -> sum + max(segment.ms || 0, 0) end)
     assigns = assign(assigns, segments: segments, total: total)
@@ -1467,6 +1448,58 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
       ></span>
     </div>
     """
+  end
+
+  attr(:timing, :map, required: true)
+  attr(:id, :string, required: true)
+  attr(:dependency_label, :string, default: nil)
+
+  defp timing_legend(assigns) do
+    assigns = assign(assigns, :phases, timing_phases(assigns.timing, assigns.dependency_label))
+
+    ~H"""
+    <div id={@id} class="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[0.68rem] text-stone-400">
+      <span
+        :for={phase <- @phases}
+        :if={is_integer(phase.ms)}
+        data-phase={phase.key}
+        title={phase.label}
+        class="inline-flex items-center gap-1 whitespace-nowrap"
+      >
+        <span aria-hidden="true" class={["size-1.5 shrink-0 rounded-full", phase.class]}></span>
+        {duration_part(phase.short_label, phase.ms)}
+      </span>
+    </div>
+    """
+  end
+
+  defp timing_phases(timing, dependency_label) do
+    [
+      %{
+        key: "deps",
+        short_label: gettext("deps"),
+        kind: :dependency,
+        label: dependency_label || gettext("Dependencies"),
+        ms: timing.step_dependency_wait_ms,
+        class: "bg-stone-300"
+      },
+      %{
+        key: "queue",
+        short_label: gettext("queue"),
+        kind: :queue,
+        label: gettext("Queue"),
+        ms: timing.step_queue_wait_ms,
+        class: "bg-amber-400"
+      },
+      %{
+        key: "exec",
+        short_label: gettext("exec"),
+        kind: :execution,
+        label: gettext("Execution"),
+        ms: timing.step_execution_ms,
+        class: "bg-blue-400"
+      }
+    ]
   end
 
   defp timing_segments(%{segments: segments}, phases) do

@@ -136,6 +136,24 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
 
     assert has_element?(
              view,
+             "#run-timing-legend-#{run.id} [data-phase=deps][title='Dependencies / orchestration']",
+             "deps 2m 40s"
+           )
+
+    assert has_element?(
+             view,
+             "#run-timing-legend-#{run.id} [data-phase=queue][title=Queue]",
+             "queue 3m 10s"
+           )
+
+    assert has_element?(
+             view,
+             "#run-timing-legend-#{run.id} [data-phase=exec][title=Execution]",
+             "exec 4m 10s"
+           )
+
+    assert has_element?(
+             view,
              "#run-timing-#{run.id} > span:nth-child(1)[data-phase=deps][data-from-ms='0'][data-to-ms='30000']"
            )
 
