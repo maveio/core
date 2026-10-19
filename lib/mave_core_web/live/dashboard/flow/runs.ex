@@ -10,6 +10,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   alias MaveCore.Flow.Events, as: FlowEvents
   alias MaveCoreWeb.Dashboard.Flow.RunTiming
   alias MaveCoreWeb.DashboardRoutes
+  alias Phoenix.LiveView.JS
 
   @per_page 25
   @statuses ~w(all queued running succeeded failed cancelled)
@@ -21,6 +22,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
      |> assign(:operations_enabled, Admin.dashboard_enabled_for?(socket.assigns.current_user))
      |> assign(:operations, nil)
      |> assign(:performance_open, false)
+     |> assign(:error_details, nil)
      |> assign(:retrying, nil)
      |> assign(:recovering, nil)
      |> assign(:page, 1)
@@ -89,6 +91,24 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
 
   def handle_event("toggle_performance", _params, socket) do
     {:noreply, update(socket, :performance_open, &(!&1))}
+  end
+
+  def handle_event("show_errors", %{"run-id" => run_id} = params, socket) do
+    run = Enum.find(socket.assigns.operations.attention_runs, &(&1.id == run_id))
+
+    if socket.assigns.operations_enabled and run do
+      errors = run_errors(run, true)
+      step_id = params["step-id"]
+      errors = if step_id, do: Enum.filter(errors, &(&1.step_id == step_id)), else: errors
+      details = %{run_id: run.id, embed_id: run.public_embed_id || run.embed_hash, errors: errors}
+      {:noreply, assign(socket, :error_details, details)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_errors", _params, socket) do
+    {:noreply, assign(socket, :error_details, nil)}
   end
 
   def handle_event("toggle_steps", %{"run-id" => run_id}, socket) do
@@ -509,14 +529,26 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
 
                 <.data_table_grid_cell label={gettext("Error")}>
                   <div id={"run-errors-#{run.id}"} class="space-y-2 text-xs">
-                    <div :for={error <- run_errors(run)} class="min-w-0">
+                    <div :for={error <- Enum.take(run_errors(run), 1)} class="min-w-0">
                       <div :if={error.step_id} class="mb-0.5 font-mono font-medium text-red-600">
                         {error.step_id}
                       </div>
-                      <div class="whitespace-pre-wrap break-words text-red-600 [overflow-wrap:anywhere]">
-                        {error.message}
-                      </div>
+                      <.error_preview
+                        id={"show-errors-#{run.id}"}
+                        run_id={run.id}
+                        message={error.message}
+                      />
                     </div>
+                    <button
+                      :if={length(run_errors(run)) > 1}
+                      id={"more-errors-#{run.id}"}
+                      type="button"
+                      phx-click="show_errors"
+                      phx-value-run-id={run.id}
+                      class="cursor-pointer text-stone-400 hover:text-red-600"
+                    >
+                      {gettext("+%{count} more", count: length(run_errors(run)) - 1)}
+                    </button>
                     <span :if={run_errors(run) == []} class="text-stone-300">-</span>
                   </div>
                 </.data_table_grid_cell>
@@ -624,9 +656,14 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                         </div>
                       </.data_table_grid_cell>
                       <.data_table_grid_cell label={gettext("Error")}>
-                        <div class="whitespace-pre-wrap break-words text-red-600 [overflow-wrap:anywhere]">
-                          {step.error || "-"}
-                        </div>
+                        <.error_preview
+                          :if={step.error}
+                          id={"show-step-error-#{run.id}-#{step.step_id}"}
+                          run_id={run.id}
+                          step_id={step.step_id}
+                          message={step.error}
+                        />
+                        <span :if={is_nil(step.error)} class="text-stone-300">-</span>
                       </.data_table_grid_cell>
                     </.data_table_grid_row>
                   </.data_table_grid>
@@ -636,6 +673,46 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
           </.data_table_grid>
         </div>
       </div>
+
+      <.modal
+        :if={@error_details}
+        id="run-error-details"
+        show={true}
+        title={gettext("Errors")}
+        on_cancel={JS.push("close_errors")}
+      >
+        <div class="mb-5 flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <div class="break-all font-mono text-xs text-stone-600">{@error_details.embed_id}</div>
+            <div class="mt-1 break-all font-mono text-[0.68rem] text-stone-400">
+              {@error_details.run_id}
+            </div>
+          </div>
+          <button
+            id="close-error-details"
+            type="button"
+            phx-click="close_errors"
+            class="cursor-pointer text-stone-400 hover:text-stone-600"
+            aria-label={gettext("Close")}
+          >
+            <MaveCoreWeb.DashboardComponents.icon name="hero-x-mark" class="size-5" />
+          </button>
+        </div>
+        <div class="space-y-6">
+          <div :for={{error, index} <- Enum.with_index(@error_details.errors)}>
+            <div class="mb-1 flex items-center justify-between gap-2">
+              <div class="break-all font-mono text-xs font-medium text-red-600">
+                {error.step_id || gettext("Run")}
+              </div>
+              <.copy_button target={"error-detail-#{index}"} />
+            </div>
+            <pre
+              id={"error-detail-#{index}"}
+              class="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-stone-50 p-3 font-mono text-xs text-stone-600 select-text [overflow-wrap:anywhere]"
+            >{error.message}</pre>
+          </div>
+        </div>
+      </.modal>
 
       <%= if @operations.total_entries > 0 do %>
         <.footer page={@page} total_pages={@total_pages} />
@@ -1224,18 +1301,61 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
     |> Enum.map(fn {count, label, class} -> %{label: label.(count), class: class} end)
   end
 
-  defp run_errors(run) do
+  attr(:id, :string, required: true)
+  attr(:run_id, :string, required: true)
+  attr(:step_id, :string, default: nil)
+  attr(:message, :string, required: true)
+
+  defp error_preview(assigns) do
+    message = String.replace(assigns.message, ~r/\s+/, " ")
+
+    preview =
+      if String.length(message) > 110, do: String.slice(message, 0, 110) <> "…", else: message
+
+    assigns = assign(assigns, :preview, preview)
+
+    ~H"""
+    <button
+      id={@id}
+      type="button"
+      phx-click="show_errors"
+      phx-value-run-id={@run_id}
+      phx-value-step-id={@step_id}
+      title={gettext("View error details")}
+      class="block w-full cursor-pointer text-left text-xs text-red-600 hover:text-red-700"
+    >
+      <span class="line-clamp-2 break-words [overflow-wrap:anywhere]">{@preview}</span>
+    </button>
+    """
+  end
+
+  defp run_errors(run, full? \\ false) do
     errors =
       for step <- run.steps, is_binary(step.error) and step.error != "" do
-        %{step_id: step.step_id, message: step.error}
+        %{step_id: step.step_id, message: error_message(step, full?)}
       end
 
-    if is_binary(run.error) and run.error != "" and
-         not Enum.any?(errors, &(&1.message == run.error)) do
-      errors ++ [%{step_id: nil, message: run.error}]
-    else
-      errors
-    end
+    message = error_message(run, full?)
+
+    errors =
+      if is_binary(message) and message != "" and not Enum.any?(errors, &(&1.message == message)) do
+        errors ++ [%{step_id: nil, message: message}]
+      else
+        errors
+      end
+
+    Enum.sort_by(errors, &secondary_error?(&1.message))
+  end
+
+  defp error_message(error, true), do: Map.get(error, :error_detail) || error.error
+  defp error_message(error, false), do: error.error
+
+  defp secondary_error?(message) do
+    String.starts_with?(message, [
+      "blocked by dependency",
+      "interrupted because flow run failed",
+      "not executed because flow run failed"
+    ])
   end
 
   defp normalize_performance(nil) do

@@ -90,7 +90,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert has_element?(view, "#run-row-#{deleted_run.id}")
   end
 
-  test "run history exposes errors from each step without expanding details", %{conn: conn} do
+  test "run history keeps multiple errors compact and opens their details", %{conn: conn} do
     {admin, conn} = authenticated_conn(conn, "step-errors@mave.io")
     run = create_failed_run!(admin.current_space_membership.space.hash, "StepErrors")
 
@@ -106,8 +106,60 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
 
     assert has_element?(view, "#step-progress-#{run.id}-manifest[data-status=failed]")
     assert has_element?(view, "#run-errors-#{run.id}", "source transfer failed")
-    assert has_element?(view, "#run-errors-#{run.id}", "ffmpeg exited 1")
+    refute has_element?(view, "#run-errors-#{run.id}", "ffmpeg exited 1")
+    assert has_element?(view, "#more-errors-#{run.id}", "+1 more")
     refute has_element?(view, "#run-steps-#{run.id}")
+    view |> element("#more-errors-#{run.id}") |> render_click()
+    assert has_element?(view, "#error-detail-0", "source transfer failed")
+    assert has_element?(view, "#error-detail-1", "ffmpeg exited 1")
+    view |> element("#close-error-details") |> render_click()
+    refute has_element?(view, "#run-error-details")
+  end
+
+  test "error details preserve stored text beyond the preview and escape markup", %{conn: conn} do
+    {admin, conn} = authenticated_conn(conn, "error-details@mave.io")
+    run = create_failed_run!(admin.current_space_membership.space.hash, "ErrorDetails")
+
+    message =
+      String.pad_trailing("media command timed out\n", 230, "x") <> "\nTAIL <script>x</script>"
+
+    update_step_run!(run.id, "manifest", %{error: message})
+    {:ok, view, _html} = live(conn, "/flow/runs")
+
+    assert has_element?(view, "#show-errors-#{run.id}", "media command timed out")
+    refute has_element?(view, "#run-row-#{run.id}", "TAIL")
+    refute has_element?(view, "#run-error-details")
+
+    view |> element("#show-errors-#{run.id}") |> render_click()
+    assert has_element?(view, "#error-detail-0", "TAIL <script>x</script>")
+    assert has_element?(view, "#run-error-details button[aria-label='Copy to clipboard']")
+    refute has_element?(view, "#run-error-details script")
+    view |> element("#close-error-details") |> render_click()
+
+    view |> element("#toggle-run-#{run.id}") |> render_click()
+    view |> element("#show-step-error-#{run.id}-manifest") |> render_click()
+    assert has_element?(view, "#error-detail-0", "TAIL <script>x</script>")
+    refute has_element?(view, "#error-detail-1")
+  end
+
+  test "a blocked dependency does not hide the original error", %{conn: conn} do
+    {admin, conn} = authenticated_conn(conn, "error-priority@mave.io")
+    run = create_failed_run!(admin.current_space_membership.space.hash, "ErrorPriority")
+
+    update_step_run!(run.id, "source", %{
+      status: "failed",
+      error: "blocked by dependency manifest"
+    })
+
+    {:ok, view, _html} = live(conn, "/flow/runs")
+
+    assert has_element?(view, "#run-errors-#{run.id}", "ffmpeg exited 1")
+    refute has_element?(view, "#run-errors-#{run.id}", "blocked by dependency")
+    render_click(view, "show_errors", %{"run-id" => Ecto.UUID.generate()})
+    refute has_element?(view, "#run-error-details")
+    view |> element("#show-errors-#{run.id}") |> render_click()
+    assert has_element?(view, "#error-detail-0", "ffmpeg exited 1")
+    assert has_element?(view, "#error-detail-1", "blocked by dependency manifest")
   end
 
   test "step overview distinguishes skipped steps from work that did not run", %{conn: conn} do
