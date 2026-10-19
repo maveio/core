@@ -706,19 +706,14 @@ defmodule MaveCore.Flow.Diagnostics do
       [step_run, _run],
       fragment("?->'progress'->>'source' = 'ffmpeg'", step_run.execution_metadata)
     )
-    |> where(
-      [step_run, _run],
-      fragment(
-        "jsonb_typeof(?->'progress'->'speed_x') = 'number'",
-        step_run.execution_metadata
-      )
-    )
     |> group_by(
       [step_run, _run],
       [
         step_run.step_type,
+        fragment("coalesce(nullif(?->>'executor', ''), 'unknown')", step_run.execution_metadata),
         fragment(
-          "coalesce(nullif(?->'runtime'->>'hardware_profile', ''), 'unlabeled')",
+          "case when ?->>'executor' in ('encoding_booster', 'gpu_encoding_booster') then null else nullif(?->'runtime'->>'hardware_profile', '') end",
+          step_run.execution_metadata,
           step_run.execution_metadata
         ),
         fragment(
@@ -741,9 +736,12 @@ defmodule MaveCore.Flow.Diagnostics do
     )
     |> select([step_run, _run], %{
       step_type: step_run.step_type,
+      executor:
+        fragment("coalesce(nullif(?->>'executor', ''), 'unknown')", step_run.execution_metadata),
       hardware_profile:
         fragment(
-          "coalesce(nullif(?->'runtime'->>'hardware_profile', ''), 'unlabeled')",
+          "case when ?->>'executor' in ('encoding_booster', 'gpu_encoding_booster') then null else nullif(?->'runtime'->>'hardware_profile', '') end",
+          step_run.execution_metadata,
           step_run.execution_metadata
         ),
       codec:
@@ -767,14 +765,43 @@ defmodule MaveCore.Flow.Diagnostics do
           step_run.execution_metadata
         ),
       count: count(step_run.id),
+      speed_samples:
+        fragment(
+          "count(case when jsonb_typeof(?->'progress'->'speed_x') = 'number' then case when (?->'progress'->>'speed_x')::double precision > 0 then 1 end end)",
+          step_run.execution_metadata,
+          step_run.execution_metadata
+        ),
+      p50_step_elapsed_ms:
+        fragment(
+          "round((percentile_cont(0.5) within group (order by extract(epoch from (? - ?)) * 1000))::numeric)::bigint",
+          step_run.completed_at,
+          step_run.started_at
+        ),
+      p95_step_elapsed_ms:
+        fragment(
+          "round((percentile_cont(0.95) within group (order by extract(epoch from (? - ?)) * 1000))::numeric)::bigint",
+          step_run.completed_at,
+          step_run.started_at
+        ),
+      p50_ffmpeg_elapsed_ms:
+        fragment(
+          "round((percentile_cont(0.5) within group (order by case when jsonb_typeof(?->'progress'->'ffmpeg_elapsed_ms') = 'number' then case when (?->'progress'->>'ffmpeg_elapsed_ms')::double precision > 0 then (?->'progress'->>'ffmpeg_elapsed_ms')::double precision end end))::numeric)::bigint",
+          step_run.execution_metadata,
+          step_run.execution_metadata,
+          step_run.execution_metadata
+        ),
       p50_speed_x:
         fragment(
-          "percentile_cont(0.5) within group (order by ((?->'progress'->>'speed_x')::double precision))",
+          "percentile_cont(0.5) within group (order by case when jsonb_typeof(?->'progress'->'speed_x') = 'number' then case when (?->'progress'->>'speed_x')::double precision > 0 then (?->'progress'->>'speed_x')::double precision end end)",
+          step_run.execution_metadata,
+          step_run.execution_metadata,
           step_run.execution_metadata
         ),
       p10_speed_x:
         fragment(
-          "percentile_cont(0.1) within group (order by ((?->'progress'->>'speed_x')::double precision))",
+          "percentile_cont(0.1) within group (order by case when jsonb_typeof(?->'progress'->'speed_x') = 'number' then case when (?->'progress'->>'speed_x')::double precision > 0 then (?->'progress'->>'speed_x')::double precision end end)",
+          step_run.execution_metadata,
+          step_run.execution_metadata,
           step_run.execution_metadata
         ),
       avg_fps:
@@ -790,13 +817,20 @@ defmodule MaveCore.Flow.Diagnostics do
     })
     |> Repo.all()
     |> Enum.map(&normalize_ffmpeg_metric/1)
-    |> Enum.sort_by(&{&1.hardware_profile, &1.step_type, &1.codec, &1.size, &1.preset})
+    |> Enum.sort_by(
+      &{&1.executor, &1.hardware_profile, &1.step_type, &1.codec, &1.size, &1.preset}
+    )
   end
 
   defp normalize_ffmpeg_metric(metric) do
     %{
       step_type: metric.step_type,
       hardware_profile: metric.hardware_profile,
+      executor: metric.executor,
+      speed_samples: metric.speed_samples,
+      p50_step_elapsed_ms: normalize_ms(metric.p50_step_elapsed_ms),
+      p95_step_elapsed_ms: normalize_ms(metric.p95_step_elapsed_ms),
+      p50_ffmpeg_elapsed_ms: normalize_ms(metric.p50_ffmpeg_elapsed_ms),
       codec: metric.codec,
       size: metric.size,
       variants: metric.variants,

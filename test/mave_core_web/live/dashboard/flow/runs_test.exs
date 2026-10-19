@@ -232,7 +232,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert html =~ "#{space.hash}#{embed.hash}"
   end
 
-  test "/flow/runs renders ffmpeg performance by step and hardware", %{conn: conn} do
+  test "/flow/runs renders encoding performance by executor and workload", %{conn: conn} do
     {admin, conn} = authenticated_conn(conn, "runs-ffmpeg-admin@mave.io")
     space = admin.current_space_membership.space
 
@@ -241,10 +241,13 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
 
     {:ok, view, html} = live(conn, "/flow/runs?status=succeeded")
 
-    assert html =~ "FFmpeg by hardware"
+    assert html =~ "Encoding performance"
     assert html =~ "scaleway-gp1-s"
     assert html =~ "Median speed"
-    assert html =~ "P10 speed"
+    assert html =~ "Median FFmpeg"
+    assert html =~ "Median step"
+    assert html =~ "P95 step"
+    assert html =~ "FLAME"
     assert html =~ "2.4× realtime"
     assert html =~ "72.5 fps"
     assert html =~ "24s FFmpeg"
@@ -255,6 +258,24 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
 
     assert html =~ "scaleway-gp1-s / flame-runner-b"
     assert html =~ "2.4× realtime / 72.5 fps / 24s FFmpeg"
+  end
+
+  test "encoding performance labels remote CPU work without inventing hardware", %{conn: conn} do
+    {admin, conn} = authenticated_conn(conn, "runs-remote-performance@mave.io")
+    run = create_succeeded_run!(admin.current_space_membership.space.hash, "RemotePerformance")
+    step = put_ffmpeg_performance!(run.id)
+
+    metadata =
+      step.execution_metadata
+      |> Map.put("executor", "encoding_booster")
+      |> Map.put("runtime", %{"hardware_profile" => "dispatch-worker-hardware"})
+
+    step |> StepRun.changeset(%{execution_metadata: metadata}) |> Repo.update!()
+    {:ok, view, _html} = live(conn, "/flow/runs")
+    assert has_element?(view, "#encoding-performance", "CPU booster")
+    assert has_element?(view, "#encoding-performance", "Hardware not reported")
+    refute has_element?(view, "#encoding-performance", "dispatch-worker-hardware")
+    refute has_element?(view, "#encoding-performance", "unlabeled")
   end
 
   test "/flow/runs shows whether ladder steps used the encoding booster", %{conn: conn} do
