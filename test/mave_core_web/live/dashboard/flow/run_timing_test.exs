@@ -21,6 +21,29 @@ defmodule MaveCoreWeb.Dashboard.Flow.RunTimingTest do
     assert timing.step_dependency_wait_ms == 20_000
     assert timing.step_queue_wait_ms == 15_000
     assert timing.step_execution_ms == 25_000
+
+    assert Enum.map(timing.segments, &{&1.kind, &1.from_ms, &1.to_ms}) == [
+             {:dependency, 0, 10_000},
+             {:queue, 10_000, 20_000},
+             {:execution, 20_000, 40_000},
+             {:dependency, 40_000, 50_000},
+             {:queue, 50_000, 55_000},
+             {:execution, 55_000, 60_000}
+           ]
+  end
+
+  test "keeps changes in parallel executing steps in the timeline" do
+    first = Map.put(step(10, 20, 60), :step_id, "source")
+    second = Map.put(step(15, 30, 80), :step_id, "manifest")
+    timing = RunTiming.breakdown(run(80, [first, second]))
+
+    execution = Enum.filter(timing.segments, &(&1.kind == :execution))
+
+    assert Enum.map(execution, &{&1.from_ms, &1.to_ms, &1.step_ids}) == [
+             {20_000, 30_000, ["source"]},
+             {30_000, 60_000, ["manifest", "source"]},
+             {60_000, 80_000, ["manifest"]}
+           ]
   end
 
   test "uses elapsed run time for an executing or queued step" do
@@ -43,6 +66,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.RunTimingTest do
     zero = RunTiming.breakdown(run(0, [step(0, 0, 0)]))
     assert zero.step_ready_total_ms == 0
     assert zero.step_execution_ms == 0
+    assert zero.segments == []
 
     empty = RunTiming.breakdown(run(60, []))
     assert empty.step_dependency_wait_ms == 60_000

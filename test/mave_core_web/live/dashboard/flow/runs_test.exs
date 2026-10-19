@@ -127,7 +127,8 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert has_element?(view, "#run-steps-#{run.id}")
   end
 
-  test "run timing shows the time split without counting parallel execution twice", %{conn: conn} do
+  test "run timing shows the time split without counting parallel execution twice in chronological order",
+       %{conn: conn} do
     {admin, conn} = authenticated_conn(conn, "timing-bars@mave.io")
     space = admin.current_space_membership.space
     run = create_succeeded_run!(space.hash, "RunTiming")
@@ -135,11 +136,30 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
 
     assert has_element?(
              view,
-             "#run-timing-#{run.id}-deps[title='Dependencies / orchestration: 2m 40s']"
+             "#run-timing-#{run.id} > span:nth-child(1)[data-phase=deps][data-from-ms='0'][data-to-ms='30000']"
            )
 
-    assert has_element?(view, "#run-timing-#{run.id}-queue[title='Queue: 3m 10s']")
-    assert has_element?(view, "#run-timing-#{run.id}-exec[title='Execution: 4m 10s']")
+    assert has_element?(
+             view,
+             "#run-timing-#{run.id} > span:nth-child(2)[data-phase=queue][data-from-ms='30000'][data-to-ms='40000']"
+           )
+
+    assert has_element?(
+             view,
+             "#run-timing-#{run.id} > span:nth-child(3)[data-phase=exec][data-from-ms='40000'][data-to-ms='50000']"
+           )
+
+    assert has_element?(
+             view,
+             "#run-timing-#{run.id} > span:nth-child(4)[data-phase=deps][data-from-ms='50000'][data-to-ms='180000']"
+           )
+
+    assert has_element?(view, "#run-timing-#{run.id} > span:nth-child(5)[data-phase=queue]")
+
+    assert has_element?(
+             view,
+             "#run-timing-#{run.id} > span:nth-child(6)[data-phase=exec][title='6m–10m · Execution: 4m · manifest']"
+           )
 
     update_step_run!(run.id, "source", %{
       scheduled_at: run.started_at,
@@ -152,11 +172,16 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
 
     assert has_element?(
              view,
-             "#run-timing-#{run.id}-exec[title='Execution: 10m'][style='width: 100.0%;']"
+             "#run-timing-#{run.id} > span:nth-child(1)[data-phase=exec][style='width: 60.0%;']"
            )
 
-    refute has_element?(view, "#run-timing-#{run.id}-queue")
-    refute has_element?(view, "#run-timing-#{run.id}-deps")
+    assert has_element?(
+             view,
+             "#run-timing-#{run.id} > span:nth-child(2)[data-phase=exec][style='width: 40.0%;']"
+           )
+
+    refute has_element?(view, "#run-timing-#{run.id} [data-phase=queue]")
+    refute has_element?(view, "#run-timing-#{run.id} [data-phase=deps]")
   end
 
   test "performance is collapsed by default and preserves its state while filtering", %{
