@@ -55,6 +55,11 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
 
     {:ok, view, _html} = live(conn, "/flow/runs?status=failed")
     assert has_element?(view, "#run-row-#{existing_run.id}")
+    assert has_element?(view, "#step-summary-#{existing_run.id}", "1/2 done")
+    assert has_element?(view, "#step-summary-#{existing_run.id}", "1 failed")
+    assert has_element?(view, "#run-errors-#{existing_run.id}", "manifest")
+    assert has_element?(view, "#run-errors-#{existing_run.id}", "ffmpeg exited 1")
+    refute has_element?(view, "#run-row-#{existing_run.id}", "Existing")
     refute has_element?(view, "#run-row-#{deleted_run.id}")
     assert has_element?(view, "#video-filter-existing[aria-current=true]", "Not deleted")
     view |> element("#video-filter-all") |> render_click()
@@ -83,6 +88,19 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     view |> element("#video-filter-all") |> render_click()
     assert_patch(view, "/flow/runs?status=failed&video_status=all")
     assert has_element?(view, "#run-row-#{deleted_run.id}")
+  end
+
+  test "run history exposes errors from each step without expanding details", %{conn: conn} do
+    {admin, conn} = authenticated_conn(conn, "step-errors@mave.io")
+    run = create_failed_run!(admin.current_space_membership.space.hash, "StepErrors")
+
+    update_step_run!(run.id, "source", %{status: "failed", error: "source transfer failed"})
+    {:ok, view, _html} = live(conn, "/flow/runs")
+
+    assert has_element?(view, "#step-summary-#{run.id}", "2 failed")
+    assert has_element?(view, "#run-errors-#{run.id}", "source transfer failed")
+    assert has_element?(view, "#run-errors-#{run.id}", "ffmpeg exited 1")
+    refute has_element?(view, "#run-steps-#{run.id}")
   end
 
   test "performance is collapsed by default and preserves its state while filtering", %{
@@ -139,7 +157,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert html =~ "P95 queue"
     assert html =~ "inspect-step-manifest-build"
     assert html =~ "FailedRuntime"
-    assert html =~ "2 steps"
+    assert has_element?(view, "#step-summary-#{run.id}", "/2 done")
     assert html =~ "total 10m"
     assert html =~ "step total 9m"
     assert html =~ "deps 2m / queue 3m / exec 4m"
@@ -170,7 +188,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert html =~ "Metrics manifest"
     assert html =~ "https://grafana.example/steps/manifest"
     assert html =~ "attempt 1"
-    assert html =~ "2 steps"
+    assert has_element?(view, "#step-summary-#{run.id}", "/2 done")
   end
 
   test "/flow/runs renders timing data for succeeded runs", %{conn: conn} do
@@ -183,7 +201,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
 
     assert html =~ "SucceededRuntime"
     assert html =~ "manifest.build"
-    assert html =~ "2 steps"
+    assert has_element?(view, "#step-summary-#{run.id}", "/2 done")
     assert html =~ "total 10m"
     assert html =~ "step total 9m"
     assert html =~ "deps 2m / queue 3m / exec 4m"
@@ -194,7 +212,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert html =~ "manifest.build"
     assert html =~ "succeeded"
     assert html =~ "retry-step-#{run.id}-manifest"
-    assert html =~ "2 steps"
+    assert has_element?(view, "#step-summary-#{run.id}", "/2 done")
 
     html =
       view
@@ -478,8 +496,8 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
       assert has_element?(view, "#run-row-#{first.id}", "first.example.com")
       refute has_element?(view, "#run-row-#{first.id}", "second.example.com")
       assert has_element?(view, "#run-row-#{second.id}", "second.example.com")
-      assert has_element?(view, "#run-row-#{first.id}", "First video")
-      assert has_element?(view, "#run-row-#{second.id}", "Second video")
+      assert has_element?(view, "#run-row-#{first.id}", first_space.hash <> first_embed.hash)
+      assert has_element?(view, "#run-row-#{second.id}", second_space.hash <> second_embed.hash)
       assert has_element?(view, "#run-steps-#{first.id}")
       refute has_element?(view, "#run-steps-#{second.id}")
     end
