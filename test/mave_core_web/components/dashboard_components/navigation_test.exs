@@ -7,8 +7,11 @@ defmodule MaveCoreWeb.DashboardComponents.NavigationTest do
 
   setup do
     original_items = Application.get_env(:mave_core, :extra_dashboard_items)
+    original_admin = Application.get_env(:mave_core, :flow_admin)
 
     on_exit(fn ->
+      Application.put_env(:mave_core, :flow_admin, original_admin)
+
       if is_nil(original_items) do
         Application.delete_env(:mave_core, :extra_dashboard_items)
       else
@@ -26,6 +29,20 @@ defmodule MaveCoreWeb.DashboardComponents.NavigationTest do
              ["Video", "Data", "Settings"]
 
     assert Enum.empty?(LazyHTML.query(document, "#dashboard-menu-footer"))
+  end
+
+  test "standalone menu links authorized flow operators to Runs" do
+    Application.put_env(:mave_core, :flow_admin,
+      emails: ["operator@example.com"],
+      email_domains: []
+    )
+
+    document = menu_document("operator@example.com")
+    link = LazyHTML.query(document, "a[href='/flow/runs']")
+
+    assert Enum.count(link) == 1
+    assert LazyHTML.text(link) |> String.trim() == "Runs"
+    assert Enum.empty?(LazyHTML.query(menu_document(), "a[href='/flow/runs']"))
   end
 
   test "configured footer links support space-aware paths and external URLs" do
@@ -121,9 +138,11 @@ defmodule MaveCoreWeb.DashboardComponents.NavigationTest do
     refute html =~ "overflow-y-scroll"
   end
 
-  defp menu_document do
+  defp menu_document, do: menu_document("user@example.com")
+
+  defp menu_document(email) do
     render_component(&menu/1,
-      current_user: %{id: "user-id", email: "user@example.com"},
+      current_user: %{id: "user-id", email: email},
       current_space: %{id: "space-id"}
     )
     |> LazyHTML.from_fragment()

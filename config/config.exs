@@ -181,10 +181,10 @@ config :mave_core, :gpu_encoding_booster,
 config :mave_core, :extra_dashboard_items, [
   %{
     id: :flow,
-    label: "Flow",
+    label: "Runs",
     path: "/flow/runs",
     placement: :menu,
-    visible?: false
+    visible?: {MaveCore.Flow.Admin, :dashboard_enabled_for?}
   }
 ]
 
