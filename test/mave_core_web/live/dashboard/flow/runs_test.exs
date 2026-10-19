@@ -41,6 +41,43 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert String.ends_with?(to, "/videos")
   end
 
+  test "run history marks deleted videos and preserves status when filtering", %{conn: conn} do
+    {admin, conn} = authenticated_conn(conn, "history-admin@mave.io")
+    space = admin.current_space_membership.space
+    {:ok, existing} = Embeds.create_video_embed(space, %{"name" => "Existing"})
+    {:ok, deleted} = Embeds.create_video_embed(space, %{"name" => "Deleted"})
+    existing_run = create_failed_run!(space.hash, existing.hash)
+    deleted_run = create_failed_run!(space.hash, deleted.hash)
+    deleted |> Ecto.Changeset.change(deleted_at: DateTime.utc_now()) |> Repo.update!()
+
+    {:ok, view, _html} = live(conn, "/flow/runs?status=failed")
+    assert has_element?(view, "#run-row-#{existing_run.id}")
+    assert has_element?(view, "#run-row-#{deleted_run.id}")
+    assert has_element?(view, "#deleted-video-#{deleted_run.id}", "Video deleted")
+    refute has_element?(view, "#recover-run-#{deleted_run.id}")
+
+    view |> element("#toggle-run-#{deleted_run.id}") |> render_click()
+    refute has_element?(view, "#retry-step-#{deleted_run.id}-manifest")
+    render_click(view, "retry_step", %{"run-id" => deleted_run.id, "step-id" => "manifest"})
+    assert has_element?(view, "#flash-error", "This video has been deleted.")
+    assert Repo.get!(Run, deleted_run.id).status == "failed"
+
+    view |> element("#video-filter-deleted") |> render_click()
+    assert_patch(view, "/flow/runs?status=failed&video_status=deleted")
+    refute has_element?(view, "#run-row-#{existing_run.id}")
+    assert has_element?(view, "#run-row-#{deleted_run.id}")
+    assert has_element?(view, "#video-filter-deleted[aria-current=true]")
+
+    view |> element("#video-filter-existing") |> render_click()
+    assert_patch(view, "/flow/runs?status=failed&video_status=existing")
+    assert has_element?(view, "#run-row-#{existing_run.id}")
+    refute has_element?(view, "#run-row-#{deleted_run.id}")
+
+    view |> element("#video-filter-all") |> render_click()
+    assert_patch(view, "/flow/runs?status=failed")
+    assert has_element?(view, "#run-row-#{deleted_run.id}")
+  end
+
   test "/flow/runs renders durable dependency, queue, execution, and total timing data", %{
     conn: conn
   } do

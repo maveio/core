@@ -29,6 +29,7 @@ defmodule MaveCore.Flow.Diagnostics do
     status = opts |> Keyword.get(:status, "all") |> normalize_status()
     step_type = opts |> Keyword.get(:step_type) |> normalize_step_type()
     time_window = opts |> time_window_opt() |> normalize_time_window()
+    video_status = normalize_video_status(Keyword.get(opts, :video_status))
     stale_minutes = Keyword.get(opts, :stale_minutes, @default_stale_minutes)
 
     since_hours =
@@ -37,7 +38,8 @@ defmodule MaveCore.Flow.Diagnostics do
     stale_before = DateTime.add(now, -stale_minutes * 60, :second)
     since = DateTime.add(now, -since_hours * 60 * 60, :second)
 
-    attention_page = attention_runs_page(nil, page, limit, status, step_type, time_window)
+    attention_page =
+      attention_runs_page(nil, page, limit, status, step_type, time_window, video_status)
 
     runs =
       attention_page.entries
@@ -55,6 +57,7 @@ defmodule MaveCore.Flow.Diagnostics do
       status: status,
       step_type_filter: step_type,
       time_window_filter: time_window,
+      video_status_filter: video_status,
       page: attention_page.page,
       total_pages: attention_page.total_pages,
       total_entries: attention_page.total_entries,
@@ -73,6 +76,7 @@ defmodule MaveCore.Flow.Diagnostics do
     status = opts |> Keyword.get(:status, "all") |> normalize_status()
     step_type = opts |> Keyword.get(:step_type) |> normalize_step_type()
     time_window = opts |> time_window_opt() |> normalize_time_window()
+    video_status = normalize_video_status(Keyword.get(opts, :video_status))
     stale_minutes = Keyword.get(opts, :stale_minutes, @default_stale_minutes)
 
     since_hours =
@@ -81,7 +85,8 @@ defmodule MaveCore.Flow.Diagnostics do
     stale_before = DateTime.add(now, -stale_minutes * 60, :second)
     since = DateTime.add(now, -since_hours * 60 * 60, :second)
 
-    attention_page = attention_runs_page(space, page, limit, status, step_type, time_window)
+    attention_page =
+      attention_runs_page(space, page, limit, status, step_type, time_window, video_status)
 
     runs =
       attention_page.entries
@@ -99,6 +104,7 @@ defmodule MaveCore.Flow.Diagnostics do
       status: status,
       step_type_filter: step_type,
       time_window_filter: time_window,
+      video_status_filter: video_status,
       page: attention_page.page,
       total_pages: attention_page.total_pages,
       total_entries: attention_page.total_entries,
@@ -117,10 +123,12 @@ defmodule MaveCore.Flow.Diagnostics do
     status = opts |> Keyword.get(:status, "all") |> normalize_status()
     step_type = opts |> Keyword.get(:step_type) |> normalize_step_type()
     time_window = opts |> time_window_opt() |> normalize_time_window()
+    video_status = normalize_video_status(Keyword.get(opts, :video_status))
     stale_minutes = Keyword.get(opts, :stale_minutes, @default_stale_minutes)
     stale_before = DateTime.add(now, -stale_minutes * 60, :second)
 
-    with %Run{} = run <- run_diagnostics_query(flow_run_id, nil, status, step_type, time_window) do
+    with %Run{} = run <-
+           run_diagnostics_query(flow_run_id, nil, status, step_type, time_window, video_status) do
       [run] = Repo.preload([run], [:flow_template, :flow_version, :step_runs])
       spaces_by_hash = spaces_by_hash([run])
       embeds_by_key = embeds_by_key([run], spaces_by_hash)
@@ -139,11 +147,12 @@ defmodule MaveCore.Flow.Diagnostics do
     status = opts |> Keyword.get(:status, "all") |> normalize_status()
     step_type = opts |> Keyword.get(:step_type) |> normalize_step_type()
     time_window = opts |> time_window_opt() |> normalize_time_window()
+    video_status = normalize_video_status(Keyword.get(opts, :video_status))
     stale_minutes = Keyword.get(opts, :stale_minutes, @default_stale_minutes)
     stale_before = DateTime.add(now, -stale_minutes * 60, :second)
 
     with %Run{} = run <-
-           run_diagnostics_query(flow_run_id, space, status, step_type, time_window) do
+           run_diagnostics_query(flow_run_id, space, status, step_type, time_window, video_status) do
       [run] = Repo.preload([run], [:flow_template, :flow_version, :step_runs])
       spaces_by_hash = %{space.hash => space}
       embeds_by_key = embeds_by_key([run], spaces_by_hash)
@@ -214,8 +223,20 @@ defmodule MaveCore.Flow.Diagnostics do
 
   def recover_run_for_space(_space, _flow_run_id), do: {:error, :invalid}
 
-  defp attention_runs_page(space_or_nil, page, limit, status, step_type, time_window) do
-    query = attention_runs_query(space_or_nil, status, step_type, time_window)
+  defp attention_runs_page(
+         space_or_nil,
+         page,
+         limit,
+         status,
+         step_type,
+         time_window,
+         video_status
+       ) do
+    query =
+      space_or_nil
+      |> attention_runs_query(status, step_type, time_window)
+      |> maybe_filter_video_status(video_status)
+
     total_entries = Repo.aggregate(query, :count, :id)
     total_pages = total_pages(total_entries, limit)
     page = min(page, max(total_pages, 1))
@@ -251,22 +272,31 @@ defmodule MaveCore.Flow.Diagnostics do
     )
   end
 
-  defp run_diagnostics_query(flow_run_id, space_or_nil, status, nil, time_window) do
+  defp run_diagnostics_query(flow_run_id, space_or_nil, status, nil, time_window, video_status) do
     Run
     |> where([run], run.id == ^flow_run_id)
     |> maybe_filter_space(space_or_nil)
     |> maybe_filter_status(status)
     |> maybe_filter_time_window(time_window)
+    |> maybe_filter_video_status(video_status)
     |> Repo.one()
   end
 
-  defp run_diagnostics_query(flow_run_id, space_or_nil, status, step_type, time_window)
+  defp run_diagnostics_query(
+         flow_run_id,
+         space_or_nil,
+         status,
+         step_type,
+         time_window,
+         video_status
+       )
        when is_binary(step_type) do
     Run
     |> where([run], run.id == ^flow_run_id)
     |> maybe_filter_space(space_or_nil)
     |> maybe_filter_status(status)
     |> maybe_filter_time_window(time_window)
+    |> maybe_filter_video_status(video_status)
     |> join(:inner, [run], step_run in StepRun,
       on: step_run.flow_run_id == run.id and step_run.step_type == ^step_type
     )
@@ -279,6 +309,22 @@ defmodule MaveCore.Flow.Diagnostics do
     |> maybe_filter_space(space_or_nil)
     |> maybe_filter_status(status)
     |> maybe_filter_time_window(time_window)
+  end
+
+  defp normalize_video_status(status) when status in ["existing", "deleted"], do: status
+  defp normalize_video_status(_status), do: "all"
+
+  defp maybe_filter_video_status(query, "all"), do: query
+
+  defp maybe_filter_video_status(query, status) do
+    embeds =
+      if status == "deleted" do
+        from(embed in Embed, where: not is_nil(embed.deleted_at), select: embed.hash)
+      else
+        from(embed in Embed, where: is_nil(embed.deleted_at), select: embed.hash)
+      end
+
+    where(query, [run], fragment("?->>'embed_hash'", run.input) in subquery(embeds))
   end
 
   defp order_attention_runs(query, nil), do: order_by(query, [run], desc: run.updated_at)
@@ -849,6 +895,7 @@ defmodule MaveCore.Flow.Diagnostics do
     embed_hash = get_in(run.input || %{}, ["embed_hash"])
     embed = embed_for_key(embeds_by_key, space_hash, embed_hash)
     space = space_for_run(embed, spaces_by_hash, space_hash)
+    video_deleted? = not is_nil(maybe_get(embed, :deleted_at))
 
     %{
       id: run.id,
@@ -862,6 +909,7 @@ defmodule MaveCore.Flow.Diagnostics do
       space_domain: space_domain(space),
       embed_hash: embed_hash,
       embed: embed,
+      video_deleted?: video_deleted?,
       dashboard_embed_id: dashboard_embed_id(embed),
       public_embed_id: public_embed_id(space, embed, embed_hash),
       selected_step_type: step_type_filter,
@@ -870,8 +918,8 @@ defmodule MaveCore.Flow.Diagnostics do
       step_status: maybe_get(focus_step, :status),
       step_attempt: maybe_get(focus_step, :attempt),
       execution_metadata: execution_metadata(focus_step),
-      retry_step_id: maybe_get(failed_step, :step_id),
-      recoverable?: recoverable_run?(run),
+      retry_step_id: if(video_deleted?, do: nil, else: maybe_get(failed_step, :step_id)),
+      recoverable?: not video_deleted? and recoverable_run?(run),
       error: compact_error(failure_error(failed_step, run)),
       run_duration_ms: runtime_ms(run, now),
       step_dependency_wait_ms: step_timing_ms(focus_step, now, :dependency),

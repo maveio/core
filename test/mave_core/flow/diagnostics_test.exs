@@ -101,6 +101,61 @@ defmodule MaveCore.Flow.DiagnosticsTest do
     assert run.public_embed_id == "#{space.hash}#{embed.hash}"
   end
 
+  test "video filters preserve history and filter before pagination, including shared spaces" do
+    space = create_trial_space!("history-existing")
+    other_space = create_trial_space!("history-deleted")
+    {:ok, existing} = Embeds.create_video_embed(space, %{"name" => "Existing"})
+    {:ok, deleted} = Embeds.create_video_embed(other_space, %{"name" => "Deleted"})
+    existing_run = create_failed_run!(space.hash, existing.hash)
+    deleted_run = create_failed_run!(other_space.hash, deleted.hash)
+    missing_run = create_failed_run!(space.hash, "MissingVideo")
+    deleted |> Ecto.Changeset.change(deleted_at: DateTime.utc_now()) |> Repo.update!()
+
+    history = Diagnostics.global_diagnostics(status: "failed")
+    assert history.total_entries == 3
+    assert Enum.find(history.attention_runs, &(&1.id == deleted_run.id)).video_deleted?
+    refute Enum.find(history.attention_runs, &(&1.id == missing_run.id)).video_deleted?
+
+    existing_only =
+      Diagnostics.global_diagnostics(status: "failed", video_status: "existing", limit: 1)
+
+    assert existing_only.total_entries == 1
+    assert [%{id: id, video_deleted?: false}] = existing_only.attention_runs
+    assert id == existing_run.id
+
+    deleted_only =
+      Diagnostics.global_diagnostics(status: "failed", video_status: "deleted", limit: 1)
+
+    assert deleted_only.total_entries == 1
+
+    assert [%{id: id, video_deleted?: true, recoverable?: false, retry_step_id: nil}] =
+             deleted_only.attention_runs
+
+    assert id == deleted_run.id
+    assert deleted_only.status_counts.failed == 3
+
+    assert Diagnostics.run_diagnostics(existing_run.id, video_status: "deleted") == nil
+    assert Diagnostics.run_diagnostics(deleted_run.id, video_status: "existing") == nil
+    assert Diagnostics.global_diagnostics(video_status: "invalid").total_entries == 3
+
+    assert Diagnostics.diagnostics_for_space(other_space, video_status: "deleted").total_entries ==
+             1
+  end
+
+  test "deleted video runs cannot be retried or recovered through diagnostics or the flow engine" do
+    space = create_user_space!("history-retry")
+    {:ok, embed} = Embeds.create_video_embed(space, %{"name" => "Deleted"})
+    run = create_failed_run!(space.hash, embed.hash)
+    embed |> Ecto.Changeset.change(deleted_at: DateTime.utc_now()) |> Repo.update!()
+
+    assert {:error, :video_deleted} = Diagnostics.retry_step(run.id, "manifest")
+    assert {:error, :video_deleted} = Diagnostics.recover_run(run.id)
+    assert {:error, :video_deleted} = Flow.retry_step(run.id, "manifest")
+    assert {:error, :video_deleted} = Flow.recover_run(run.id)
+    assert Repo.get!(Run, run.id).status == "failed"
+    assert Repo.get_by!(StepRun, flow_run_id: run.id, step_id: "manifest").status == "failed"
+  end
+
   test "global diagnostics focus the latest completed step for succeeded runs" do
     space = create_user_space!("ops-succeeded")
     succeeded_run = create_succeeded_run!(space.hash, "SucceededTiming")
