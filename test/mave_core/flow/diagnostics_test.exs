@@ -132,7 +132,8 @@ defmodule MaveCore.Flow.DiagnosticsTest do
              deleted_only.attention_runs
 
     assert id == deleted_run.id
-    assert deleted_only.status_counts.failed == 3
+    assert deleted_only.status_counts.failed == 1
+    assert existing_only.status_counts.failed == 1
 
     assert Diagnostics.run_diagnostics(existing_run.id, video_status: "deleted") == nil
     assert Diagnostics.run_diagnostics(deleted_run.id, video_status: "existing") == nil

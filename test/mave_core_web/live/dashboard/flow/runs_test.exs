@@ -5,10 +5,12 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
 
   alias MaveCore.Accounts
   alias MaveCore.Embeds
+  alias MaveCore.Embeds.Embed
   alias MaveCore.Flow
   alias MaveCore.Flow.Run
   alias MaveCore.Flow.StepRun
   alias MaveCore.Repo
+  alias MaveCore.Spaces.Space
 
   @definition %{
     "steps" => [
@@ -52,6 +54,10 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
 
     {:ok, view, _html} = live(conn, "/flow/runs?status=failed")
     assert has_element?(view, "#run-row-#{existing_run.id}")
+    refute has_element?(view, "#run-row-#{deleted_run.id}")
+    assert has_element?(view, "#video-filter-existing[aria-current=true]", "Not deleted")
+    view |> element("#video-filter-all") |> render_click()
+    assert_patch(view, "/flow/runs?status=failed&video_status=all")
     assert has_element?(view, "#run-row-#{deleted_run.id}")
     assert has_element?(view, "#deleted-video-#{deleted_run.id}", "Video deleted")
     refute has_element?(view, "#recover-run-#{deleted_run.id}")
@@ -69,12 +75,12 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert has_element?(view, "#video-filter-deleted[aria-current=true]")
 
     view |> element("#video-filter-existing") |> render_click()
-    assert_patch(view, "/flow/runs?status=failed&video_status=existing")
+    assert_patch(view, "/flow/runs?status=failed")
     assert has_element?(view, "#run-row-#{existing_run.id}")
     refute has_element?(view, "#run-row-#{deleted_run.id}")
 
     view |> element("#video-filter-all") |> render_click()
-    assert_patch(view, "/flow/runs?status=failed")
+    assert_patch(view, "/flow/runs?status=failed&video_status=all")
     assert has_element?(view, "#run-row-#{deleted_run.id}")
   end
 
@@ -220,6 +226,8 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
       Flow.create_template(%{"slug" => unique_hash("playable"), "name" => "Playable"})
 
     {:ok, _version} = Flow.create_version(template.id, %{"definition" => definition})
+
+    ensure_run_embed!(space.hash, "PlayableBackground")
 
     {:ok, run} =
       Flow.start_run(
@@ -516,6 +524,16 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     {logged_in_user, conn}
   end
 
+  defp ensure_run_embed!(space_hash, embed_hash) do
+    unless Repo.get_by(Embed, hash: embed_hash) do
+      space = Repo.get_by!(Space, hash: space_hash)
+
+      %Embed{}
+      |> Embed.changeset(%{hash: embed_hash, space_id: space.id, type: :video})
+      |> Repo.insert!()
+    end
+  end
+
   defp create_failed_run!(space_hash, embed_hash) do
     create_terminal_run!(space_hash, embed_hash, "failed")
   end
@@ -531,6 +549,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
   end
 
   defp create_terminal_run!(space_hash, embed_hash, status, opts \\ []) do
+    ensure_run_embed!(space_hash, embed_hash)
     slug = "runs_#{System.unique_integer([:positive])}"
     {:ok, template} = Flow.create_template(%{"slug" => slug, "name" => "Runs Publish"})
     {:ok, _version} = Flow.create_version(template.id, %{"definition" => @definition})
