@@ -442,19 +442,37 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                     phx-value-run-id={run.id}
                     aria-controls={"run-steps-#{run.id}"}
                     aria-expanded={expanded_run?(@expanded_run_ids, run.id)}
-                    class="mb-2 flex cursor-pointer flex-wrap items-center gap-x-2 text-xs text-stone-500 hover:text-stone-700"
+                    class="mb-2 block w-full cursor-pointer text-left text-xs text-stone-500 hover:text-stone-700"
                   >
-                    <span>{gettext("%{done}/%{total} done",
-                      done: Enum.count(run.steps, &(&1.step_status in ["succeeded", "skipped"])),
-                      total: length(run.steps)
-                    )}</span>
                     <span
-                      :if={Enum.any?(run.steps, &(&1.step_status == "failed"))}
-                      class="font-medium text-red-500"
+                      id={"step-progress-#{run.id}"}
+                      role="img"
+                      aria-labelledby={"step-summary-label-#{run.id}"}
+                      class="mb-2 flex h-2 w-full gap-px overflow-hidden rounded-sm"
                     >
-                      {gettext("%{count} failed",
-                        count: Enum.count(run.steps, &(&1.step_status == "failed"))
-                      )}
+                      <span
+                        :for={step <- run.steps}
+                        :key={step.step_id}
+                        id={"step-progress-#{run.id}-#{step.step_id}"}
+                        data-status={step.step_status}
+                        title={"#{step.step_id}: #{step.step_status}"}
+                        class={[
+                          "h-full min-w-0 flex-1 transition-colors",
+                          step_progress_class(step.step_status)
+                        ]}
+                      ></span>
+                    </span>
+                    <span id={"step-summary-label-#{run.id}"} class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span>{gettext("%{done}/%{total} done",
+                        done: step_count(run.steps, ["succeeded", "skipped"]),
+                        total: length(run.steps)
+                      )}</span>
+                      <span
+                        :for={summary <- step_status_summary(run)}
+                        class={summary.class}
+                      >
+                        {summary.label}
+                      </span>
                     </span>
                   </button>
                   <div :if={run.active_steps != []} class="mb-2 space-y-1">
@@ -478,34 +496,6 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                     >
                       {gettext("+%{count} running", count: length(run.active_steps) - 3)}
                     </button>
-                  </div>
-                  <div
-                    :if={run.active_steps == [] or @step_type}
-                    class="truncate text-sm text-stone-500"
-                  >
-                    {run.step_type || "-"}
-                  </div>
-                  <div
-                    :if={run.active_steps == [] or @step_type}
-                    class="mt-1 truncate font-mono text-[0.68rem] text-stone-300"
-                  >
-                    {run.step_id || "-"} - {run.step_status || run.status}
-                  </div>
-                  <div
-                    :if={
-                      run.active_steps == [] and
-                        execution_progress_percent(run.execution_metadata, run.step_status)
-                    }
-                    class="mt-1 flex items-center gap-2 text-[0.68rem] text-blue-500"
-                  >
-                    <div class="h-1.5 w-20 overflow-hidden rounded-full bg-stone-200">
-                      <div
-                        class="h-full rounded-full bg-blue-500 transition-[width] duration-300"
-                        style={"width: #{execution_progress_percent(run.execution_metadata, run.step_status)}%;"}
-                      >
-                      </div>
-                    </div>
-                    <span>{execution_progress_label(run.execution_metadata)}</span>
                   </div>
                 </.data_table_grid_cell>
 
@@ -1200,6 +1190,39 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
 
   defp short_id(id) when is_binary(id), do: String.slice(id, 0, 8)
   defp short_id(_id), do: "-"
+
+  defp step_progress_class("succeeded"), do: "bg-emerald-500"
+  defp step_progress_class("executing"), do: "bg-blue-500"
+  defp step_progress_class("scheduled"), do: "bg-blue-300"
+  defp step_progress_class("failed"), do: "bg-red-500"
+  defp step_progress_class("cancelled"), do: "bg-amber-300"
+  defp step_progress_class("skipped"), do: "bg-stone-100"
+  defp step_progress_class(_status), do: "bg-stone-200"
+
+  defp step_count(steps, statuses), do: Enum.count(steps, &(&1.step_status in statuses))
+
+  defp step_status_summary(run) do
+    waiting = step_count(run.steps, ["queued", "scheduled"])
+
+    [
+      {step_count(run.steps, ["executing"]),
+       fn count -> gettext("%{count} running", count: count) end, "text-blue-500"},
+      {step_count(run.steps, ["failed"]),
+       fn count -> gettext("%{count} failed", count: count) end, "font-medium text-red-500"},
+      {waiting,
+       fn count ->
+         if run.status in ["queued", "running"],
+           do: gettext("%{count} waiting", count: count),
+           else: gettext("%{count} not run", count: count)
+       end, "text-stone-400"},
+      {step_count(run.steps, ["skipped"]),
+       fn count -> gettext("%{count} skipped", count: count) end, "text-stone-400"},
+      {step_count(run.steps, ["cancelled"]),
+       fn count -> gettext("%{count} cancelled", count: count) end, "text-amber-600"}
+    ]
+    |> Enum.filter(fn {count, _label, _class} -> count > 0 end)
+    |> Enum.map(fn {count, label, class} -> %{label: label.(count), class: class} end)
+  end
 
   defp run_errors(run) do
     errors =
