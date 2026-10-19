@@ -3,6 +3,8 @@ defmodule MaveCore.Transcription.LanguageDetector do
 
   alias MaveCore.Languages
 
+  @minimum_confidence 0.8
+
   def detect(text) when is_binary(text) do
     text
     |> String.trim()
@@ -12,11 +14,9 @@ defmodule MaveCore.Transcription.LanguageDetector do
 
       trimmed ->
         with {:module, Whatlangex} <- Code.ensure_loaded(Whatlangex),
-             {:ok, result} <- Whatlangex.detect(trimmed),
-             iso3 when is_binary(iso3) <- Map.get(result, :lang) || Map.get(result, "lang"),
-             language_name when is_binary(language_name) <- Whatlangex.code_to_eng_name(iso3),
-             iso2 when is_binary(iso2) <- Languages.spoken_language_code(language_name) do
-          iso2
+             %{lang: iso3, confidence: confidence} <- Whatlangex.detect(trimmed),
+             true <- is_number(confidence) and confidence >= @minimum_confidence do
+          Languages.normalize_media_language(iso3)
         else
           _ -> nil
         end

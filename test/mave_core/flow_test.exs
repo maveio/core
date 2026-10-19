@@ -4789,7 +4789,8 @@ defmodule MaveCore.FlowTest do
                    "aspect_ratio" => "16 / 9",
                    "streams" => []
                  },
-                 "transcription_text" => "Hello world from flow test"
+                 "transcription_text" => "Hello world from flow test",
+                 "transcription_language" => "en"
                }
              )
 
