@@ -10,6 +10,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
   alias MaveCore.Flow.Run
   alias MaveCore.Flow.StepRun
   alias MaveCore.Repo
+  alias MaveCore.Spaces.Domain
   alias MaveCore.Spaces.Space
 
   @definition %{
@@ -430,6 +431,69 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     refute has_element?(view, "#run-row-#{newer_run.id}", "live update failed")
   end
 
+  test "interleaved progress stays with the matching video and domain", %{conn: conn} do
+    {admin, conn} = authenticated_conn(conn, "runs-concurrent@mave.io")
+
+    first_space =
+      admin.current_space_membership.space
+      |> Ecto.Changeset.change(hash: Space.shared_trial_hash())
+      |> Repo.update!()
+
+    {:ok, other_user} = Accounts.create_user("other-concurrent@example.com")
+
+    second_space =
+      other_user.current_space_membership.space
+      |> Ecto.Changeset.change(hash: Space.shared_trial_hash())
+      |> Repo.update!()
+
+    {:ok, first_embed} = Embeds.create_video_embed(first_space, %{"name" => "First video"})
+    {:ok, second_embed} = Embeds.create_video_embed(second_space, %{"name" => "Second video"})
+    Repo.insert!(%Domain{space_id: first_space.id, domain: "first.example.com"})
+    Repo.insert!(%Domain{space_id: second_space.id, domain: "second.example.com"})
+    first = create_succeeded_run!(first_space.hash, first_embed.hash)
+    second = create_succeeded_run!(second_space.hash, second_embed.hash)
+
+    for run <- [first, second] do
+      run |> Run.changeset(%{status: "running", completed_at: nil}) |> Repo.update!()
+
+      for step_id <- ["source", "manifest"] do
+        update_step_run!(run.id, step_id, %{
+          status: "executing",
+          completed_at: nil,
+          execution_metadata: %{"progress" => %{"percent" => 10.0}}
+        })
+      end
+    end
+
+    {:ok, view, _html} = live(conn, "/flow/runs?status=running")
+    view |> element("#toggle-run-#{first.id}") |> render_click()
+
+    for {run, percent} <- [{first, 35.0}, {second, 70.0}, {first, 55.0}] do
+      update_step_run!(run.id, "manifest", %{
+        execution_metadata: %{"progress" => %{"percent" => percent}}
+      })
+
+      Flow.Events.broadcast_updated(run.id, %{"step_id" => "manifest", "progress" => percent})
+      render(view)
+      assert has_element?(view, "#run-row-#{first.id}", "first.example.com")
+      refute has_element?(view, "#run-row-#{first.id}", "second.example.com")
+      assert has_element?(view, "#run-row-#{second.id}", "second.example.com")
+      assert has_element?(view, "#run-row-#{first.id}", "First video")
+      assert has_element?(view, "#run-row-#{second.id}", "Second video")
+      assert has_element?(view, "#run-steps-#{first.id}")
+      refute has_element?(view, "#run-steps-#{second.id}")
+    end
+
+    assert has_element?(view, "#active-step-#{first.id}-manifest", "55%")
+    assert has_element?(view, "#active-step-#{second.id}-manifest", "70%")
+    update_step_run!(first.id, "source", %{status: "succeeded", completed_at: DateTime.utc_now()})
+    Flow.Events.broadcast_updated(first.id, %{"step_status" => "succeeded"})
+    render(view)
+    refute has_element?(view, "#active-step-#{first.id}-source")
+    assert has_element?(view, "#active-step-#{second.id}-source")
+    assert has_element?(view, "#active-step-#{first.id}-manifest", "55%")
+  end
+
   test "/flow/runs ignores realtime updates for runs outside the current page", %{conn: conn} do
     {admin, conn} = authenticated_conn(conn, "runs-offscreen-update-admin@mave.io")
     space = admin.current_space_membership.space
@@ -632,6 +696,13 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
       started_at: DateTime.add(now, -run_seconds, :second),
       completed_at: now
     })
+    |> Repo.update!()
+  end
+
+  defp update_step_run!(run_id, step_id, attrs) do
+    StepRun
+    |> Repo.get_by!(flow_run_id: run_id, step_id: step_id)
+    |> StepRun.changeset(attrs)
     |> Repo.update!()
   end
 

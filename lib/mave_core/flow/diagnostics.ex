@@ -877,7 +877,12 @@ defmodule MaveCore.Flow.Diagnostics do
     |> where([space], space.hash in ^space_hashes)
     |> preload(:domains)
     |> Repo.all()
-    |> Map.new(&{&1.hash, &1})
+    |> Enum.group_by(& &1.hash)
+    |> Enum.flat_map(fn
+      {hash, [space]} -> [{hash, space}]
+      {_shared_hash, _spaces} -> []
+    end)
+    |> Map.new()
   end
 
   defp embeds_by_key(runs, _spaces_by_hash) do
@@ -898,7 +903,7 @@ defmodule MaveCore.Flow.Diagnostics do
 
     Embed
     |> where([embed], embed.hash in ^embed_hashes)
-    |> preload(space: :domains)
+    |> preload([:asset, space: :domains])
     |> Repo.all()
     |> Map.new(fn embed ->
       {{maybe_get(embed.space, :hash), embed.hash}, embed}
@@ -913,7 +918,10 @@ defmodule MaveCore.Flow.Diagnostics do
          now,
          step_type_filter
        ) do
-    selected_step = selected_step(run.step_runs, step_type_filter, now)
+    order = definition_step_order(run.flow_version.definition)
+    step_runs = Enum.sort_by(run.step_runs, &step_sort_key(&1, order))
+    run = %{run | step_runs: step_runs}
+    selected_step = selected_step(step_runs, step_type_filter, now)
     failed_step = Enum.find(run.step_runs, &(&1.status == "failed"))
     stale_step = active_run_step(run, &stale_step?(&1, stale_before))
 
@@ -945,6 +953,11 @@ defmodule MaveCore.Flow.Diagnostics do
       space_domain: space_domain(space),
       embed_hash: embed_hash,
       embed: embed,
+      video_title: video_title(embed),
+      active_steps:
+        step_runs
+        |> Enum.filter(&(&1.status == "executing"))
+        |> Enum.map(&summarize_step(&1, now)),
       video_deleted?: video_deleted?,
       dashboard_embed_id: dashboard_embed_id(embed),
       public_embed_id: public_embed_id(space, embed, embed_hash),
@@ -1032,7 +1045,7 @@ defmodule MaveCore.Flow.Diagnostics do
        when is_list(step_runs) and is_binary(step_type) do
     step_runs
     |> Enum.filter(&(&1.step_type == step_type))
-    |> Enum.max_by(&step_sort_ms(&1, now), fn -> nil end)
+    |> Enum.max_by(&{step_sort_ms(&1, now), &1.step_id}, fn -> nil end)
   end
 
   defp selected_step(_step_runs, _step_type, _now), do: nil
@@ -1045,8 +1058,6 @@ defmodule MaveCore.Flow.Diagnostics do
     |> Enum.sort_by(&step_sort_key(&1, order))
     |> Enum.map(&summarize_step(&1, now))
   end
-
-  defp summarize_steps(_run, _now), do: []
 
   defp summarize_step(%StepRun{} = step_run, now) do
     %{
@@ -1268,8 +1279,11 @@ defmodule MaveCore.Flow.Diagnostics do
 
   defp public_embed_id(_space, _embed, embed_hash), do: embed_hash
 
+  defp video_title(%Embed{asset: %{name: name}}) when is_binary(name) and name != "", do: name
+  defp video_title(_embed), do: nil
+
   defp space_domain(%Space{domains: domains}) when is_list(domains) do
-    case List.first(domains) do
+    case Enum.min_by(domains, & &1.domain, fn -> nil end) do
       %{domain: domain} when is_binary(domain) -> domain
       _ -> nil
     end
