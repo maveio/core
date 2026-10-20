@@ -37,7 +37,7 @@ jobs:
           trap 'sudo rm -rf "$artifacts"' EXIT
           docker run --rm \
             -v "$PWD/deploy/encoding-booster/encoder/sandbox/broker:/src:ro" \
-            -v "$artifacts:/out" -w /src golang:1.27.2-alpine3.23 \
+            -v "$artifacts:/out" -w /src golang:1.27.3-alpine3.23 \
             sh -c 'go test ./... && go vet ./... && CGO_ENABLED=0 go build -trimpath -o /out/mave-media-broker .'
           cc -O2 -Wall -Wextra -Werror deploy/encoding-booster/encoder/sandbox/media_sandbox.c \
             -lseccomp -o "$artifacts/mave-media-sandbox"

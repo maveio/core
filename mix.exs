@@ -74,6 +74,9 @@ defmodule MaveCore.MixProject do
       {:finch, "~> 0.24.0"},
       # Keep consuming applications above the patched HTTP/1 and HTTP/2 baseline.
       {:mint, ">= 1.11.0 and < 2.0.0"},
+      {:castore, "~> 1.0.22"},
+      # Temporary CA distrust until upstream certifi ships the removal.
+      {:certifi, path: "vendor/certifi", override: true},
       {:req_s3, "~> 0.2.5"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},

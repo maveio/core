@@ -1,4 +1,4 @@
-FROM golang:1.27.2-alpine3.23 AS app-build
+FROM golang:1.27.3-alpine3.23 AS app-build
 
 WORKDIR /src
 COPY go.mod *.go ./
@@ -60,6 +60,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       ca-certificates libdav1d7 libgnutls30t64 libmp3lame0 libopus0 libseccomp2 \
       libsvtav1enc1d1 libwebp7 libwebpmux3 libx264-164 libx265-199 zlib1g \
+    && sed -i -e '/^mozilla\/emSign_ECC_Root_CA_-_G3.crt$/s/^/!/' \
+    -e '/^mozilla\/Comodo_AAA_Services_root.crt$/s/^/!/' /etc/ca-certificates.conf \
+    && update-ca-certificates --fresh \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
