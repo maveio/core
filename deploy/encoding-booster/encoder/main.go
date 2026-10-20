@@ -1681,13 +1681,14 @@ func framePosterFilter(codec string) string {
 }
 
 func frameQualityArgs(codec string) []string {
+	// Keep still-image quality aligned with MediaExtractFrameStep's fallback.
 	switch codec {
 	case "avif":
-		return []string{"-crf", "55", "-svtav1-params", "avif=1"}
+		return []string{"-crf", "24", "-preset", "6", "-svtav1-params", "avif=1"}
 	case "webp":
-		return []string{"-quality", "10"}
+		return []string{"-quality", "80"}
 	case "jpg", "jpeg":
-		return []string{"-strict", "unofficial", "-q:v", "6"}
+		return []string{"-strict", "unofficial", "-q:v", "3"}
 	default:
 		return nil
 	}
@@ -1701,8 +1702,11 @@ func placeholderQualityArgs(codec string) []string {
 }
 
 func storyboardQualityArgs(codec string) []string {
-	if codec == "webp" {
+	switch codec {
+	case "webp":
 		return []string{"-quality", "80"}
+	case "jpg", "jpeg":
+		return []string{"-strict", "unofficial", "-q:v", "6"}
 	}
 	return frameQualityArgs(codec)
 }

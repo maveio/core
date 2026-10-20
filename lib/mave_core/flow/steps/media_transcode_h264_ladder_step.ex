@@ -1617,7 +1617,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStep do
              "-frames:v",
              "1",
              "-q:v",
-             "6",
+             "3",
              output_path
            ]}
 
@@ -1638,6 +1638,8 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStep do
              "1",
              "-vf",
              RenditionSizing.long_edge_scale_filter(1280),
+             "-q:v",
+             "3",
              output_path
            ]}
 
