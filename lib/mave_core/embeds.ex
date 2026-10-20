@@ -1404,14 +1404,21 @@ defmodule MaveCore.Embeds do
   end
 
   defp preview_poster_url(%Space{} = space, %Embed{} = embed, settings, cache_buster) do
+    private_upload? = uploaded_poster_settings?(settings) and MaveCore.Playback.protected?(embed)
+
     url =
-      if generated_thumbnail_poster_settings?(settings) and not is_nil(cache_buster) do
-        thumbnail_url(space, embed, cache_buster)
-      else
-        SettingsSerializer.preview_poster_url(space, embed, settings)
+      cond do
+        private_upload? ->
+          thumbnail_url(space, embed, cache_buster)
+
+        generated_thumbnail_poster_settings?(settings) and not is_nil(cache_buster) ->
+          thumbnail_url(space, embed, cache_buster)
+
+        true ->
+          SettingsSerializer.preview_poster_url(space, embed, settings)
       end
 
-    if uploaded_poster_settings?(settings) do
+    if uploaded_poster_settings?(settings) and not private_upload? do
       with_cache_buster(url, cache_buster)
     else
       url
