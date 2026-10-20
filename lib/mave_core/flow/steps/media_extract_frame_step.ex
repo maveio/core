@@ -597,6 +597,7 @@ defmodule MaveCore.Flow.Steps.MediaExtractFrameStep do
 
   defp codec_fallback_args("avif"),
     do: ["-crf", "24", "-preset", "6", "-svtav1-params", "avif=1"]
+
   defp codec_fallback_args(_), do: []
 
   defp build_key(embed_hash, version, role, codec) do

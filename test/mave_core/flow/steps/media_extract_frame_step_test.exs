@@ -337,7 +337,9 @@ defmodule MaveCore.Flow.Steps.MediaExtractFrameStepTest do
             "-c:v",
             "ffv1",
             input
-          ], stderr_to_stdout: true)
+          ],
+          stderr_to_stdout: true
+        )
 
       context = %{
         run_input: %{
@@ -377,7 +379,9 @@ defmodule MaveCore.Flow.Steps.MediaExtractFrameStepTest do
               "-f",
               "null",
               "-"
-            ], stderr_to_stdout: true)
+            ],
+            stderr_to_stdout: true
+          )
 
         [_, score] = Regex.run(~r/All:([0-9.]+)/, metrics)
 
