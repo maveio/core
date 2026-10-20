@@ -455,6 +455,14 @@ Core includes the matching encoder image source and configuration guidance in
 [`deploy/encoding-booster`](../deploy/encoding-booster/README.md). Oban
 coordinates the request while the booster performs the encode.
 
+## Poster and thumbnail quality
+
+Frame extraction uses AVIF CRF 24 (SVT preset 6), WebP quality 80 and JPEG quality 3 in both
+the encoding booster and the FFmpeg fallback. Prepackaged JPEG posters and
+thumbnails use the same JPEG setting. These defaults prioritize image detail
+over the smallest file size; thumbnails retain their 1,280-pixel long-edge bound.
+Existing images need regeneration to benefit from changed encoding settings.
+
 ## Subtitle language selection
 
 An explicit `transcription_language` takes precedence, followed by the transcription

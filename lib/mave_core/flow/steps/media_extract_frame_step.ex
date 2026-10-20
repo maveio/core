@@ -521,7 +521,7 @@ defmodule MaveCore.Flow.Steps.MediaExtractFrameStep do
                poster_scale_filter(codec),
                "-frames:v",
                "1"
-             ] ++ poster_quality_args(codec) ++ [output_path]}
+             ] ++ codec_fallback_args(codec) ++ [output_path]}
 
         role when role in ["thumbnail", "custom_thumbnail"] ->
           {:ok,
@@ -579,11 +579,6 @@ defmodule MaveCore.Flow.Steps.MediaExtractFrameStep do
     end
   end
 
-  defp poster_quality_args("av1"), do: ["-crf", "55"]
-  defp poster_quality_args("avif"), do: ["-crf", "55", "-svtav1-params", "avif=1"]
-  defp poster_quality_args("webp"), do: ["-quality", "10"]
-  defp poster_quality_args(_codec), do: ["-q:v", "6"]
-
   defp poster_scale_filter(codec) when codec in ["av1", "avif"], do: @even_poster_scale_filter
   defp poster_scale_filter(_codec), do: @poster_scale_filter
 
@@ -595,11 +590,13 @@ defmodule MaveCore.Flow.Steps.MediaExtractFrameStep do
   defp codec_name("avif"), do: {:ok, "libsvtav1"}
   defp codec_name(other), do: {:error, {:unsupported_codec, other}}
 
-  defp codec_fallback_args("jpg"), do: ["-q:v", "6"]
-  defp codec_fallback_args("jpeg"), do: ["-q:v", "6"]
-  defp codec_fallback_args("webp"), do: ["-quality", "10"]
-  defp codec_fallback_args("av1"), do: ["-crf", "55"]
-  defp codec_fallback_args("avif"), do: ["-crf", "55", "-svtav1-params", "avif=1"]
+  defp codec_fallback_args("jpg"), do: ["-q:v", "3"]
+  defp codec_fallback_args("jpeg"), do: ["-q:v", "3"]
+  defp codec_fallback_args("webp"), do: ["-quality", "80"]
+  defp codec_fallback_args("av1"), do: ["-crf", "24", "-preset", "6"]
+
+  defp codec_fallback_args("avif"),
+    do: ["-crf", "24", "-preset", "6", "-svtav1-params", "avif=1"]
   defp codec_fallback_args(_), do: []
 
   defp build_key(embed_hash, version, role, codec) do

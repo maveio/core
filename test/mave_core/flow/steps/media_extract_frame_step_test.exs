@@ -311,6 +311,82 @@ defmodule MaveCore.Flow.Steps.MediaExtractFrameStepTest do
     end
   end
 
+  test "fallback poster encodes retain image detail across formats" do
+    ffmpeg = System.find_executable("ffmpeg")
+
+    if ffmpeg && ffmpeg_encoder_available?(ffmpeg, "libsvtav1") do
+      tmp_dir =
+        Path.join(System.tmp_dir!(), "frame_quality_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(tmp_dir)
+      on_exit(fn -> File.rm_rf(tmp_dir) end)
+      input = Path.join(tmp_dir, "source.mkv")
+
+      {_output, 0} =
+        System.cmd(
+          ffmpeg,
+          [
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=640x360,noise=alls=8:allf=u:all_seed=42",
+            "-frames:v",
+            "1",
+            "-c:v",
+            "ffv1",
+            input
+          ], stderr_to_stdout: true)
+
+      context = %{
+        run_input: %{
+          "space_hash" => "quality",
+          "embed_hash" => "qualitytest",
+          "source_body" => File.read!(input),
+          "source_content_type" => "video/x-matroska",
+          "media_extract_frame_mode" => "ffmpeg"
+        },
+        dependency_outputs: %{
+          "source" => %{"source_url" => "https://example.com/source.mkv"}
+        }
+      }
+
+      for {codec, minimum} <- [{"avif", 0.91}, {"webp", 0.915}, {"jpg", 0.93}] do
+        step = %{
+          "id" => "poster_#{codec}",
+          "params" => %{"role" => "poster", "codec" => codec, "strict" => true}
+        }
+
+        assert {:ok, output, [_artifact]} = MediaExtractFrameStep.run(step, context)
+        assert {:ok, body} = FlowStorageAdapterStub.get("space-quality", output["key"], nil)
+        encoded = Path.join(tmp_dir, "poster.#{codec}")
+        File.write!(encoded, body)
+
+        {metrics, 0} =
+          System.cmd(
+            ffmpeg,
+            [
+              "-hide_banner",
+              "-i",
+              input,
+              "-i",
+              encoded,
+              "-filter_complex",
+              "[0:v]format=yuv420p[a];[1:v]scale=in_range=auto:out_range=tv,format=yuv420p[b];[a][b]ssim",
+              "-f",
+              "null",
+              "-"
+            ], stderr_to_stdout: true)
+
+        [_, score] = Regex.run(~r/All:([0-9.]+)/, metrics)
+
+        assert String.to_float(score) >= minimum,
+               "#{codec} poster loses too much detail: #{score}"
+      end
+    end
+  end
+
   test "extracts avif poster from odd-dimension video frames" do
     ffmpeg_bin = System.find_executable("ffmpeg")
 

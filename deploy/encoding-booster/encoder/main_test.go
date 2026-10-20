@@ -1110,7 +1110,7 @@ func TestFFmpegBuildsStorageDirectWaveformAndStoryboardCommands(t *testing.T) {
 	}
 
 	posterArgs := strings.Join(frameFFmpegArgs(encodeRequest{FrameRole: "poster", FrameCodec: "jpg"}), " ")
-	if !strings.Contains(posterArgs, "-strict unofficial -q:v 6") {
+	if !strings.Contains(posterArgs, "-strict unofficial") {
 		t.Fatalf("JPEG frames should permit FFmpeg's limited-range MJPEG output: %s", posterArgs)
 	}
 
@@ -1312,6 +1312,48 @@ func TestImageInputsAreLimitedToFrameOperations(t *testing.T) {
 				t.Fatalf("%s must not be enabled for %s", demuxer, operation)
 			}
 		}
+	}
+}
+
+func TestPosterEncodingRetainsImageDetail(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	dir := t.TempDir()
+	input := filepath.Join(dir, "source.png")
+	// Fine texture makes overly aggressive compression visible to the comparison.
+	if output, err := exec.Command(ffmpeg, "-v", "error", "-f", "lavfi", "-i",
+		"testsrc2=size=640x360,noise=alls=8:allf=u:all_seed=42", "-frames:v", "1", input).CombinedOutput(); err != nil {
+		t.Fatalf("generate detailed source: %v: %s", err, output)
+	}
+	source := httptest.NewServer(http.FileServer(http.Dir(dir)))
+	t.Cleanup(source.Close)
+	for _, test := range []struct {
+		codec   string
+		minimum float64
+	}{{"avif", 0.91}, {"webp", 0.915}, {"jpg", 0.93}} {
+		t.Run(test.codec, func(t *testing.T) {
+			outputPath := filepath.Join(dir, "poster."+test.codec)
+			request := encodeRequest{
+				InputURL: source.URL + "/source.png", Operation: "frame",
+				FrameRole: "poster", FrameCodec: test.codec,
+			}
+			if output, err := exec.Command(ffmpeg, ffmpegArgsForOutput(request, "cpu", outputPath)...).CombinedOutput(); err != nil {
+				t.Fatalf("encode poster: %v: %s", err, output)
+			}
+			output, err := exec.Command(ffmpeg, "-hide_banner", "-i", input, "-i", outputPath,
+				"-filter_complex", "[0:v]format=yuv420p[a];[1:v]scale=in_range=auto:out_range=tv,format=yuv420p[b];[a][b]ssim",
+				"-f", "null", "-").CombinedOutput()
+			if err != nil {
+				t.Fatalf("compare decoded poster: %v: %s", err, output)
+			}
+			_, metrics, found := strings.Cut(string(output), "All:")
+			var score float64
+			if _, err := fmt.Sscanf(metrics, "%f", &score); !found || err != nil || score < test.minimum {
+				t.Fatalf("poster loses too much detail (SSIM %.4f, minimum %.4f): %s", score, test.minimum, output)
+			}
+		})
 	}
 }
 
