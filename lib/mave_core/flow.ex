@@ -2751,7 +2751,8 @@ defmodule MaveCore.Flow do
       status: "running",
       completed_at: nil,
       error: nil,
-      started_at: run.started_at || now_utc()
+      started_at: run.started_at || now_utc(),
+      context: Map.delete(run.context || %{}, "resolution")
     })
     |> Repo.update!()
   end

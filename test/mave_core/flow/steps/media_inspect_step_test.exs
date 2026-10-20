@@ -2,6 +2,7 @@ defmodule MaveCore.Flow.Steps.MediaInspectStepTest do
   use ExUnit.Case, async: false
 
   alias MaveCore.Flow.Steps.MediaInspectStep
+  alias MaveCore.Flow.Steps.Support
   alias MaveCore.TestSupport.FlowStorageAdapterStub
 
   defmodule PrefixReadFailingStorageAdapter do
@@ -15,7 +16,7 @@ defmodule MaveCore.Flow.Steps.MediaInspectStepTest do
     defdelegate delete_object(bucket, path, region), to: FlowStorageAdapterStub
   end
 
-  @safe_input_formats "aac,aiff,amr,avi,flac,flv,matroska,webm,mov,mp3,mpeg,mpegts,mpegvideo,ogg,wav"
+  @safe_input_formats "aac,aiff,amr,asf,avi,flac,flv,matroska,webm,mov,mp3,mpeg,mpegts,mpegvideo,ogg,wav"
 
   setup do
     old_storage_adapter = Application.get_env(:mave_core, :flow_storage_adapter)
@@ -68,6 +69,54 @@ defmodule MaveCore.Flow.Steps.MediaInspectStepTest do
     assert output["video_codec"] == "h264"
     assert output["audio_codec"] == "aac"
     assert output["has_audio"] == true
+  end
+
+  test "inspects real Windows Media audio and video from authenticated storage" do
+    Application.put_env(:mave_core, :flow_storage_adapter, PrefixReadFailingStorageAdapter)
+
+    if ffmpeg = System.find_executable("ffmpeg") do
+      for kind <- [:audio, :video] do
+        Support.with_temp_dir("asf_inspect", fn dir ->
+          path = Path.join(dir, "source.asf")
+
+          encoding =
+            if kind == :audio,
+              do: ["-f", "lavfi", "-i", "sine=frequency=440", "-c:a", "wmav2"],
+              else: ["-f", "lavfi", "-i", "testsrc2=size=160x120:rate=5", "-c:v", "wmv2"]
+
+          assert {_, 0} =
+                   System.cmd(
+                     ffmpeg,
+                     ["-v", "error"] ++ encoding ++ ["-t", "1", "-f", "asf", path],
+                     stderr_to_stdout: true
+                   )
+
+          assert {:ok, _} =
+                   FlowStorageAdapterStub.put(
+                     "uploads",
+                     "source.asf",
+                     File.read!(path),
+                     "video/x-ms-asf",
+                     nil
+                   )
+
+          context = %{
+            run_input: %{
+              "source_bucket" => "uploads",
+              "source_key" => "source.asf",
+              "source_content_type" => "video/x-ms-asf",
+              "media_inspect_strict" => true
+            }
+          }
+
+          assert {:ok, output, []} = MediaInspectStep.run(%{}, context)
+          assert output["status"] == "ok"
+          assert output["duration"] > 0
+          assert output["has_audio"] == (kind == :audio)
+          assert output["has_video"] == (kind == :video)
+        end)
+      end
+    end
   end
 
   test "treats audio with attached cover artwork as audio-only" do

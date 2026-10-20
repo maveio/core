@@ -8,7 +8,7 @@ defmodule MaveCore.Media.Signature do
   @ts_packet_size 188
   @m2ts_packet_size 192
 
-  @safe_audio_formats "aac,aiff,amr,flac,matroska,webm,mov,mp3,ogg,wav"
+  @safe_audio_formats "aac,aiff,amr,asf,flac,matroska,webm,mov,mp3,ogg,wav"
   @safe_image_formats "image2,jpeg_pipe,png_pipe,webp_pipe,mov"
 
   def audio_formats, do: @safe_audio_formats
@@ -92,7 +92,9 @@ defmodule MaveCore.Media.Signature do
   defp video?(<<"FLV", _rest::binary>>), do: true
   defp video?(<<"RIFF", _size::binary-size(4), "AVI ", _rest::binary>>), do: true
   defp video?(<<0x00, 0x00, 0x01, marker, _rest::binary>>) when marker in [0xBA, 0xB3], do: true
-  defp video?(bytes) when is_binary(bytes), do: iso_base_media?(bytes) or transport_stream?(bytes)
+
+  defp video?(bytes) when is_binary(bytes),
+    do: iso_base_media?(bytes) or transport_stream?(bytes) or asf?(bytes)
 
   defp audio?(<<"ID3", _rest::binary>>), do: true
   defp audio?(<<0xFF, second, _rest::binary>>) when second in 0xE0..0xFF, do: true
@@ -104,7 +106,15 @@ defmodule MaveCore.Media.Signature do
        when form in ["AIFF", "AIFC"], do: true
 
   defp audio?(<<"#!AMR", _rest::binary>>), do: true
-  defp audio?(bytes) when is_binary(bytes), do: iso_base_media?(bytes)
+  defp audio?(bytes) when is_binary(bytes), do: iso_base_media?(bytes) or asf?(bytes)
+
+  defp asf?(
+         <<0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11, 0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62,
+           0xCE, 0x6C, _rest::binary>>
+       ),
+       do: true
+
+  defp asf?(_bytes), do: false
 
   defp consecutive_mpeg_audio_frames?(bytes) do
     bytes

@@ -10,7 +10,7 @@ defmodule MaveCore.Flow.Diagnostics do
 
   alias MaveCore.Embeds
   alias MaveCore.Embeds.{Embed, SettingsSerializer}
-  alias MaveCore.Flow.{Definition, Run, StepRun}
+  alias MaveCore.Flow.{Definition, Resolution, Run, StepRun}
   alias MaveCore.Repo
   alias MaveCore.Spaces.Space
 
@@ -66,6 +66,7 @@ defmodule MaveCore.Flow.Diagnostics do
           runs,
           &summarize_run(&1, spaces_by_hash, embeds_by_key, stale_before, now, step_type)
         )
+        |> with_resolutions(runs)
     }
   end
 
@@ -113,6 +114,7 @@ defmodule MaveCore.Flow.Diagnostics do
           runs,
           &summarize_run(&1, spaces_by_hash, embeds_by_key, stale_before, now, step_type)
         )
+        |> with_resolutions(runs)
     }
   end
 
@@ -134,6 +136,7 @@ defmodule MaveCore.Flow.Diagnostics do
       embeds_by_key = embeds_by_key([run], spaces_by_hash)
 
       summarize_run(run, spaces_by_hash, embeds_by_key, stale_before, now, step_type)
+      |> with_resolution(Map.get(Resolution.for_runs([run]), run.id))
     end
   end
 
@@ -158,6 +161,7 @@ defmodule MaveCore.Flow.Diagnostics do
       embeds_by_key = embeds_by_key([run], spaces_by_hash)
 
       summarize_run(run, spaces_by_hash, embeds_by_key, stale_before, now, step_type)
+      |> with_resolution(Map.get(Resolution.for_runs([run]), run.id))
     end
   end
 
@@ -311,6 +315,23 @@ defmodule MaveCore.Flow.Diagnostics do
     |> maybe_filter_time_window(time_window)
   end
 
+  defp with_resolutions(summaries, runs) do
+    resolutions = Resolution.for_runs(runs)
+    Enum.map(summaries, &with_resolution(&1, Map.get(resolutions, &1.id)))
+  end
+
+  defp with_resolution(summary, resolution) do
+    summary
+    |> Map.put(:resolution, resolution)
+    |> Map.put(:closable?, summary.status == "failed" and is_nil(resolution))
+    |> Map.put(:reason, resolution || summary.reason)
+    |> Map.put(:recoverable?, summary.recoverable? and resolution != :later_succeeded)
+    |> Map.put(
+      :retry_step_id,
+      if(resolution == :later_succeeded, do: nil, else: summary.retry_step_id)
+    )
+  end
+
   defp normalize_video_status(status) when status in ["existing", "deleted"], do: status
   defp normalize_video_status(_status), do: "all"
 
@@ -392,6 +413,7 @@ defmodule MaveCore.Flow.Diagnostics do
   defp normalize_time_window(%{from: from, to: to}), do: normalize_time_window({from, to})
   defp normalize_time_window(_time_window), do: nil
 
+  defp normalize_status("resolved"), do: "resolved"
   defp normalize_status(status) when status in @job_statuses, do: status
   defp normalize_status(_status), do: "all"
 
@@ -402,6 +424,18 @@ defmodule MaveCore.Flow.Diagnostics do
   defp maybe_filter_space(query, nil), do: query
 
   defp maybe_filter_status(query, "all"), do: query
+
+  defp maybe_filter_status(query, "resolved"),
+    do: where(query, [run], run.id in subquery(Resolution.run_ids_query()))
+
+  defp maybe_filter_status(query, "failed"),
+    do:
+      where(
+        query,
+        [run],
+        run.status == "failed" and run.id not in subquery(Resolution.run_ids_query())
+      )
+
   defp maybe_filter_status(query, status), do: where(query, [run], run.status == ^status)
 
   defp maybe_filter_time_window(query, {%DateTime{} = from, %DateTime{} = to}) do
@@ -441,6 +475,13 @@ defmodule MaveCore.Flow.Diagnostics do
   end
 
   defp status_counts(space_or_nil, video_status) do
+    resolved =
+      Run
+      |> maybe_filter_space(space_or_nil)
+      |> maybe_filter_video_status(video_status)
+      |> maybe_filter_status("resolved")
+      |> Repo.aggregate(:count)
+
     counts =
       Run
       |> maybe_filter_space(space_or_nil)
@@ -488,7 +529,8 @@ defmodule MaveCore.Flow.Diagnostics do
         waiting: max(running - executing, 0),
         published_background: activity_counts.published_background,
         succeeded: Map.get(counts, "succeeded", 0),
-        failed: Map.get(counts, "failed", 0),
+        failed: max(Map.get(counts, "failed", 0) - resolved, 0),
+        resolved: resolved,
         cancelled: Map.get(counts, "cancelled", 0)
       }
     end)

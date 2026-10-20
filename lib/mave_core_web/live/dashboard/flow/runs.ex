@@ -8,12 +8,13 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   alias MaveCore.Flow.Admin
   alias MaveCore.Flow.Diagnostics
   alias MaveCore.Flow.Events, as: FlowEvents
+  alias MaveCore.Flow.Resolution
   alias MaveCoreWeb.Dashboard.Flow.RunTiming
   alias MaveCoreWeb.DashboardRoutes
   alias Phoenix.LiveView.JS
 
   @per_page 25
-  @statuses ~w(all queued running succeeded failed cancelled)
+  @statuses ~w(all queued running succeeded failed resolved cancelled)
 
   def mount(_params, _session, socket) do
     {:ok,
@@ -48,6 +49,27 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
       {:noreply,
        push_navigate(socket, to: DashboardRoutes.videos_path(socket.assigns.current_space))}
     end
+  end
+
+  def handle_info(
+        {:flow_run_updated, %{"status" => "succeeded", "flow_run_id" => run_id} = payload},
+        %{assigns: %{operations_enabled: true}} = socket
+      ) do
+    failures = Enum.filter(socket.assigns.operations.attention_runs, &(&1.status == "failed"))
+    resolutions = Resolution.for_runs(failures)
+
+    if Enum.any?(failures, &(Map.get(resolutions, &1.id) != &1.resolution)) do
+      {:noreply, load_operations(socket, socket.assigns.page)}
+    else
+      {:noreply, refresh_operation_run(socket, run_id, payload)}
+    end
+  end
+
+  def handle_info(
+        {:flow_run_updated, %{"resolution" => _resolution}},
+        %{assigns: %{operations_enabled: true}} = socket
+      ) do
+    {:noreply, load_operations(socket, socket.assigns.page)}
   end
 
   def handle_info({:flow_run_updated, %{"flow_run_id" => flow_run_id} = payload}, socket)
@@ -100,7 +122,14 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
       errors = run_errors(run, true)
       step_id = params["step-id"]
       errors = if step_id, do: Enum.filter(errors, &(&1.step_id == step_id)), else: errors
-      details = %{run_id: run.id, embed_id: run.public_embed_id || run.embed_hash, errors: errors}
+
+      details = %{
+        run_id: run.id,
+        embed_id: run.public_embed_id || run.embed_hash,
+        errors: errors,
+        closable?: run.closable?
+      }
+
       {:noreply, assign(socket, :error_details, details)}
     else
       {:noreply, socket}
@@ -109,6 +138,21 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
 
   def handle_event("close_errors", _params, socket) do
     {:noreply, assign(socket, :error_details, nil)}
+  end
+
+  def handle_event("close_unusable_source", %{"run-id" => run_id}, socket) do
+    if socket.assigns.operations_enabled do
+      case Resolution.close_unusable_source(run_id) do
+        {:ok, _run} ->
+          {:noreply,
+           socket |> assign(:error_details, nil) |> load_operations(socket.assigns.page)}
+
+        {:error, _reason} ->
+          {:noreply, put_flash(socket, :error, gettext("Could not close this run."))}
+      end
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_event("toggle_steps", %{"run-id" => run_id}, socket) do
@@ -242,6 +286,12 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                 patch={runs_path(1, "failed", @step_type, @time_window, @video_status)}
                 active={@status == "failed"}
                 tone="error"
+              />
+              <.ops_stat
+                label={gettext("Resolved")}
+                value={@operations.status_counts.resolved}
+                patch={runs_path(1, "resolved", @step_type, @time_window, @video_status)}
+                active={@status == "resolved"}
               />
               <.ops_stat
                 label={gettext("Cancelled")}
@@ -712,6 +762,21 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
             >{error.message}</pre>
           </div>
         </div>
+        <button
+          :if={@error_details.closable?}
+          id="close-unusable-source"
+          type="button"
+          phx-click="close_unusable_source"
+          phx-value-run-id={@error_details.run_id}
+          data-confirm={
+            gettext(
+              "Close this failure because its source is missing, empty or unusable? The run and errors will remain in history."
+            )
+          }
+          class="mt-5 cursor-pointer text-xs text-stone-500 hover:text-stone-700"
+        >
+          {gettext("Close as unusable source")}
+        </button>
       </.modal>
 
       <%= if @operations.total_entries > 0 do %>
@@ -1157,6 +1222,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   defp status_count_key("running"), do: :running
   defp status_count_key("succeeded"), do: :succeeded
   defp status_count_key("failed"), do: :failed
+  defp status_count_key("resolved"), do: :resolved
   defp status_count_key("cancelled"), do: :cancelled
   defp status_count_key(_status), do: nil
 
@@ -1242,6 +1308,8 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
     MapSet.member?(expanded_run_ids || MapSet.new(), run_id)
   end
 
+  defp reason_label(:later_succeeded), do: gettext("Later succeeded")
+  defp reason_label(:source_unusable), do: gettext("Source unusable")
   defp reason_label(:failed), do: gettext("failed")
   defp reason_label(:failed_step), do: gettext("failed step")
   defp reason_label(:stale_step), do: gettext("stale step")

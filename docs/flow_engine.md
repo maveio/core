@@ -180,6 +180,16 @@ Recovering a failed run keeps succeeded steps and their artifacts intact. Any
 parallel steps interrupted when the run became terminal are reset with a fresh
 automatic retry budget, so completed renditions are not encoded again.
 
+The run history separates open failures from resolved failures. A later
+successful run for the same embed marks an earlier failed attempt as **Later
+succeeded**. An operator can also close a failure as **Source unusable** from
+its error details when the source is missing, empty or cannot be processed.
+Both remain in **Resolved** and **All runs**, with their original execution
+status, errors, timings and artifacts preserved. They are excluded from the
+open **Failed** count. Retrying a closed run clears its closure and starts a
+new retry cycle; another failure then needs attention again. Historical
+performance statistics continue to count the actual execution failures.
+
 ### FFmpeg performance metadata
 
 FFmpeg-backed media steps persist their final command performance summary in

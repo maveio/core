@@ -47,7 +47,7 @@ const productionEncodingProfile = "mave-production-v2"
 const legacyProductionEncodingProfile = "mave-production-v1"
 const productionSVTAV1Params = "pin-threads=0:set-thread-priority=0:no-set-thread-priority=1:hierarchical-levels=4:tile-threads=0:log-level=1:tune=0"
 const legacyProductionSVTAV1Params = "pin-threads=0:set-thread-priority=0:no-set-thread-priority=1:hierarchical-levels=4:tile-threads=0:log-level=1"
-const safeInputFormats = "aac,aiff,amr,avi,flac,flv,matroska,webm,mov,mp3,mpeg,mpegts,mpegvideo,ogg,wav"
+const safeInputFormats = "aac,aiff,amr,asf,avi,flac,flv,matroska,webm,mov,mp3,mpeg,mpegts,mpegvideo,ogg,wav"
 const safeFrameInputFormats = safeInputFormats + ",jpeg_pipe,png_pipe"
 
 var lookupSourceIPs = net.DefaultResolver.LookupIPAddr
@@ -473,8 +473,8 @@ func (request *encodeRequest) validateVideo() error {
 	if request.Codec != "h264" && request.Codec != "hevc" && request.Codec != "av1" {
 		return errors.New("codec must be h264, hevc, or av1")
 	}
-	if request.Width < 320 || request.Width > 3840 || request.Width%2 != 0 {
-		return errors.New("width must be an even number between 320 and 3840")
+	if request.Width < 2 || request.Width > 3840 || request.Width%2 != 0 {
+		return errors.New("width must be an even number between 2 and 3840")
 	}
 	if request.EncodingProfile != "" && request.EncodingProfile != productionEncodingProfile && request.EncodingProfile != legacyProductionEncodingProfile {
 		return errors.New("encoding_profile is not supported")
