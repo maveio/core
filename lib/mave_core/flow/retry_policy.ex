@@ -75,6 +75,12 @@ defmodule MaveCore.Flow.RetryPolicy do
 
   defp request_transport_error?(%Req.TransportError{}), do: true
 
+  defp request_transport_error?({:http_error, status})
+       when status in [408, 429, 500, 502, 503, 504], do: true
+
+  defp request_transport_error?({:http_error, status, _body})
+       when status in [408, 429, 500, 502, 503, 504], do: true
+
   defp request_transport_error?(reason) when is_tuple(reason) do
     reason
     |> Tuple.to_list()

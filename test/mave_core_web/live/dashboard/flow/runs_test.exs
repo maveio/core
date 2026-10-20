@@ -44,6 +44,40 @@ defmodule MaveCoreWeb.Live.Dashboard.Flow.RunsTest do
     assert String.ends_with?(to, "/videos")
   end
 
+  test "closing an unusable source keeps the error in resolved history", %{conn: conn} do
+    {admin, conn} = authenticated_conn(conn, "resolution-admin@mave.io")
+    space = admin.current_space_membership.space
+    run = create_failed_run!(space.hash, "badsource1")
+    {:ok, view, _html} = live(conn, "/flow/runs?status=failed")
+    view |> element("#run-errors-#{run.id} button") |> render_click()
+    assert has_element?(view, "#close-unusable-source[data-confirm]")
+    view |> element("#close-unusable-source") |> render_click()
+    refute has_element?(view, "#run-row-#{run.id}")
+    assert Repo.get!(Run, run.id).status == "failed"
+
+    view |> element("a[href='/flow/runs?status=resolved']") |> render_click()
+    assert has_element?(view, "#run-row-#{run.id}", "Source unusable")
+    view |> element("#run-errors-#{run.id} button") |> render_click()
+    assert has_element?(view, "#error-detail-0", "ffmpeg exited 1")
+    refute has_element?(view, "#close-unusable-source")
+  end
+
+  test "a later successful run removes an old failure from the open failure filter in realtime",
+       %{conn: conn} do
+    {admin, conn} = authenticated_conn(conn, "later-admin@mave.io")
+    space = admin.current_space_membership.space
+    failed = create_failed_run!(space.hash, "retried001")
+    {:ok, view, _html} = live(conn, "/flow/runs?status=failed")
+    assert has_element?(view, "#run-row-#{failed.id}")
+
+    success = create_succeeded_run!(space.hash, "retried001")
+    send(view.pid, {:flow_run_updated, %{"flow_run_id" => success.id, "status" => "succeeded"}})
+    refute has_element?(view, "#run-row-#{failed.id}")
+    view |> element("a[href='/flow/runs?status=resolved']") |> render_click()
+    assert has_element?(view, "#run-row-#{failed.id}", "Later succeeded")
+    refute has_element?(view, "#recover-run-#{failed.id}")
+  end
+
   test "run history marks deleted videos and preserves status when filtering", %{conn: conn} do
     {admin, conn} = authenticated_conn(conn, "history-admin@mave.io")
     space = admin.current_space_membership.space

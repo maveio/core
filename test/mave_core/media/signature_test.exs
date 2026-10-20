@@ -65,6 +65,23 @@ defmodule MaveCore.Media.SignatureTest do
              Signature.validate_audio_or_video("plain text")
   end
 
+  test "recognizes ASF for both Windows Media audio and video using the complete header GUID" do
+    header =
+      <<0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11, 0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE,
+        0x6C>>
+
+    assert :ok = Signature.validate_audio_or_video(header <> <<0::112>>)
+    assert :ok = Signature.validate_audio(header <> <<0::112>>)
+
+    for length <- 0..15 do
+      assert {:error, :unsupported_media_signature} =
+               Signature.validate_audio_or_video(binary_part(header, 0, length))
+    end
+
+    assert {:error, :unsupported_media_signature} =
+             Signature.validate_audio_or_video(binary_part(header, 0, 15) <> <<0>>)
+  end
+
   test "accepts TS and timestamp-prefixed M2TS packets" do
     ts_packet = <<0x47>> <> :binary.copy(<<0>>, 187)
     m2ts_packet = <<0, 0, 0, 1>> <> ts_packet

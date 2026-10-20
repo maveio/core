@@ -6,6 +6,7 @@ defmodule MaveCore.Flow.DiagnosticsTest do
   alias MaveCore.Flow
   alias MaveCore.Flow.Admin
   alias MaveCore.Flow.Diagnostics
+  alias MaveCore.Flow.Resolution
   alias MaveCore.Flow.Run
   alias MaveCore.Flow.StepRun
   alias MaveCore.Repo
@@ -34,6 +35,69 @@ defmodule MaveCore.Flow.DiagnosticsTest do
   test "dashboard access follows configured flow admin domains" do
     assert Admin.dashboard_enabled_for?(%{email: "ops@mave.io"}, %{})
     refute Admin.dashboard_enabled_for?(%{email: "customer@example.com"}, %{})
+  end
+
+  test "later success resolves old failures without rewriting execution history" do
+    space = create_user_space!("later-success")
+    failed = create_failed_run!(space.hash, "oldattempt")
+    unrelated = create_failed_run!(space.hash, "stillfails")
+    _success = create_succeeded_run!(space.hash, "oldattempt")
+
+    diagnostics = Diagnostics.global_diagnostics(status: "failed")
+    assert diagnostics.status_counts.failed == 1
+    assert diagnostics.status_counts.resolved == 1
+    assert diagnostics.status_counts.total == 3
+    assert Enum.map(diagnostics.attention_runs, & &1.id) == [unrelated.id]
+
+    assert [summary] = Diagnostics.global_diagnostics(status: "resolved").attention_runs
+    assert summary.id == failed.id
+    assert summary.status == "failed"
+    assert summary.reason == :later_succeeded
+    refute summary.recoverable?
+    assert is_nil(summary.retry_step_id)
+    assert Repo.get!(Run, failed.id).error == "required step failed"
+
+    assert Repo.get_by!(StepRun, flow_run_id: failed.id, step_id: "manifest").error ==
+             "ffmpeg exited 1"
+  end
+
+  test "explicitly closes unusable sources and clears that resolution on recovery" do
+    space = create_user_space!("unusable-source")
+    run = create_failed_run!(space.hash, "badsource1")
+    assert {:ok, closed} = Resolution.close_unusable_source(run.id)
+    assert closed.status == "failed"
+    assert closed.error == run.error
+    assert get_in(closed.context, ["resolution", "kind"]) == "source_unusable"
+    assert Diagnostics.global_diagnostics(status: "failed").attention_runs == []
+    assert [summary] = Diagnostics.global_diagnostics(status: "resolved").attention_runs
+    assert summary.reason == :source_unusable
+    assert {:error, :already_resolved} = Resolution.close_unusable_source(run.id)
+
+    assert {:ok, recovered} = Flow.recover_run(run.id, enqueue_jobs: false)
+    assert recovered.status == "running"
+    refute Map.has_key?(recovered.context, "resolution")
+    assert Repo.get_by!(StepRun, flow_run_id: run.id, step_id: "source").status == "succeeded"
+  end
+
+  test "resolution cannot close active runs or make an earlier success hide a newer failure" do
+    space = create_user_space!("resolution-order")
+    success = create_succeeded_run!(space.hash, "retryfails")
+    failed = create_failed_run!(space.hash, "retryfails")
+    assert Resolution.for_runs([failed]) == %{}
+    assert {:error, :not_failed} = Resolution.close_unusable_source(success.id)
+
+    failed |> Run.changeset(%{status: "running"}) |> Repo.update!()
+    assert {:error, :not_failed} = Resolution.close_unusable_source(failed.id)
+    assert {:error, :not_found} = Resolution.close_unusable_source(Ecto.UUID.generate())
+
+    Repo.get!(Run, failed.id) |> Run.changeset(%{status: "failed"}) |> Repo.update!()
+
+    Repo.get_by!(StepRun, flow_run_id: failed.id, step_id: "manifest")
+    |> StepRun.changeset(%{status: "executing"})
+    |> Repo.update!()
+
+    assert {:error, :step_running} = Resolution.close_unusable_source(failed.id)
+    refute Map.has_key?(Repo.get!(Run, failed.id).context, "resolution")
   end
 
   test "global diagnostics include dependency, queue, execution, and total timings" do

@@ -12,7 +12,7 @@ defmodule MaveCore.Flow.Steps.MediaInspectStep do
   alias MaveCore.Media.Signature
   alias MaveCore.Media.Storage
 
-  @safe_input_formats "aac,aiff,amr,avi,flac,flv,matroska,webm,mov,mp3,mpeg,mpegts,mpegvideo,ogg,wav"
+  @safe_input_formats "aac,aiff,amr,asf,avi,flac,flv,matroska,webm,mov,mp3,mpeg,mpegts,mpegvideo,ogg,wav"
 
   @impl true
   def run(step_definition, context) do

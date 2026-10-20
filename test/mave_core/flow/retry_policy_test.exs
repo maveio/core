@@ -3,6 +3,24 @@ defmodule MaveCore.Flow.RetryPolicyTest do
 
   alias MaveCore.Flow.RetryPolicy
 
+  test "retries temporary source HTTP failures but not missing or protected sources" do
+    for status <- [408, 429, 500, 502, 503, 504] do
+      assert RetryPolicy.transient_error?({:http_error, status})
+
+      assert RetryPolicy.transient_error?(
+               {:original_upload_failed, {:http_error, status, "response"}}
+             )
+    end
+
+    for status <- [400, 401, 403, 404, 410] do
+      refute RetryPolicy.transient_error?({:http_error, status})
+
+      refute RetryPolicy.transient_error?(
+               {:original_upload_failed, {:http_error, status, "response"}}
+             )
+    end
+  end
+
   test "classifies only nested booster busy responses as capacity errors" do
     assert RetryPolicy.capacity_error?(
              {:media_transcode_h264_ladder_failed, :encoding_booster_busy}
