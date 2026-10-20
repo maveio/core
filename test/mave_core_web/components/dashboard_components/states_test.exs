@@ -16,6 +16,7 @@ defmodule MaveCoreWeb.DashboardComponents.StatesTest do
     assert html =~ ~s(data-usage-segment="within-limit")
     assert html =~ ~s(style="width: 25.0%;")
     refute html =~ ~s(data-usage-segment="overage")
+    refute html =~ "text-red-500"
   end
 
   test "usage_bar shows the portion above the limit in red" do
@@ -31,5 +32,6 @@ defmodule MaveCoreWeb.DashboardComponents.StatesTest do
     assert html =~ ~s(data-usage-segment="overage")
     assert html =~ "bg-red-500"
     assert html =~ ~s(style="width: 25.0%;")
+    assert html =~ ~r/data-usage-current[^>]*class="flex-grow text-red-500"/
   end
 end

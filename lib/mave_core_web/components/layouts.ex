@@ -9,6 +9,32 @@ defmodule MaveCoreWeb.Layouts do
   embed_templates "layouts/*"
 
   @doc """
+  Renders a development-only alignment grid overlay, toggled with Ctrl+G.
+
+  Renders nothing unless dev routes are enabled, so the overlay never ships
+  in production builds.
+  """
+  if Application.compile_env(:mave_core, :dev_routes, false) do
+    def dev_grid(assigns) do
+      ~H"""
+      <div
+        id="dev-grid"
+        aria-hidden="true"
+        hidden
+        class="pointer-events-none fixed inset-0 z-[9999]"
+        style="background-image: linear-gradient(to right, rgb(255 0 80 / 0.22) 1px, transparent 1px), linear-gradient(to bottom, rgb(255 0 80 / 0.22) 1px, transparent 1px), linear-gradient(to right, rgb(255 0 80 / 0.08) 1px, transparent 1px), linear-gradient(to bottom, rgb(255 0 80 / 0.08) 1px, transparent 1px); background-size: 32px 32px, 32px 32px, 8px 8px, 8px 8px;"
+      >
+      </div>
+      """
+    end
+  else
+    def dev_grid(assigns) do
+      ~H"""
+      """
+    end
+  end
+
+  @doc """
   Shows the flash group with standard titles and content.
 
   ## Examples
