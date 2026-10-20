@@ -9,6 +9,42 @@ defmodule MaveCore.Media.StorageTest do
 
   setup {Req.Test, :verify_on_exit!}
 
+  test "list_keys follows object-store pagination without guessing version prefixes" do
+    Req.default_options(plug: {Req.Test, __MODULE__})
+
+    profile = [
+      endpoint: "https://storage.example.test",
+      access_key_id: "key",
+      secret_access_key: "secret"
+    ]
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      conn = fetch_query_params(conn)
+      assert conn.query_params["prefix"] == "embed/"
+      refute conn.query_params["continuation-token"]
+
+      send_resp(
+        conn,
+        200,
+        "<ListBucketResult><Contents><Key>embed/manifest.json</Key></Contents><IsTruncated>true</IsTruncated><NextContinuationToken>next-page</NextContinuationToken></ListBucketResult>"
+      )
+    end)
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      conn = fetch_query_params(conn)
+      assert conn.query_params["continuation-token"] == "next-page"
+
+      send_resp(
+        conn,
+        200,
+        "<ListBucketResult><Contents><Key>embed/v8/player.html</Key></Contents><IsTruncated>false</IsTruncated></ListBucketResult>"
+      )
+    end)
+
+    assert {:ok, ["embed/manifest.json", "embed/v8/player.html"]} =
+             Storage.list_keys("bucket", "embed/", profile)
+  end
+
   test "signed reads support a full dashboard day while remaining bounded" do
     profile = [
       endpoint: "https://storage.example.test",

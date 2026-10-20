@@ -140,6 +140,12 @@ defmodule MaveCore.Media.Storage do
     |> handle_response()
   end
 
+  @doc "Lists current object keys under a prefix, following all result pages."
+  def list_keys(bucket, prefix, storage_profile \\ nil)
+      when is_binary(bucket) and is_binary(prefix) do
+    list_prefix_keys(bucket, prefix, storage_profile)
+  end
+
   @doc "Fetches at most `max_bytes` from the beginning of an object."
   def get_prefix(bucket, path, storage_profile, max_bytes)
       when is_binary(bucket) and is_binary(path) do

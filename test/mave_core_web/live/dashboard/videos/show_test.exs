@@ -252,6 +252,37 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     assert html =~ versioned_thumbnail_url
   end
 
+  @tag :private_playback_ui
+  test "private custom thumbnails use signed URLs in the player and upload preview", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    video = video_embed_fixture(space, %{name: "Private custom thumbnail"})
+
+    thumbnail_url =
+      SettingsSerializer.storage_object_url("space-#{space.hash}", "#{video.hash}/thumbnail.jpg")
+
+    {:ok, video} =
+      MaveCore.Embeds.update_settings(video, %{poster: :upload, external_poster: thumbnail_url})
+
+    video
+    |> Ecto.Changeset.change(playback_visibility: :private, playback_status: :private)
+    |> Repo.update!()
+
+    {:ok, view, _html} = live(conn, "/videos/#{video.id}")
+
+    assert has_element?(
+             view,
+             ~s(mave-player[poster*="/#{video.hash}/thumbnail.jpg?"][poster*="X-Amz-Signature="])
+           )
+
+    assert has_element?(
+             view,
+             ~s(#droparea[style*="/#{video.hash}/thumbnail.jpg?"][style*="X-Amz-Signature="])
+           )
+
+    refute has_element?(view, ~s(mave-player[poster="#{thumbnail_url}"]))
+    refute has_element?(view, "#snippet-code", "X-Amz-Signature")
+  end
+
   @tag :poster_upload
   test "poster processing remains visible until a delayed conversion completes", %{conn: conn} do
     {conn, space} = authenticated_conn(conn)

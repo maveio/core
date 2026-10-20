@@ -2399,6 +2399,25 @@ defmodule MaveCore.EmbedsTest do
     assert payload.thumbnail == versioned_thumbnail_url
     assert payload.preview_poster == versioned_thumbnail_url
     assert payload.snippet_player_poster == versioned_thumbnail_url
+
+    private_video =
+      video
+      |> Ecto.Changeset.change(playback_visibility: :private, playback_status: :private)
+      |> Repo.update!()
+
+    private_payload = Embeds.get_video_dashboard_payload(space, private_video)
+    uri = URI.parse(private_payload.preview_poster)
+    query = URI.decode_query(uri.query)
+
+    assert private_payload.preview_poster == private_payload.thumbnail
+    assert String.ends_with?(uri.path, "/#{video.hash}/thumbnail.jpg")
+    assert query["X-Amz-Signature"]
+    assert query["X-Amz-Expires"] == "86400"
+    assert query["response-cache-control"] == "private, max-age=300"
+    assert query["e"] == to_string(DateTime.to_unix(inserted_at, :microsecond))
+    assert length(URI.query_decoder(uri.query) |> Enum.filter(fn {key, _} -> key == "e" end)) == 1
+    refute private_payload.snippet_player_poster =~ "X-Amz-Signature"
+    assert private_video.settings.external_poster == thumbnail_url
   end
 
   test "dashboard video rows cache-bust completed custom thumbnail URLs" do
