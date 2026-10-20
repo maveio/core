@@ -27,7 +27,7 @@ cp -R deploy/licenses/device-detector "$output_dir/data/"
 
 # Keep original relative paths so identically named notices cannot overwrite
 # each other. Include transitive dependencies, not just direct package names.
-find deps assets/node_modules \
+find deps vendor assets/node_modules \
   -type d \( -name .git -o -name _build -o -name target \) -prune -o \
   -type f \( -iname 'license*' -o -iname 'licence*' -o -iname 'copying*' \
     -o -iname 'notice*' -o -iname 'copyright*' -o -name Cargo.lock \

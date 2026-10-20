@@ -26,7 +26,7 @@ ARG RUNNER_IMAGE="docker.io/ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da
 
 FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS node_build
 
-FROM golang:1.27.2-alpine3.23 AS media_broker_build
+FROM golang:1.27.3-alpine3.23 AS media_broker_build
 WORKDIR /src
 COPY deploy/encoding-booster/encoder/sandbox/broker/ ./
 RUN go test ./... && CGO_ENABLED=0 go build -trimpath -o /mave-media-broker .
@@ -54,6 +54,9 @@ RUN apt-get update \
     pkg-config \
     xz-utils \
     zlib1g-dev \
+  && sed -i -e '/^mozilla\/emSign_ECC_Root_CA_-_G3.crt$/s/^/!/' \
+    -e '/^mozilla\/Comodo_AAA_Services_root.crt$/s/^/!/' /etc/ca-certificates.conf \
+  && update-ca-certificates --fresh \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
@@ -105,7 +108,10 @@ FROM ${BUILDER_IMAGE} AS builder_base
 
 # install build dependencies
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends build-essential git cargo rustc libseccomp-dev \
+  && apt-get install -y --no-install-recommends build-essential git cargo rustc libseccomp-dev ca-certificates \
+  && sed -i -e '/^mozilla\/emSign_ECC_Root_CA_-_G3.crt$/s/^/!/' \
+    -e '/^mozilla\/Comodo_AAA_Services_root.crt$/s/^/!/' /etc/ca-certificates.conf \
+  && update-ca-certificates --fresh \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
@@ -120,7 +126,7 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 WORKDIR /app
 
 # Disable Erlang JIT (Fixes QEMU crash during cross-compile)
-ENV ERL_AFLAGS="+JMsingle true"
+ENV ERL_AFLAGS="+JMsingle true" NODE_OPTIONS="--use-openssl-ca"
 
 # install hex + rebar
 RUN mix local.hex --force \
@@ -142,6 +148,7 @@ FROM builder_base AS builder
 
 # install mix dependencies
 COPY mix.exs mix.lock ./
+COPY vendor vendor
 RUN mix deps.get --only $MIX_ENV
 RUN mkdir config
 
@@ -184,6 +191,9 @@ ENV MIX_ENV="dev" MAVE_MEDIA_SANDBOX="required"
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg procps inotify-tools \
+  && sed -i -e '/^mozilla\/emSign_ECC_Root_CA_-_G3.crt$/s/^/!/' \
+    -e '/^mozilla\/Comodo_AAA_Services_root.crt$/s/^/!/' /etc/ca-certificates.conf \
+  && update-ca-certificates --fresh \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
   && ffmpeg -version \
@@ -223,6 +233,9 @@ RUN apt-get update \
     procps \
     tini \
     zlib1g \
+  && sed -i -e '/^mozilla\/emSign_ECC_Root_CA_-_G3.crt$/s/^/!/' \
+    -e '/^mozilla\/Comodo_AAA_Services_root.crt$/s/^/!/' /etc/ca-certificates.conf \
+  && update-ca-certificates --fresh \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 

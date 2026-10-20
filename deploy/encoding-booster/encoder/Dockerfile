@@ -1,4 +1,4 @@
-FROM golang:1.27.2-alpine3.23 AS app-build
+FROM golang:1.27.3-alpine3.23 AS app-build
 WORKDIR /src
 COPY go.mod *.go ./
 COPY assets/play.png ./assets/play.png
@@ -73,7 +73,10 @@ RUN apk add --no-cache \
       libwebpmux \
       x264-libs \
       x265-libs \
-      zlib
+      zlib \
+  && sed -i -e '/^mozilla\/emSign_ECC_Root_CA_-_G3.crt$/s/^/!/' \
+    -e '/^mozilla\/Comodo_AAA_Services_root.crt$/s/^/!/' /etc/ca-certificates.conf \
+  && update-ca-certificates --fresh
 COPY --from=ffmpeg-build /opt/ffmpeg /opt/ffmpeg
 ENV PATH="/opt/ffmpeg/bin:${PATH}"
 RUN command -v ffmpeg | grep -q '^/opt/ffmpeg/bin/ffmpeg$' \

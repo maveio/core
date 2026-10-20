@@ -36,6 +36,8 @@
 
 # Mix artifacts
 /_build/
+**/_build/
+/vendor/certifi/ebin/
 /deps/
 *.ez
 
