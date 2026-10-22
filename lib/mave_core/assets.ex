@@ -1124,25 +1124,62 @@ defmodule MaveCore.Assets do
     tracks = manifest_audio_tracks(embed, region)
 
     if Enum.any?(variants, fn {_id, output} -> output["legacy_rendition"] end) do
-      existing_hls_audio_tracks(embed, region, tracks)
+      existing_hls_audio_tracks(embed, region, tracks, variants)
     else
       {:ok, tracks}
     end
   end
 
-  defp existing_hls_audio_tracks(embed, region, tracks) do
+  defp existing_hls_audio_tracks(embed, region, tracks, variants) do
     bucket = Storage.bucket_for_space(embed.space.hash, region)
     version = Embeds.current_video_version(embed)
     prefix = if version > 0, do: "#{embed.hash}/v#{version}/", else: "#{embed.hash}/"
 
     Enum.reduce_while(tracks, {:ok, []}, fn track, {:ok, existing} ->
       case storage_adapter().get(bucket, prefix <> track["hls_playlist"], region) do
-        {:ok, _body} -> {:cont, {:ok, existing ++ [track]}}
-        {:error, :not_found} -> {:cont, {:ok, existing}}
-        {:error, reason} -> {:halt, {:error, {:audio_playlist_unavailable, reason}}}
+        {:ok, _body} ->
+          {:cont, {:ok, existing ++ [track]}}
+
+        {:error, :not_found} ->
+          missing_audio_result(bucket, prefix, region, variants, existing, track)
+
+        {:error, reason} ->
+          {:halt, {:error, {:audio_playlist_unavailable, reason}}}
       end
     end)
   end
+
+  defp missing_audio_result(bucket, prefix, region, variants, existing, track) do
+    if legacy_variants_have_audio?(bucket, prefix, region, variants) do
+      {:cont, {:ok, existing}}
+    else
+      {:halt, {:error, {:missing_audio_playlist, track["hls_playlist"]}}}
+    end
+  end
+
+  defp legacy_variants_have_audio?(bucket, prefix, region, variants) do
+    variants != [] and
+      Enum.all?(variants, fn {_id, variant} ->
+        key = prefix <> Path.dirname(variant["playlist_path"]) <> "/init.mp4"
+
+        case storage_adapter().get_prefix(bucket, key, region, 1_048_576) do
+          {:ok, bytes} when is_binary(bytes) -> mp4_audio_handler?(bytes)
+          _ -> false
+        end
+      end)
+  end
+
+  defp mp4_audio_handler?(<<size::32, type::binary-size(4), rest::binary>>)
+       when size >= 8 and byte_size(rest) >= size - 8 do
+    data = binary_part(rest, 0, size - 8)
+    tail = binary_part(rest, size - 8, byte_size(rest) - size + 8)
+
+    (type == "hdlr" and match?(<<_::binary-size(8), "soun", _::binary>>, data)) or
+      (type in ["moov", "trak", "mdia"] and mp4_audio_handler?(data)) or
+      mp4_audio_handler?(tail)
+  end
+
+  defp mp4_audio_handler?(_bytes), do: false
 
   # Audio-only originals have no dimensions. Their generated SD waveform does,
   # and must keep them when a track or subtitle edit rebuilds the master playlist.
