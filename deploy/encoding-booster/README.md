@@ -142,6 +142,21 @@ The callback accepts only a short-lived token signed by Core. It returns URLs
 bound to the exact destination keys, content types, content lengths, and public
 ACL policy; it never exposes storage credentials.
 
+For a callback over a private network, optionally set
+`HLS_UPLOAD_CALLBACK_CONNECT_ADDRESS=callback.internal:443` to the private
+load-balancer hostname or private IP. Only that callback's TCP connection is
+rerouted. The URL above remains HTTPS and supplies both the TLS certificate
+identity and HTTP Host; certificate verification and scoped authentication remain
+required. Every resolved destination must be private, redirects are refused,
+and lookup/connect failures never fall back to the public address. This setting
+does not change object-storage connections or untrusted media-source fetching.
+
+Callback authorization retries network/read failures and HTTP 429/502/503/504 up
+to four attempts, with 250/500/1000 ms backoff and a ten-second timeout per attempt.
+Cancellation stops retries; other HTTP failures and invalid responses fail
+immediately. Only the idempotent signing request is replayed, without logging its
+token, response body, or signed destinations.
+
 Scaleway owns horizontal scaling, but its concurrency threshold is not a strict
 per-process admission limit. Configure the service with a threshold of one and
 set `MAX_CONCURRENT_REQUESTS=1` so the encoder also rejects overlapping FFmpeg

@@ -2101,6 +2101,77 @@ func collectHLSFiles(hlsDir string) ([]hlsFile, error) {
 	return files, nil
 }
 
+// hlsCallbackError contains only safe diagnostics, never response bodies or URLs.
+type hlsCallbackError struct{ message string }
+
+func (e *hlsCallbackError) Error() string { return e.message }
+
+func hlsUploadFailure(err error) string {
+	var callbackError *hlsCallbackError
+	if errors.As(err, &callbackError) {
+		return callbackError.Error()
+	}
+	return "HLS object upload failed"
+}
+
+// Override only the callback's TCP destination. The URL hostname still controls
+// HTTP routing and TLS verification; object uploads use their normal transport.
+func hlsCallbackClient(callback *url.URL, connectAddress string) (*http.Client, error) {
+	client := *http.DefaultClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if connectAddress == "" {
+		return &client, nil
+	}
+	host, port, err := net.SplitHostPort(connectAddress)
+	if err != nil || host == "" || port != "443" {
+		return nil, errors.New("invalid HLS callback private address")
+	}
+	base := client.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	transport, ok := base.(*http.Transport)
+	if !ok {
+		return nil, errors.New("invalid HLS callback transport")
+	}
+	transport = transport.Clone()
+	transport.Proxy = nil
+	dial := transport.DialContext
+	if dial == nil {
+		dial = (&net.Dialer{Timeout: 10 * time.Second}).DialContext
+	}
+	expected := callback.Host
+	if callback.Port() == "" {
+		expected = net.JoinHostPort(callback.Hostname(), "443")
+	}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if address != expected {
+			return nil, errors.New("unexpected HLS callback destination")
+		}
+		addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil || len(addresses) == 0 {
+			return nil, errors.New("HLS callback private address lookup failed")
+		}
+		// Fail closed if DNS includes any non-private address. Connect to the
+		// checked literal, rather than resolving the hostname a second time.
+		for _, address := range addresses {
+			if !address.IP.IsPrivate() {
+				return nil, errors.New("HLS callback destination is not private")
+			}
+		}
+		var connection net.Conn
+		for _, address := range addresses {
+			connection, err = dial(ctx, network, net.JoinHostPort(address.IP.String(), port))
+			if err == nil {
+				return connection, nil
+			}
+		}
+		return nil, err
+	}
+	client.Transport = transport
+	return &client, nil
+}
+
 func requestHLSUploadTargets(
 	ctx context.Context,
 	callbackURL string,
@@ -2109,39 +2180,68 @@ func requestHLSUploadTargets(
 ) ([]hlsUploadTarget, error) {
 	parsed, err := url.ParseRequestURI(callbackURL)
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {
-		return nil, errors.New("HLS upload callback is not configured")
+		return nil, &hlsCallbackError{"HLS upload callback is not configured"}
 	}
 	payload, err := json.Marshal(hlsUploadRequest{Files: files})
 	if err != nil {
-		return nil, errors.New("could not encode HLS upload request")
+		return nil, &hlsCallbackError{"could not encode HLS upload request"}
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, callbackURL, bytes.NewReader(payload))
+	client, err := hlsCallbackClient(parsed, strings.TrimSpace(os.Getenv("HLS_UPLOAD_CALLBACK_CONNECT_ADDRESS")))
 	if err != nil {
-		return nil, errors.New("could not create HLS upload request")
+		return nil, &hlsCallbackError{err.Error()}
 	}
-	request.Header.Set("Authorization", "Bearer "+uploadToken)
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json")
-	request.ContentLength = int64(len(payload))
-
-	response, err := doStorageRequest(request)
-	if err != nil {
-		return nil, errors.New("HLS upload authorization request failed")
-	}
-	defer response.Body.Close()
-	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024))
-	if readErr != nil {
-		return nil, errors.New("could not read HLS upload authorization")
-	}
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return nil, fmt.Errorf("HLS upload authorization returned HTTP %d", response.StatusCode)
+	defer client.CloseIdleConnections()
+	var responseBody []byte
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(250 * time.Millisecond * time.Duration(1<<(attempt-1)))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, &hlsCallbackError{"HLS upload authorization cancelled"}
+			case <-timer.C:
+			}
+		}
+		// Authorization only signs upload destinations: replaying this request
+		// does not write objects. Bound each attempt independently of FFmpeg.
+		attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		request, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, callbackURL, bytes.NewReader(payload))
+		if err != nil {
+			cancel()
+			return nil, &hlsCallbackError{"could not create HLS upload request"}
+		}
+		request.Header.Set("Authorization", "Bearer "+uploadToken)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "application/json")
+		request.ContentLength = int64(len(payload))
+		response, requestErr := client.Do(request)
+		status := 0
+		if requestErr == nil {
+			status = response.StatusCode
+			responseBody, requestErr = io.ReadAll(io.LimitReader(response.Body, 32*1024*1024))
+			response.Body.Close()
+		}
+		cancel()
+		if requestErr == nil && status >= 200 && status <= 299 {
+			break
+		}
+		if ctx.Err() != nil {
+			return nil, &hlsCallbackError{"HLS upload authorization cancelled"}
+		}
+		retryable := requestErr != nil || status == 429 || status == 502 || status == 503 || status == 504
+		if !retryable || attempt == 3 {
+			if status != 0 && requestErr == nil {
+				return nil, &hlsCallbackError{fmt.Sprintf("HLS upload authorization returned HTTP %d", status)}
+			}
+			return nil, &hlsCallbackError{"HLS upload authorization request failed"}
+		}
 	}
 	var uploadResponse hlsUploadResponse
 	if err := json.Unmarshal(responseBody, &uploadResponse); err != nil {
-		return nil, errors.New("invalid HLS upload authorization response")
+		return nil, &hlsCallbackError{"invalid HLS upload authorization response"}
 	}
 	if err := validateHLSUploadTargets(files, uploadResponse.Uploads); err != nil {
-		return nil, err
+		return nil, &hlsCallbackError{err.Error()}
 	}
 	return uploadResponse.Uploads, nil
 }
@@ -2480,7 +2580,7 @@ func streamHLSToStorage(
 				cancelFFmpeg()
 				<-resultChannel
 				log.Printf("hls-direct-upload-error: %v", err)
-				fail("HLS object upload failed")
+				fail(hlsUploadFailure(err))
 				return
 			}
 
@@ -2496,7 +2596,7 @@ func streamHLSToStorage(
 			}
 			if err := uploadSegments(); err != nil {
 				log.Printf("hls-direct-upload-error: %v", err)
-				fail("HLS object upload failed")
+				fail(hlsUploadFailure(err))
 				return
 			}
 			controlFiles, err := collectHLSControlFiles(hlsDir)
@@ -2518,7 +2618,7 @@ func streamHLSToStorage(
 			)
 			if err != nil {
 				log.Printf("hls-direct-upload-error: %v", err)
-				fail("HLS object upload failed")
+				fail(hlsUploadFailure(err))
 				return
 			}
 			files, err := uploadedHLSMetadata(uploaded)
