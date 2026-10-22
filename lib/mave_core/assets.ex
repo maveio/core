@@ -1019,14 +1019,22 @@ defmodule MaveCore.Assets do
   end
 
   defp rebuild_hls_master_playlist(%Embed{} = embed, region) do
+    variants = hls_video_variant_outputs(embed, region)
+
+    with {:ok, audio_tracks} <- hls_master_audio_tracks(embed, region, variants) do
+      publish_hls_master_playlist(embed, region, variants, audio_tracks)
+    end
+  end
+
+  defp publish_hls_master_playlist(embed, region, variants, audio_tracks) do
     dependency_outputs =
-      (hls_video_variant_outputs(embed, region) ++
+      (variants ++
          [
            {"hls_audio_tracks",
             %{
               "step_type" => "media.package_hls_audio",
               "status" => "ok",
-              "audio_tracks" => manifest_audio_tracks(embed, region)
+              "audio_tracks" => audio_tracks
             }},
            {"hls_subtitles",
             %{
@@ -1051,8 +1059,12 @@ defmodule MaveCore.Assets do
     }
 
     case MediaBuildHlsMasterStep.run(step_definition, context) do
-      {:ok, output, _artifacts} -> {:ok, output}
-      {:error, reason} -> {:error, reason}
+      {:ok, output, _artifacts} ->
+        CdnCache.purge_best_effort(embed.space, region, [output["key"]])
+        {:ok, output}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1081,7 +1093,14 @@ defmodule MaveCore.Assets do
     )
     |> Repo.all()
     |> Enum.map(fn rendition ->
-      playlist_path = relative_playlist_path(rendition.rendition_key, embed.hash, version)
+      legacy? = legacy_rendition_key?(rendition.rendition_key)
+
+      playlist_path =
+        if legacy?,
+          do: "#{rendition.codec}_#{rendition.size}_hls/playlist.m3u8",
+          else: relative_playlist_path(rendition.rendition_key, embed.hash, version)
+
+      prefix = if version > 0, do: "#{embed.hash}/v#{version}/", else: "#{embed.hash}/"
 
       {"hls_#{rendition.codec}_#{rendition.size}",
        %{
@@ -1090,9 +1109,38 @@ defmodule MaveCore.Assets do
          "codec" => rendition.codec,
          "size" => rendition.size,
          "resolution" => hls_variant_resolution(embed.asset.current_video, rendition),
+         "legacy_rendition" => legacy?,
          "playlist_path" => playlist_path,
-         "playlist_uri" => "s3://#{bucket}/#{rendition.rendition_key}"
+         "playlist_uri" => "s3://#{bucket}/#{prefix}#{playlist_path}"
        }}
+    end)
+  end
+
+  # Older rendition keys identify database records, not storage objects. Those
+  # videos can also have muxed audio without a separate HLS audio rendition.
+  defp legacy_rendition_key?(key), do: Regex.match?(~r/\A[0-9a-fA-F]{32}\z/, key)
+
+  defp hls_master_audio_tracks(embed, region, variants) do
+    tracks = manifest_audio_tracks(embed, region)
+
+    if Enum.any?(variants, fn {_id, output} -> output["legacy_rendition"] end) do
+      existing_hls_audio_tracks(embed, region, tracks)
+    else
+      {:ok, tracks}
+    end
+  end
+
+  defp existing_hls_audio_tracks(embed, region, tracks) do
+    bucket = Storage.bucket_for_space(embed.space.hash, region)
+    version = Embeds.current_video_version(embed)
+    prefix = if version > 0, do: "#{embed.hash}/v#{version}/", else: "#{embed.hash}/"
+
+    Enum.reduce_while(tracks, {:ok, []}, fn track, {:ok, existing} ->
+      case storage_adapter().get(bucket, prefix <> track["hls_playlist"], region) do
+        {:ok, _body} -> {:cont, {:ok, existing ++ [track]}}
+        {:error, :not_found} -> {:cont, {:ok, existing}}
+        {:error, reason} -> {:halt, {:error, {:audio_playlist_unavailable, reason}}}
+      end
     end)
   end
 
@@ -1164,9 +1212,12 @@ defmodule MaveCore.Assets do
     end)
   end
 
-  defp hls_subtitle_path(%Embed{} = embed, %Subtitle{path: path}, version)
+  defp hls_subtitle_path(%Embed{} = embed, %Subtitle{path: path, language: language}, version)
        when is_binary(path) and path != "" do
     cond do
+      legacy_rendition_key?(path) ->
+        "subtitle_#{language || "en"}.vtt"
+
       String.starts_with?(path, "http://") or String.starts_with?(path, "https://") ->
         path
 
