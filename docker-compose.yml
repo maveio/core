@@ -32,6 +32,8 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server
     environment:
+      - SSL_CERT_FILE=/etc/mave-ca/ca-certificates.crt
+      - SSL_CERT_DIR=/etc/mave-ca
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=password
       - CLICKHOUSE_DB=mave_metrics
@@ -39,6 +41,8 @@ services:
       - "127.0.0.1:8123:8123"
       - "127.0.0.1:9002:9000"
     volumes:
+      - ./deploy/trust:/etc/mave-ca:ro
+      - ./deploy/trust/clickhouse.xml:/etc/clickhouse-server/config.d/public-trust.xml:ro
       - clickhouse_data:/var/lib/clickhouse
     ulimits:
       nofile:
