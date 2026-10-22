@@ -7,8 +7,17 @@ services:
   storage-init:
     build:
       context: ./minio
+  upload:
+    build:
+      context: ./tusd
+  clickhouse:
+    volumes:
+      - ./trust:/etc/mave-ca:ro
+      - ./trust/clickhouse.xml:/etc/clickhouse-server/config.d/public-trust.xml:ro
   caddy:
     ports: !reset []
+    volumes:
+      - ./trust:/etc/mave-ca:ro
 
 networks:
   default:

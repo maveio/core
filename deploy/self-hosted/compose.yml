@@ -160,8 +160,7 @@ services:
   upload:
     image: mave-tusd:local
     build:
-      context: ../..
-      dockerfile: deploy/tusd/Dockerfile
+      context: ../tusd
     command:
       - -port=1080
       - -behind-proxy=true
