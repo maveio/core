@@ -2199,3 +2199,124 @@ func TestAudioPeaksHandlerDoesNotPublishPartialOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestHLSCallbackRetriesTransientResponsesAndReplaysAuthorization(t *testing.T) {
+	for _, status := range []int{429, 502, 503, 504} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			calls := 0
+			var firstBody string
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				body, _ := io.ReadAll(r.Body)
+				if calls == 1 {
+					firstBody = string(body)
+				}
+				if string(body) != firstBody || r.Header.Get("Authorization") != "Bearer test-token" {
+					t.Error("callback retry changed the scoped request")
+				}
+				if calls < 3 {
+					w.WriteHeader(status)
+					return
+				}
+				io.WriteString(w, `{"uploads":[{"name":"init.mp4","key":"test/init.mp4","content_type":"video/mp4","size_bytes":4,"upload":{"url":"https://objects.example/init.mp4"}}]}`)
+			}))
+			defer server.Close()
+			original := http.DefaultClient
+			http.DefaultClient = server.Client()
+			defer func() { http.DefaultClient = original }()
+			result, err := requestHLSUploadTargets(context.Background(), server.URL, "test-token", []hlsFile{{Name: "init.mp4", SizeBytes: 4}})
+			if err != nil || len(result) != 1 || calls != 3 {
+				t.Fatalf("expected retry recovery: calls=%d result=%v err=%v", calls, result, err)
+			}
+		})
+	}
+}
+
+func TestHLSCallbackFailureBoundsAndCancellation(t *testing.T) {
+	for _, status := range []int{400, 401, 403, 422, 302, 503} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			calls := 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				w.Header().Set("Location", "https://must-not-receive-token.example")
+				w.WriteHeader(status)
+				io.WriteString(w, "secret-response")
+			}))
+			defer server.Close()
+			original := http.DefaultClient
+			http.DefaultClient = server.Client()
+			defer func() { http.DefaultClient = original }()
+			_, err := requestHLSUploadTargets(context.Background(), server.URL, "secret-token", []hlsFile{{Name: "init.mp4", SizeBytes: 4}})
+			expectedCalls := 1
+			if status == 503 {
+				expectedCalls = 4
+			}
+			if err == nil || calls != expectedCalls || strings.Contains(err.Error(), "secret") || !strings.Contains(err.Error(), fmt.Sprint(status)) {
+				t.Fatalf("unexpected bounded failure: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; cancel(); w.WriteHeader(503) }))
+	defer server.Close()
+	original := http.DefaultClient
+	http.DefaultClient = server.Client()
+	defer func() { http.DefaultClient = original }()
+	start := time.Now()
+	_, err := requestHLSUploadTargets(ctx, server.URL, "token", []hlsFile{{Name: "init.mp4", SizeBytes: 4}})
+	if err == nil || calls != 1 || time.Since(start) > time.Second {
+		t.Fatalf("cancelled callback should stop promptly: calls=%d err=%v", calls, err)
+	}
+}
+
+func TestHLSCallbackPrivateRoutePreservesTLSAndHTTPIdentity(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "example.com" || r.TLS.ServerName != "example.com" {
+			t.Errorf("lost TLS/HTTP identity: %q / %q", r.Host, r.TLS.ServerName)
+		}
+		io.WriteString(w, `{"uploads":[{"name":"init.mp4","key":"test/init.mp4","content_type":"video/mp4","size_bytes":4,"upload":{"url":"https://objects.example/init.mp4"}}]}`)
+	}))
+	defer server.Close()
+	client := server.Client()
+	transport := client.Transport.(*http.Transport).Clone()
+	dialed := ""
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		dialed = address
+		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+	}
+	client.Transport = transport
+	original := http.DefaultClient
+	http.DefaultClient = client
+	defer func() { http.DefaultClient = original }()
+	t.Setenv("HLS_UPLOAD_CALLBACK_CONNECT_ADDRESS", "10.1.2.3:443")
+	_, err := requestHLSUploadTargets(context.Background(), "https://example.com/callback", "token", []hlsFile{{Name: "init.mp4", SizeBytes: 4}})
+	if err != nil || dialed != "10.1.2.3:443" {
+		t.Fatalf("private callback failed: destination=%s err=%v", dialed, err)
+	}
+	// The same trusted certificate must still fail for the wrong URL hostname.
+	_, err = requestHLSUploadTargets(context.Background(), "https://wrong.example/callback", "token", []hlsFile{{Name: "init.mp4", SizeBytes: 4}})
+	if err == nil {
+		t.Fatal("private routing disabled TLS hostname validation")
+	}
+}
+
+func TestHLSCallbackRejectsNonPrivateRoute(t *testing.T) {
+	for _, address := range []string{"8.8.8.8:443", "127.0.0.1:443", "169.254.169.254:443", "10.1.2.3:80", "https://10.1.2.3"} {
+		t.Run(address, func(t *testing.T) {
+			t.Setenv("HLS_UPLOAD_CALLBACK_CONNECT_ADDRESS", address)
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.DialContext = func(context.Context, string, string) (net.Conn, error) {
+				t.Error("invalid private destination was dialed")
+				return nil, errors.New("unexpected dial")
+			}
+			original := http.DefaultClient
+			http.DefaultClient = &http.Client{Transport: transport}
+			defer func() { http.DefaultClient = original }()
+			_, err := requestHLSUploadTargets(context.Background(), "https://example.com/callback", "token", []hlsFile{{Name: "init.mp4", SizeBytes: 4}})
+			if err == nil {
+				t.Fatal("invalid private destination accepted")
+			}
+		})
+	}
+}
