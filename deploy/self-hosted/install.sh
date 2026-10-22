@@ -271,8 +271,8 @@ compose() {
 
 compose config --quiet
 
-compose pull postgres clickhouse upload caddy
-compose build --pull minio storage-init
+compose pull postgres clickhouse caddy
+compose build --pull minio storage-init upload
 
 if ! docker image inspect "$core_image" >/dev/null 2>&1; then
   docker pull "$core_image"

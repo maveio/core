@@ -53,6 +53,8 @@ network_created=false
 stack_started=false
 cp "$script_dir/compose.yml" "$script_dir/compose.smoke.yml" "$script_dir/Caddyfile" "$smoke_dir/"
 cp -R "$script_dir/../minio" "$smoke_dir/minio"
+cp -R "$script_dir/../tusd" "$smoke_dir/tusd"
+cp -R "$script_dir/../trust" "$smoke_dir/trust"
 
 # Explicit files/project override any COMPOSE_* settings in the caller's shell.
 # The subshell also excludes inherited application credentials and feature flags.
