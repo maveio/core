@@ -1,0 +1,9 @@
+<clickhouse>
+  <openSSL>
+    <client>
+      <caConfig>/etc/mave-ca/ca-certificates.crt</caConfig>
+      <loadDefaultCAFile>false</loadDefaultCAFile>
+      <verificationMode>strict</verificationMode>
+    </client>
+  </openSSL>
+</clickhouse>
