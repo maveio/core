@@ -1,0 +1,32 @@
+name: tusd image
+on:
+  pull_request:
+    paths: ["deploy/tusd/**", "docker-compose.yml", "deploy/self-hosted/compose.yml", ".github/workflows/tusd-image.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Build and verify
+        run: |
+          docker build -t mave-tusd:test deploy/tusd
+          python3 deploy/tusd/smoke.py mave-tusd:test
+      - name: Publish tested image
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          image="ghcr.io/maveio/tusd:$GITHUB_SHA"
+          docker tag mave-tusd:test "$image"
+          docker push "$image"
+          docker logout ghcr.io
