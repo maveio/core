@@ -103,6 +103,25 @@ defmodule MaveCore.Assets.HlsRefreshTest do
     assert master(embed) == "original"
   end
 
+  test "missing separate audio does not mute a video-only variant" do
+    embed = embed_fixture()
+    legacy_rendition(embed)
+    audio_track(embed, "audio.mp3")
+
+    put(
+      embed,
+      "h264_hd_hls/init.mp4",
+      box("moov", box("trak", box("mdia", box("hdlr", <<0::64, "vide">>))))
+    )
+
+    put(embed, "playlist.m3u8", "original")
+
+    assert {:error, {:missing_audio_playlist, "audio_hls/playlist.m3u8"}} =
+             Assets.refresh_hls_master_playlist(embed)
+
+    assert master(embed) == "original"
+  end
+
   defp embed_fixture do
     space = Repo.insert!(%Space{hash: "abcde", region: "eu"})
     asset = Repo.insert!(%Asset{space_id: space.id})
@@ -113,7 +132,17 @@ defmodule MaveCore.Assets.HlsRefreshTest do
     |> Repo.preload([:space, asset: [:current_video]])
   end
 
-  defp legacy_rendition(embed), do: rendition(embed, String.duplicate("a", 32))
+  defp legacy_rendition(embed) do
+    put(
+      embed,
+      "h264_hd_hls/init.mp4",
+      box("moov", box("trak", box("mdia", box("hdlr", <<0::64, "soun">>))))
+    )
+
+    rendition(embed, String.duplicate("a", 32))
+  end
+
+  defp box(type, body), do: <<byte_size(body) + 8::32, type::binary, body::binary>>
 
   defp rendition(embed, key) do
     Repo.insert!(%Rendition{
