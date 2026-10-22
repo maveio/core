@@ -55,6 +55,9 @@ cp "$script_dir/compose.yml" "$script_dir/compose.smoke.yml" "$script_dir/Caddyf
 cp -R "$script_dir/../minio" "$smoke_dir/minio"
 cp -R "$script_dir/../tusd" "$smoke_dir/tusd"
 cp -R "$script_dir/../trust" "$smoke_dir/trust"
+# The private umask must not hide public trust files from non-root containers.
+chmod 755 "$smoke_dir/trust"
+chmod 644 "$smoke_dir/trust/ca-certificates.crt" "$smoke_dir/trust/clickhouse.xml"
 
 # Explicit files/project override any COMPOSE_* settings in the caller's shell.
 # The subshell also excludes inherited application credentials and feature flags.

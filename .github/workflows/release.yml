@@ -64,7 +64,7 @@ jobs:
               env = directory / '.env'
               values = [line.partition('=')[2] for line in env.read_text().splitlines()
                         if re.search(r'PASSWORD|SECRET|KEY|COOKIE', line.partition('=')[0])] if env.exists() else []
-              for name in ('build.log', 'start.log', 'ready.log'):
+              for name in ('build.log', 'start.log', 'ready.log', 'services.log'):
                   path = directory / name
                   if not path.exists():
                       continue
