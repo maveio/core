@@ -3,6 +3,7 @@ defmodule MaveCore.Analytics.SessionsTest do
 
   alias MaveCore.{Analytics, ClickHouseRepo, Repo}
   alias MaveCore.Analytics.Sessions
+  alias MaveCore.Analytics.Sessions.Query
   alias MaveCore.Workers.AnalyticsSessionsWorker
 
   setup do
@@ -478,18 +479,84 @@ defmodule MaveCore.Analytics.SessionsTest do
   end
 
   test "future-dated pauses become visible without another insert" do
+    [[unchanged_id]] =
+      ClickHouseRepo.query!("""
+      SELECT number FROM numbers(2, 256)
+      WHERE modulo(cityHash64(toUUID(concat('00000000-0000-0000-0000-', leftPad(toString(number),12,'0')))),16)=1
+      LIMIT 1
+      """).rows
+
     pair(1, "AAAAA", "normal", 20, 25, 0, 5)
+    pair(unchanged_id, "AAAAA", "unchanged", 20, 25, 0, 5)
     # Keep another ordinary session in the same bucket so an empty future
     # array cannot mask this session's scheduled refresh deadline.
     Process.put(:analytics_time, DateTime.utc_now())
     pair(1, "AAAAA", "future", -15, -10, 0, 5)
     assert {:ok, _} = Sessions.refresh_changed(limit: 32)
+    {:ok, before_generations} = Sessions.generations("AAAAA")
+
+    unchanged_sql = """
+    SELECT session_id,created_at FROM analytics_sessions
+    WHERE generation IN {$0:Array(UUID)}
+      AND session_id!=toUUID('00000000-0000-0000-0000-000000000001')
+    """
+
+    unchanged = ClickHouseRepo.query!(unchanged_sql, [before_generations]).rows
     assert {:ok, before} = Sessions.data("AAAAA")
-    assert before.watch_time.year == 5000
+    assert before.watch_time.year == 10_000
     Process.sleep(16_000)
     assert {:ok, 1} = Sessions.refresh_changed(limit: 32)
+    {:ok, after_generations} = Sessions.generations("AAAAA")
+    assert unchanged == ClickHouseRepo.query!(unchanged_sql, [after_generations]).rows
     assert {:ok, later} = Sessions.data("AAAAA")
-    assert later.watch_time.year == 10_000
+    assert later.watch_time.year == 15_000
+  end
+
+  test "newly visible sessions retain exact overview, unique and range results" do
+    pair(1, "AAAAA", "normal", 20, 25, 0, 5)
+    pair(2, "AAAAA", "unchanged", 20, 25, 0, 5)
+    pair(1, "AAAAA", "future", -15, -10, 0, 5)
+    pair(3, "AAAAA", "future-only", -15, -10, 2, 7)
+    assert {:ok, _} = Sessions.refresh_changed(limit: 32)
+    {:ok, generations} = Sessions.generations("AAAAA")
+
+    assert [[2]] =
+             ClickHouseRepo.query!(
+               "SELECT countIf(isNotNull(future_at)) FROM analytics_sessions WHERE generation IN {$0:Array(UUID)}",
+               [generations]
+             ).rows
+
+    now = DateTime.add(Process.get(:analytics_time), 16)
+    date = DateTime.to_date(now)
+    year = DateTime.new!(Date.new!(date.year, 1, 1), ~T[00:00:00])
+    month = DateTime.new!(Date.new!(date.year, date.month, 1), ~T[00:00:00])
+    day = DateTime.new!(date, ~T[00:00:00])
+    params = ["AAAAA", generations, year, month, day, now]
+
+    assert Enum.sort(ClickHouseRepo.query!(Query.live_overview(), params).rows) ==
+             Enum.sort(ClickHouseRepo.query!(Query.overview_at(), params).rows)
+
+    assert ClickHouseRepo.query!(Query.live_unique_overview(), params).rows ==
+             ClickHouseRepo.query!(Query.unique_watch_time(), params).rows
+
+    assert {:ok, actual} = Sessions.data("AAAAA", now: now, include_unique: true)
+    assert actual.watch_time.year == 20_000
+    assert actual.unique_watch_time.year == 15_000
+
+    for mode <- [:series, :videos], granularity <- [:day, :week, :month] do
+      range_params = ["AAAAA", generations, year, now, []]
+      detailed = ClickHouseRepo.query!(Query.range(granularity, mode), range_params).rows
+      hybrid = ClickHouseRepo.query!(Query.live_range(granularity, mode), range_params).rows
+      assert Enum.sort(hybrid) == Enum.sort(detailed)
+
+      expected =
+        Map.new(detailed, fn [key, views, watched, completion] ->
+          {key, %{views: views, watch_seconds: watched, completion_rate: completion}}
+        end)
+
+      assert {:ok, ^expected} =
+               Sessions.range_data("AAAAA", year, now, mode: mode, granularity: granularity)
+    end
   end
 
   test "cleanup retains published generations and removes only expired ones" do
