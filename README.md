@@ -14,7 +14,7 @@ encoding pipeline, an embeddable player, and built-in analytics. Upload, process
 and publish videos — with your media in S3-compatible storage that you control.
 
 [Get started](#self-hosted-quickstart) · [Self-hosting guide](deploy/self-hosted/README.md) ·
-[Contribute](CONTRIBUTING.md)
+[Contribute](CONTRIBUTING.md) · [MCP and OAuth](docs/mcp.md)
 
 ## One place for your videos
 

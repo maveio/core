@@ -47,6 +47,23 @@ defmodule MaveCoreWeb.Router do
     plug :accepts, ["json"]
   end
 
+  pipeline :mcp_api do
+    plug :fetch_session
+    plug :fetch_current_user_from_session
+    plug MaveCoreWeb.Plugs.Maintenance, allow_internal_users: true
+  end
+
+  pipeline :mcp_cors do
+    plug MaveCoreWeb.Plugs.McpCORS
+  end
+
+  pipeline :mcp_browser_headers do
+    plug :put_secure_browser_headers, %{
+      "referrer-policy" => "no-referrer",
+      "cache-control" => "no-store"
+    }
+  end
+
   pipeline :api_key_auth do
     plug MaveCoreWeb.Plugs.ApiKeyAuth
   end
@@ -79,6 +96,33 @@ defmodule MaveCoreWeb.Router do
 
   pipeline :image_host do
     plug MaveCoreWeb.Plugs.RequireHost, env_var: "MAVE_IMAGE_HOST"
+  end
+
+  scope "/", MaveCoreWeb do
+    pipe_through [:api_host, :mcp_cors, :mcp_api]
+    match :*, "/mcp", McpController, :handle, log: false
+  end
+
+  scope "/", MaveCoreWeb do
+    pipe_through [:api_host, :public_cors, :api]
+    get "/.well-known/oauth-protected-resource/mcp", McpOauthController, :resource
+    get "/.well-known/oauth-protected-resource", McpOauthController, :resource
+    get "/.well-known/oauth-authorization-server", McpOauthController, :metadata
+    options "/oauth/mcp/:action", McpOauthController, :metadata
+    post "/oauth/mcp/register", McpOauthController, :register, log: false
+    post "/oauth/mcp/token", McpOauthController, :token, log: false
+    post "/oauth/mcp/revoke", McpOauthController, :revoke, log: false
+  end
+
+  scope "/", MaveCoreWeb do
+    pipe_through [:browser, :manage_host, :authenticated_user, :mcp_browser_headers]
+
+    live_session :mcp_auth,
+      root_layout: {MaveCoreWeb.Layouts, :auth},
+      on_mount: [{MaveCoreWeb.UserLiveAuth, :authenticated}] do
+      live "/oauth/mcp/authorize", McpAuthLive, :authorize
+      live "/mcp/connections", McpConnectionsLive, :index
+    end
   end
 
   scope "/api/v1", MaveCoreWeb do

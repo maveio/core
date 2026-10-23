@@ -43,6 +43,19 @@ defmodule MaveCoreWeb.Dashboard.Settings.DeveloperTab do
 
       <div class="w-12 mt-12 mb-4 mx-auto border-t border-stone-100"></div>
 
+      <.subtitle label={gettext("Connected apps")} icon="link" />
+      <p class="mt-4 text-sm text-stone-400">
+        {gettext("Manage the apps connected to your Mave spaces through MCP.")}
+        <.link
+          id="settings-mcp-connections"
+          href={~p"/mcp/connections"}
+          class="text-blue-400 hover:underline"
+        >
+          {gettext("Manage connected apps")}
+        </.link>
+      </p>
+      <div class="w-12 mt-12 mb-4 mx-auto border-t border-stone-100"></div>
+
       <%!-- API Keys --%>
       <.subtitle label={gettext("API Keys")} icon="key">
         <%= if @keys != [] do %>

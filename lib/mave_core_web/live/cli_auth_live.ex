@@ -5,6 +5,8 @@ defmodule MaveCoreWeb.CliAuthLive do
 
   import MaveCoreWeb.DashboardComponents, except: [icon: 1]
 
+  import MaveCoreWeb.ConnectionComponents
+
   alias MaveCore.CliAuthorizations
   alias MaveCore.Spaces.Space
 
@@ -78,174 +80,134 @@ defmodule MaveCoreWeb.CliAuthLive do
 
   def render(assigns) do
     ~H"""
-    <main
+    <.connection_card
       id="cli-auth-window"
-      class="relative isolate flex min-h-svh w-full flex-col items-center bg-stone-100 px-4 py-8 text-stone-700"
-      style="font-family: var(--font-sans); color-scheme: light;"
+      title_id="cli-auth-title"
+      title={authorization_title(@state)}
+      eyebrow="Mave CLI"
+      footer="Only authorize a CLI login that you started yourself."
     >
-      <section
-        aria-labelledby="cli-auth-title"
-        class="relative z-10 my-auto flex w-full max-w-sm flex-col items-center rounded-md border border-white border-opacity-50 bg-stone-50 px-8 py-2 shadow-sm shadow-stone-200 ring-1 ring-stone-300 ring-opacity-50"
-      >
-        <div class="mx-auto mb-4 mt-8 size-24 rounded-full bg-white shadow-stone-200 ring-1 ring-stone-300 ring-opacity-40 transition hover:scale-105 hover:shadow-md">
-          <.animated_icon
-            name="link"
-            class="size-full p-3 opacity-25"
-            speed="1"
+      <%= case @state do %>
+        <% :enter -> %>
+          <p class="mb-6 text-center text-sm leading-5 text-stone-400">
+            Enter the code shown in your terminal to continue.
+          </p>
+          <.form for={@code_form} id="cli-auth-code-form" phx-submit="lookup">
+            <label for={@code_form[:user_code].id} class="mb-2 block text-xs text-stone-500">
+              Authorization code
+            </label>
+            <.dash_input
+              field={@code_form[:user_code]}
+              placeholder="ABCDE-F0123"
+              phx-mounted={JS.focus()}
+              autocomplete="one-time-code"
+            />
+            <div class="mb-7 mt-6 flex justify-center">
+              <.dash_button id="cli-auth-code-submit" variant="primary">
+                Continue
+              </.dash_button>
+            </div>
+          </.form>
+        <% :pending -> %>
+          <div :if={@authorization.client_metadata["device_name"]} class="mb-5 text-center">
+            <p id="cli-auth-device-name" class="break-words text-sm font-medium text-stone-600">
+              {@authorization.client_metadata["device_name"]}
+            </p>
+            <p class="mt-1 text-xs text-stone-400">Device name provided by the CLI</p>
+          </div>
+          <div class="mb-5 rounded-md bg-white px-4 py-3 text-center shadow-sm shadow-stone-200 ring-1 ring-stone-200/50">
+            <div class="text-[0.65rem] uppercase tracking-wider text-stone-400">
+              Authorization code
+            </div>
+            <div
+              id="cli-auth-user-code"
+              class="mt-1 font-mono text-base tracking-[0.14em] text-stone-600"
+            >
+              {@authorization.user_code}
+            </div>
+          </div>
+          <p class="mb-5 text-center text-xs leading-5 text-stone-500">
+            Check that this code matches the one in your terminal.
+          </p>
+          <p class="text-sm leading-6 text-stone-500">
+            This grants <strong class="font-medium text-stone-600">Mave CLI</strong>
+            read and write access to videos and collections in the selected space.
+          </p>
+          <.form for={@approval_form} id="cli-auth-approval-form" phx-submit="authorize">
+            <div class="mt-6">
+              <label for={@approval_form[:space_id].id} class="mb-2 block text-xs text-stone-500">
+                Space
+              </label>
+              <.dash_select
+                field={@approval_form[:space_id]}
+                options={space_options(@spaces)}
+              />
+            </div>
+            <p class="mt-4 text-xs leading-5 text-stone-400">
+              You can revoke access in Settings → Developer → API Keys.
+            </p>
+            <div class="mt-6 flex justify-center">
+              <.dash_button
+                id="cli-auth-authorize"
+                variant="primary"
+                icon="link"
+                loading_on_submit
+                loading_label="Authorizing…"
+              >
+                Authorize Mave CLI
+              </.dash_button>
+            </div>
+          </.form>
+          <div class="mb-5 mt-3 flex justify-center">
+            <.dash_button
+              id="cli-auth-deny"
+              type="button"
+              phx-click="deny"
+              variant="ghost"
+            >
+              Cancel
+            </.dash_button>
+          </div>
+        <% :approved -> %>
+          <.result
+            id="cli-auth-approved"
+            message="Return to your terminal to continue. You can close this window."
           />
-        </div>
-        <div class="mb-6 text-center">
-          <p class="text-xs font-medium uppercase tracking-[0.18em] text-blue-400">Mave CLI</p>
-          <h1 id="cli-auth-title" class="mt-2 text-lg font-medium text-stone-700">
-            {authorization_title(@state)}
-          </h1>
-        </div>
-
-        <div class="w-full">
-          <%= case @state do %>
-            <% :enter -> %>
-              <p class="mb-6 text-center text-sm leading-5 text-stone-400">
-                Enter the code shown in your terminal to continue.
-              </p>
-              <.form for={@code_form} id="cli-auth-code-form" phx-submit="lookup">
-                <label for={@code_form[:user_code].id} class="mb-2 block text-xs text-stone-500">
-                  Authorization code
-                </label>
-                <.dash_input
-                  field={@code_form[:user_code]}
-                  placeholder="ABCDE-F0123"
-                  phx-mounted={JS.focus()}
-                  autocomplete="one-time-code"
-                />
-                <div class="mb-7 mt-6 flex justify-center">
-                  <.dash_button id="cli-auth-code-submit" variant="primary">
-                    Continue
-                  </.dash_button>
-                </div>
-              </.form>
-            <% :pending -> %>
-              <div :if={@authorization.client_metadata["device_name"]} class="mb-5 text-center">
-                <p id="cli-auth-device-name" class="break-words text-sm font-medium text-stone-600">
-                  {@authorization.client_metadata["device_name"]}
-                </p>
-                <p class="mt-1 text-xs text-stone-400">Device name provided by the CLI</p>
-              </div>
-              <div class="mb-5 rounded-md bg-white px-4 py-3 text-center shadow-sm shadow-stone-200 ring-1 ring-stone-200/50">
-                <div class="text-[0.65rem] uppercase tracking-wider text-stone-400">
-                  Authorization code
-                </div>
-                <div
-                  id="cli-auth-user-code"
-                  class="mt-1 font-mono text-base tracking-[0.14em] text-stone-600"
-                >
-                  {@authorization.user_code}
-                </div>
-              </div>
-              <p class="mb-5 text-center text-xs leading-5 text-stone-500">
-                Check that this code matches the one in your terminal.
-              </p>
-              <p class="text-sm leading-6 text-stone-500">
-                This grants <strong class="font-medium text-stone-600">Mave CLI</strong>
-                read and write access to videos and collections in the selected space.
-              </p>
-              <.form for={@approval_form} id="cli-auth-approval-form" phx-submit="authorize">
-                <div class="mt-6">
-                  <label for={@approval_form[:space_id].id} class="mb-2 block text-xs text-stone-500">
-                    Space
-                  </label>
-                  <.dash_select
-                    field={@approval_form[:space_id]}
-                    options={space_options(@spaces)}
-                  />
-                </div>
-                <p class="mt-4 text-xs leading-5 text-stone-400">
-                  You can revoke access in Settings → Developer → API Keys.
-                </p>
-                <div class="mt-6 flex justify-center">
-                  <.dash_button
-                    id="cli-auth-authorize"
-                    variant="primary"
-                    icon="link"
-                    loading_on_submit
-                    loading_label="Authorizing…"
-                  >
-                    Authorize Mave CLI
-                  </.dash_button>
-                </div>
-              </.form>
-              <div class="mb-5 mt-3 flex justify-center">
-                <.dash_button
-                  id="cli-auth-deny"
-                  type="button"
-                  phx-click="deny"
-                  variant="ghost"
-                >
-                  Cancel
-                </.dash_button>
-              </div>
-            <% :approved -> %>
-              <.result
-                id="cli-auth-approved"
-                message="Return to your terminal to continue. You can close this window."
-              />
-              <.link
-                id="cli-auth-settings"
-                href={
-                  MaveCoreWeb.DashboardRoutes.settings_path(
-                    %{id: @authorization.space_id},
-                    :developer
-                  )
-                }
-                class="mb-6 mt-4 block text-center text-sm text-blue-400 transition hover:text-blue-500"
-              >
-                Manage API keys
-              </.link>
-            <% :denied -> %>
-              <.result
-                id="cli-auth-denied"
-                message="No credentials were created. You can close this window."
-              />
-            <% :expired -> %>
-              <.result
-                id="cli-auth-expired"
-                message="Return to the CLI and start login again to receive a new code."
-              />
-            <% :invalid -> %>
-              <.result
-                id="cli-auth-invalid"
-                message="Check the code in your terminal or start login again."
-              />
-              <.link
-                navigate={~p"/cli/auth"}
-                class="mb-6 mt-6 block text-center text-xs text-blue-400 transition hover:text-blue-500"
-              >
-                Enter another code
-              </.link>
-          <% end %>
-        </div>
-
-        <div class="mb-5 mt-1 text-center text-[0.65rem] leading-4 text-stone-400 text-opacity-70">
-          Only authorize a CLI login that you started yourself.
-        </div>
-      </section>
-
-      <div
-        aria-hidden="true"
-        class="pointer-events-none fixed -bottom-28 mx-auto h-72 w-full max-w-screen-xl pt-0"
-      >
-        <div class="absolute z-10 hidden size-full bg-opacity-50 xl:flex">
-          <div class="h-full w-72 bg-gradient-to-r from-stone-100"></div>
-          <div class="flex-grow"></div>
-          <div class="h-full w-72 bg-gradient-to-l from-stone-100"></div>
-        </div>
-        <.animated_icon
-          name="waves"
-          class="size-full rotate-180 grayscale opacity-10 contrast-200"
-          speed="0.5"
-          loop
-        />
-      </div>
-    </main>
+          <.link
+            id="cli-auth-settings"
+            href={
+              MaveCoreWeb.DashboardRoutes.settings_path(
+                %{id: @authorization.space_id},
+                :developer
+              )
+            }
+            class="mb-6 mt-4 block text-center text-sm text-blue-400 transition hover:text-blue-500"
+          >
+            Manage API keys
+          </.link>
+        <% :denied -> %>
+          <.result
+            id="cli-auth-denied"
+            message="No credentials were created. You can close this window."
+          />
+        <% :expired -> %>
+          <.result
+            id="cli-auth-expired"
+            message="Return to the CLI and start login again to receive a new code."
+          />
+        <% :invalid -> %>
+          <.result
+            id="cli-auth-invalid"
+            message="Check the code in your terminal or start login again."
+          />
+          <.link
+            navigate={~p"/cli/auth"}
+            class="mb-6 mt-6 block text-center text-xs text-blue-400 transition hover:text-blue-500"
+          >
+            Enter another code
+          </.link>
+      <% end %>
+    </.connection_card>
     """
   end
 

@@ -729,3 +729,24 @@ if config_env() == :prod do
       System.get_env("UA_INSPECTOR_DATABASE_PATH") ||
         Application.app_dir(:mave_core, "priv/ua_inspector")
 end
+
+# Optional canonical resource URL for deployments with a separate API hostname.
+if mcp_resource = System.get_env("MAVE_MCP_RESOURCE_URL") do
+  uri = URI.parse(mcp_resource)
+
+  secure =
+    uri.scheme == "https" or
+      (uri.scheme == "http" and uri.host in ["localhost", "127.0.0.1", "::1"])
+
+  unless secure and is_binary(uri.host) and uri.path == "/mcp" and
+           is_nil(uri.userinfo) and is_nil(uri.query) and is_nil(uri.fragment) do
+    raise "MAVE_MCP_RESOURCE_URL must be an HTTPS URL ending in /mcp (loopback HTTP is allowed)"
+  end
+
+  config :mave_core, :mcp, resource_url: mcp_resource
+end
+
+if origins = System.get_env("MAVE_MCP_ALLOWED_ORIGINS") do
+  config :mave_core, :mcp,
+    allowed_origins: String.split(origins, ",", trim: true) |> Enum.map(&String.trim/1)
+end
