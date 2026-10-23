@@ -94,6 +94,16 @@ defmodule MaveCoreWeb.Api.PlaybackControllerTest do
     assert %{"visibility" => "public"} = json_response(conn, 200)
   end
 
+  test "array and map playback tokens return unauthorized without a crypto error", context do
+    {:ok, embed} = Embeds.create_video_embed(context.space, %{visibility: :private})
+    path = "/api/v1/playback/media/#{context.space.hash}#{embed.hash}/manifest.json"
+
+    for token <- [["invalid"], %{"nested" => "invalid"}] do
+      conn = Phoenix.ConnTest.get(build_conn(), path, %{token: token})
+      assert response(conn, 401) == "Playback authorization required"
+    end
+  end
+
   test "failed or unavailable private protection and invalid visibility leave no video behind",
        context do
     Process.put(:playback_storage_result, {:error, :storage_unavailable})

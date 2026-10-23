@@ -53,6 +53,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
     html =
       %{
         data_access_notice: nil,
+        analytics_preparing: false,
         data_access_help: nil,
         views_today: async_ok(12_345),
         views_this_month: async_ok(67_890),
@@ -86,6 +87,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
     html =
       %{
         data_access_notice: nil,
+        analytics_preparing: false,
         data_access_help: nil,
         views_today: loading,
         views_this_month: loading,

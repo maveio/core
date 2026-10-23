@@ -729,3 +729,8 @@ if config_env() == :prod do
       System.get_env("UA_INSPECTOR_DATABASE_PATH") ||
         Application.app_dir(:mave_core, "priv/ua_inspector")
 end
+
+# Background preparation and reader activation can be rolled out independently.
+config :mave_core,
+       :analytics_sessions,
+       MaveCore.Analytics.Sessions.Config.from_env!(System.get_env())

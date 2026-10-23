@@ -26,6 +26,11 @@ defmodule MaveCoreWeb.Api.Data.SpacesController do
       {:ok, data} ->
         json(conn, %{data: data})
 
+      {:error, reason} when reason in [:preparing, :analytics_unavailable] ->
+        conn
+        |> put_resp_header("retry-after", "60")
+        |> send_resp(:service_unavailable, "Analytics are temporarily unavailable")
+
       _ ->
         send_resp(conn, :bad_request, "Invalid space_hash")
     end

@@ -2,6 +2,7 @@ defmodule MaveCore.Analytics do
   @moduledoc false
 
   alias Ecto.Adapters.SQL
+  alias MaveCore.Analytics.Sessions
   alias MaveCore.ClickHouseRepo
   alias MaveCore.SharedStorageSpace
 
@@ -15,12 +16,24 @@ defmodule MaveCore.Analytics do
       if SharedStorageSpace.hash?(space_hash) do
         {:ok, empty_space_data(space_hash)}
       else
-        do_space_data(space_hash)
+        space_metrics(space_hash)
       end
     end
   end
 
   def space_data(_), do: {:error, :invalid_space_hash}
+
+  defp space_metrics(space_hash) do
+    if Sessions.enabled?(space_hash),
+      do: Sessions.data(space_hash, include_unique: true),
+      else: do_space_data(space_hash)
+  end
+
+  defp monthly_metrics(space_hash) do
+    if Sessions.enabled?(space_hash),
+      do: Sessions.monthly_watch_time(space_hash),
+      else: do_space_monthly_watch_time(space_hash)
+  end
 
   defp do_space_data(space_hash) do
     now = DateTime.utc_now()
@@ -98,12 +111,19 @@ defmodule MaveCore.Analytics do
      }}
   end
 
+  @doc "Dashboard totals without the optional unique-watch calculation."
+  def space_overview(space_hash) do
+    if Sessions.enabled?(space_hash),
+      do: Sessions.data(space_hash),
+      else: space_data(space_hash)
+  end
+
   def space_monthly_watch_time(space_hash) when is_binary(space_hash) do
     with {:ok, space_hash} <- parse_space_hash(space_hash) do
       if SharedStorageSpace.hash?(space_hash) do
         {:ok, %{watch_time: %{month: 0}}}
       else
-        do_space_monthly_watch_time(space_hash)
+        monthly_metrics(space_hash)
       end
     end
   end
