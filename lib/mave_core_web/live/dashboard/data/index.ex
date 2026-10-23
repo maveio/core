@@ -4,8 +4,14 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   use MaveCoreWeb, :live_view
   import MaveCoreWeb.DashboardComponents, except: [icon: 1]
 
+  @top_list_size 25
+  # Deleted videos keep their analytics, so query extra rows to fill the list.
+  @top_list_query_size 50
+
   alias MaveCore.Analytics
+  alias MaveCore.Embeds
   alias MaveCore.UsageLimits
+  alias MaveCoreWeb.DashboardRoutes
   alias MaveCoreWeb.Formatter
   alias Phoenix.LiveView.AsyncResult
 
@@ -14,6 +20,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
      socket
      |> assign(:page_title, gettext("Data"))
      |> assign(:settings_open, false)
+     |> assign(:route_scope, :unscoped)
      |> assign(:show_all_devices, false)
      |> assign(:show_all_browsers, false)
      |> assign(:data_access_notice, nil)
@@ -21,17 +28,16 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
      |> assign_async_defaults()}
   end
 
-  def handle_params(_params, _url, socket) do
-    space_hash = socket.assigns.current_space.hash
+  def handle_params(params, _url, socket) do
+    space = socket.assigns.current_space
 
     socket =
-      case UsageLimits.can_view_space_data?(socket.assigns.current_space) do
+      case UsageLimits.can_view_space_data?(space) do
         :ok ->
           socket
           |> assign(:data_access_notice, nil)
           |> assign(:data_access_help, nil)
-          |> assign_async_defaults()
-          |> start_async(:fetch_stats, fn -> Analytics.space_data(space_hash) end)
+          |> start_tab_fetch(socket.assigns.live_action, space)
 
         {:error, reason} ->
           socket
@@ -40,7 +46,32 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
           |> assign_empty_stats()
       end
 
-    {:noreply, socket}
+    {:noreply, assign(socket, :route_scope, route_scope(params))}
+  end
+
+  defp start_tab_fetch(socket, :top_list, space) do
+    socket
+    |> assign(:top_videos, AsyncResult.loading())
+    |> start_async(:fetch_top_videos, fn -> fetch_top_videos(space) end)
+  end
+
+  defp start_tab_fetch(socket, _overview, space) do
+    socket
+    |> assign_async_defaults()
+    |> start_async(:fetch_stats, fn -> Analytics.space_data(space.hash) end)
+  end
+
+  defp fetch_top_videos(space) do
+    with {:ok, rows} <- Analytics.space_top_videos(space.hash, @top_list_query_size) do
+      videos = Embeds.dashboard_videos_by_hash(space, Enum.map(rows, & &1.embed_hash))
+
+      top_videos =
+        for %{embed_hash: hash, views: views} <- rows,
+            Map.has_key?(videos, hash),
+            do: Map.put(videos[hash], :views, views)
+
+      {:ok, Enum.take(top_videos, @top_list_size)}
+    end
   end
 
   def handle_async(:fetch_stats, {:ok, {:ok, result}}, socket) do
@@ -72,6 +103,19 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
   def handle_async(:fetch_stats, {:exit, _reason}, socket), do: {:noreply, assign_failed(socket)}
 
+  def handle_async(:fetch_top_videos, {:ok, {:ok, top_videos}}, socket) do
+    {:noreply, assign(socket, :top_videos, AsyncResult.ok(socket.assigns.top_videos, top_videos))}
+  end
+
+  def handle_async(:fetch_top_videos, _result, socket) do
+    {:noreply,
+     assign(
+       socket,
+       :top_videos,
+       AsyncResult.failed(socket.assigns.top_videos, :analytics_unavailable)
+     )}
+  end
+
   def handle_event("toggle_show_all_devices", _, socket) do
     {:noreply, assign(socket, :show_all_devices, !socket.assigns.show_all_devices)}
   end
@@ -83,149 +127,243 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   def render(assigns) do
     ~H"""
     <div class="h-full flex flex-col">
-      <.title title={gettext("Data")}>
-        <div
-          :if={@data_access_notice}
-          id="data-access-limit-notice"
-          class="flex-none text-stone-400 text-opacity-70 text-sm cursor-default flex items-center"
-        >
-          <div>{@data_access_notice}</div>
-          <.info_hover position="left">
-            {@data_access_help}
-          </.info_hover>
-        </div>
-      </.title>
+      <div class="h-16 flex-none"></div>
+      <div class="flex-none">
+        <.menubar>
+          <.menubar_item
+            icon="hero-chart-bar-mini"
+            path={DashboardRoutes.data_path(@current_space, scope: @route_scope)}
+            active={@live_action != :top_list}
+          >
+            {gettext("Overview")}
+          </.menubar_item>
+          <.menubar_item
+            icon="hero-trophy-mini"
+            path={DashboardRoutes.data_top_list_path(@current_space, scope: @route_scope)}
+            active={@live_action == :top_list}
+          >
+            {gettext("Top list")}
+          </.menubar_item>
+          <div class="flex-grow"></div>
+          <div
+            :if={@data_access_notice}
+            id="data-access-limit-notice"
+            class="flex-none text-stone-400 text-opacity-70 text-sm cursor-default flex items-center"
+          >
+            <div>{@data_access_notice}</div>
+            <.info_hover position="left">
+              {@data_access_help}
+            </.info_hover>
+          </div>
+        </.menubar>
+      </div>
 
       <div class="flex-1 overflow-y-auto">
         <div class="content opacity-100 scale-100">
-          <div class="max-w-screen-xl px-16 mx-auto pt-8 pb-24">
-            <div class="mb-6">
-              <.subtitle label={gettext("Numbers")} icon="hero-hashtag" />
-            </div>
-
-            <div class="grid grid-cols-3 gap-4 font-sans">
-              <.video_metric_card
-                label={gettext("Today")}
-                value={metric_value(@views_today)}
-                loading={@views_today.loading}
+          <div class="max-w-screen-xl px-16 mx-auto pt-10 pb-24">
+            <%= if @live_action == :top_list do %>
+              <.top_list
+                top_videos={@top_videos}
+                current_space={@current_space}
+                route_scope={@route_scope}
               />
-              <.video_metric_card
-                label={gettext("This month")}
-                value={metric_value(@views_this_month)}
-                loading={@views_this_month.loading}
-              />
-              <.video_metric_card
-                label={gettext("This year")}
-                value={metric_value(@views_this_year)}
-                loading={@views_this_year.loading}
-              />
-            </div>
+            <% else %>
+              <div class="mb-6">
+                <.subtitle label={gettext("Numbers")} icon="hero-hashtag" />
+              </div>
 
-            <.divider />
+              <div class="grid grid-cols-3 gap-4 font-sans">
+                <.video_metric_card
+                  label={gettext("Today")}
+                  value={metric_value(@views_today)}
+                  loading={@views_today.loading}
+                />
+                <.video_metric_card
+                  label={gettext("This month")}
+                  value={metric_value(@views_this_month)}
+                  loading={@views_this_month.loading}
+                />
+                <.video_metric_card
+                  label={gettext("This year")}
+                  value={metric_value(@views_this_year)}
+                  loading={@views_this_year.loading}
+                />
+              </div>
 
-            <div class="mb-6">
-              <.subtitle label={gettext("History")} icon="hero-chart-bar" />
-            </div>
+              <.divider />
 
-            <.video_data_section>
-              <div class="w-full h-56 flex flex-col">
-                <.async_result :let={views_per_month} assign={@views_per_month}>
-                  <:loading>
-                    <div
-                      id="data-history-loading"
-                      class="flex min-h-0 flex-1 flex-col"
-                      role="status"
-                      aria-label={gettext("Loading history")}
-                    >
-                      <div class="flex-none flex items-center pt-4 text-center">
-                        <%= for width <- [34, 42, 30, 38, 46, 32, 40, 28, 44, 34, 40, 30] do %>
-                          <div class="w-full flex justify-center">
-                            <div
-                              class="data-loading-skeleton h-3 rounded-full"
-                              style={"width: #{width}%"}
-                              aria-hidden="true"
-                            >
+              <div class="mb-6">
+                <.subtitle label={gettext("History")} icon="hero-chart-bar" />
+              </div>
+
+              <.video_data_section>
+                <div class="w-full h-56 flex flex-col">
+                  <.async_result :let={views_per_month} assign={@views_per_month}>
+                    <:loading>
+                      <div
+                        id="data-history-loading"
+                        class="flex min-h-0 flex-1 flex-col"
+                        role="status"
+                        aria-label={gettext("Loading history")}
+                      >
+                        <div class="flex-none flex items-center pt-4 text-center">
+                          <%= for width <- [34, 42, 30, 38, 46, 32, 40, 28, 44, 34, 40, 30] do %>
+                            <div class="w-full flex justify-center">
+                              <div
+                                class="data-loading-skeleton h-3 rounded-full"
+                                style={"width: #{width}%"}
+                                aria-hidden="true"
+                              >
+                              </div>
                             </div>
-                          </div>
-                        <% end %>
-                      </div>
-                      <div class="flex-grow flex items-end px-1 pb-5">
-                        <%= for height <- [42, 67, 52, 78, 58, 86, 70, 47, 62, 38, 55, 31] do %>
-                          <div class="w-full h-full flex items-end justify-center">
-                            <div
-                              class="data-loading-skeleton w-1 rounded-full"
-                              style={"height: #{height}%"}
-                              aria-hidden="true"
-                            >
+                          <% end %>
+                        </div>
+                        <div class="flex-grow flex items-end px-1 pb-5">
+                          <%= for height <- [42, 67, 52, 78, 58, 86, 70, 47, 62, 38, 55, 31] do %>
+                            <div class="w-full h-full flex items-end justify-center">
+                              <div
+                                class="data-loading-skeleton w-1 rounded-full"
+                                style={"height: #{height}%"}
+                                aria-hidden="true"
+                              >
+                              </div>
                             </div>
-                          </div>
-                        <% end %>
+                          <% end %>
+                        </div>
+                        <span class="sr-only">{gettext("Loading data")}</span>
                       </div>
-                      <span class="sr-only">{gettext("Loading data")}</span>
+                    </:loading>
+
+                    <div class="flex-none flex items-center pt-4 text-xs font-medium text-stone-300 text-center">
+                      <%= for month <- views_per_month do %>
+                        <div class="w-full">{format_number(month.count)}</div>
+                      <% end %>
                     </div>
-                  </:loading>
-
-                  <div class="flex-none flex items-center pt-4 text-xs font-medium text-stone-300 text-center">
-                    <%= for month <- views_per_month do %>
-                      <div class="w-full">{format_number(month.count)}</div>
-                    <% end %>
-                  </div>
-                  <div class="flex-grow flex items-center">
-                    <%= for month <- views_per_month do %>
-                      <div class="w-full flex justify-center">
-                        <div class="h-32 w-1 bg-stone-50 flex items-end rounded-full overflow-hidden">
-                          <div
-                            :if={@max_month.ok? && @max_month.result}
-                            class="w-full bg-blue-500"
-                            style={"height: #{calc_height(month.count, @max_month.result)}%"}
-                          >
+                    <div class="flex-grow flex items-center">
+                      <%= for month <- views_per_month do %>
+                        <div class="w-full flex justify-center">
+                          <div class="h-32 w-1 bg-stone-50 flex items-end rounded-full overflow-hidden">
+                            <div
+                              :if={@max_month.ok? && @max_month.result}
+                              class="w-full bg-blue-500"
+                              style={"height: #{calc_height(month.count, @max_month.result)}%"}
+                            >
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      <% end %>
+                    </div>
+                  </.async_result>
+                  <div class="flex-none flex items-center py-1 text-xs font-medium text-stone-300 bg-stone-50 text-center">
+                    <%= for month <- ~w(jan feb mar apr may jun jul aug sep oct nov dec)a do %>
+                      <div class="w-full">{month}</div>
                     <% end %>
                   </div>
-                </.async_result>
-                <div class="flex-none flex items-center py-1 text-xs font-medium text-stone-300 bg-stone-50 text-center">
-                  <%= for month <- ~w(jan feb mar apr may jun jul aug sep oct nov dec)a do %>
-                    <div class="w-full">{month}</div>
-                  <% end %>
                 </div>
+              </.video_data_section>
+
+              <.divider />
+
+              <div class="mb-6">
+                <.subtitle label={gettext("Sources")} icon="hero-globe-alt" />
               </div>
-            </.video_data_section>
 
-            <.divider />
+              <div class="grid grid-cols-2 gap-4 mt-4">
+                <.source_panel
+                  title={gettext("Device")}
+                  assign={@devices}
+                  rows={visible_devices(@devices, @show_all_devices)}
+                  toggle="toggle_show_all_devices"
+                  expanded={@show_all_devices}
+                  key_name={:device}
+                  empty_icon="device"
+                />
 
-            <div class="mb-6">
-              <.subtitle label={gettext("Sources")} icon="hero-globe-alt" />
-            </div>
-
-            <div class="grid grid-cols-2 gap-4 mt-4">
-              <.source_panel
-                title={gettext("Device")}
-                assign={@devices}
-                rows={visible_devices(@devices, @show_all_devices)}
-                toggle="toggle_show_all_devices"
-                expanded={@show_all_devices}
-                key_name={:device}
-                empty_icon="device"
-              />
-
-              <.source_panel
-                title={gettext("Browser")}
-                assign={@browsers}
-                rows={visible_browsers(@browsers, @show_all_browsers)}
-                toggle="toggle_show_all_browsers"
-                expanded={@show_all_browsers}
-                key_name={:browser}
-                empty_icon="browser"
-              />
-            </div>
+                <.source_panel
+                  title={gettext("Browser")}
+                  assign={@browsers}
+                  rows={visible_browsers(@browsers, @show_all_browsers)}
+                  toggle="toggle_show_all_browsers"
+                  expanded={@show_all_browsers}
+                  key_name={:browser}
+                  empty_icon="browser"
+                />
+              </div>
+            <% end %>
           </div>
         </div>
       </div>
 
       <.footer />
     </div>
+    """
+  end
+
+  attr :top_videos, AsyncResult, required: true
+  attr :current_space, :any, required: true
+  attr :route_scope, :atom, required: true
+
+  defp top_list(assigns) do
+    ~H"""
+    <div class="mb-6">
+      <.subtitle label={gettext("Most viewed this year")} icon="hero-trophy" />
+    </div>
+
+    <.async_result :let={top_videos} assign={@top_videos}>
+      <:loading>
+        <div id="data-top-list-loading" role="status" aria-label={gettext("Loading top list")}>
+          <.video_data_section>
+            <%= for width <- [46, 38, 52, 30, 42, 35, 48, 33] do %>
+              <div class="flex items-center gap-4 px-3 py-2.5 border-b border-stone-100 last:border-none">
+                <div class="data-loading-skeleton h-3.5 w-4 flex-none rounded-full" aria-hidden="true">
+                </div>
+                <div class="flex-grow">
+                  <div
+                    class="data-loading-skeleton h-3.5 rounded-full"
+                    style={"width: #{width}%"}
+                    aria-hidden="true"
+                  >
+                  </div>
+                </div>
+                <div class="data-loading-skeleton h-3.5 w-10 rounded-full" aria-hidden="true"></div>
+              </div>
+            <% end %>
+            <span class="sr-only">{gettext("Loading data")}</span>
+          </.video_data_section>
+        </div>
+      </:loading>
+
+      <:failed>
+        <.video_data_section>
+          <div class="py-8 text-center text-sm font-medium text-stone-400">
+            {gettext("Data is unavailable")}
+          </div>
+        </.video_data_section>
+      </:failed>
+
+      <.video_data_section>
+        <div
+          :if={top_videos == []}
+          class="flex flex-col items-center justify-center py-8 text-stone-400"
+        >
+          <.icon name="hero-trophy" class="h-6 w-6 mb-2 opacity-50" />
+          <div class="text-sm font-medium">{gettext("No data yet")}</div>
+        </div>
+        <div id="data-top-list">
+          <.link
+            :for={{video, rank} <- Enum.with_index(top_videos, 1)}
+            navigate={DashboardRoutes.video_path(@current_space, video.id, :all, scope: @route_scope)}
+            class="flex items-center gap-4 px-3 py-2.5 border-b border-stone-100 last:border-none hover:bg-stone-50 active:bg-blue-50"
+          >
+            <div class="w-6 flex-none text-sm text-stone-300 tabular-nums">{rank}</div>
+            <div class="flex-grow min-w-0 truncate text-sm text-stone-500">{video.name}</div>
+            <div class="flex-none text-sm text-stone-400 tabular-nums">
+              {format_number(video.views)}
+            </div>
+          </.link>
+        </div>
+      </.video_data_section>
+    </.async_result>
     """
   end
 
@@ -335,6 +473,11 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
     """
   end
 
+  defp route_scope(%{"space_id" => space_id}) when is_binary(space_id) and space_id != "",
+    do: :scoped
+
+  defp route_scope(_params), do: :unscoped
+
   defp metric_value(%AsyncResult{loading: true}), do: "..."
 
   defp metric_value(%AsyncResult{ok?: true, result: result}) when is_integer(result),
@@ -361,6 +504,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
   defp assign_async_defaults(socket) do
     socket
+    |> assign(:top_videos, AsyncResult.loading())
     |> assign(:max_month, AsyncResult.loading())
     |> assign(:devices, AsyncResult.loading())
     |> assign(:browsers, AsyncResult.loading())
@@ -379,6 +523,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
     |> assign(:views_this_month, AsyncResult.ok(AsyncResult.loading(), 0))
     |> assign(:views_this_year, AsyncResult.ok(AsyncResult.loading(), 0))
     |> assign(:views_per_month, AsyncResult.ok(AsyncResult.loading(), empty_months()))
+    |> assign(:top_videos, AsyncResult.ok(AsyncResult.loading(), []))
     |> assign(:show_all_devices, false)
     |> assign(:show_all_browsers, false)
   end
