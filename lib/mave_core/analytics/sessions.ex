@@ -116,11 +116,15 @@ defmodule MaveCore.Analytics.Sessions do
   def range_data(_space_hash, _from, _to, _opts), do: {:error, :invalid_range}
 
   defp range_query(space, generations, from, to, granularity, mode) do
-    if mode == :series and midnight?(from) and
-         (midnight?(to) or reports_cover_time?(space, generations, to)) and
-         reports_complete?(space, generations),
-       do: Query.report_range(granularity),
-       else: Query.range(granularity, mode)
+    if midnight?(from) and reports_complete?(space, generations) do
+      cond do
+        midnight?(to) -> Query.report_range(granularity, mode)
+        reports_cover_time?(space, generations, to) -> Query.live_range(granularity, mode)
+        true -> Query.range(granularity, mode)
+      end
+    else
+      Query.range(granularity, mode)
+    end
   end
 
   defp midnight?(at), do: rem(DateTime.to_unix(at, :microsecond), 86_400_000_000) == 0
@@ -130,7 +134,7 @@ defmodule MaveCore.Analytics.Sessions do
            "SELECT count(*), max(latest_event_at), min(refresh_after) FROM analytics_session_buckets WHERE space_hash=$1 AND generation::text = ANY($2)",
            [space, generations]
          ) do
-      {:ok, %{rows: [[count, latest, nil]]}} ->
+      {:ok, %{rows: [[count, latest, _due]]}} ->
         count == Query.buckets() and
           (is_nil(latest) or NaiveDateTime.compare(naive(to), latest) != :lt)
 
@@ -343,8 +347,8 @@ defmodule MaveCore.Analytics.Sessions do
            "SELECT generation::text, format_version, refresh_after FROM analytics_session_buckets WHERE space_hash = $1 AND bucket = $2",
            [space, bucket]
          ).rows do
-      [[previous, version, due]] ->
-        if version in [3, 4, Query.version()] and not refresh_due?(due) do
+      [[previous, version, _due]] ->
+        if version in [3, 4, 5, Query.version()] do
           {previous, changed, full} = changed_plan!(space, bucket, previous)
 
           {previous, changed, full, report_refresh_mode(version, full),
@@ -611,9 +615,11 @@ defmodule MaveCore.Analytics.Sessions do
     historical? = not is_nil(latest) and NaiveDateTime.compare(naive(now), latest) == :lt
     newly_visible? = not is_nil(due) and NaiveDateTime.compare(naive(now), due) != :lt
 
-    if historical? or newly_visible?,
-      do: {Query.overview_at(), Query.unique_watch_time()},
-      else: {Query.overview(), Query.unique_overview()}
+    cond do
+      historical? -> {Query.overview_at(), Query.unique_watch_time()}
+      newly_visible? -> {Query.live_overview(), Query.live_unique_overview()}
+      true -> {Query.overview(), Query.unique_overview()}
+    end
   end
 
   defp lock!(space_hash) do

@@ -7,7 +7,7 @@ defmodule MaveCore.Analytics.Sessions.Query do
   @buckets 16
 
   def buckets, do: @buckets
-  def version, do: 5
+  def version, do: 6
 
   def inventory do
     """
@@ -28,12 +28,13 @@ defmodule MaveCore.Analytics.Sessions.Query do
       WHERE space_hash = {$0:String} AND modulo(cityHash64(session_id), #{@buckets}) = {$1:UInt8}
       GROUP BY session_id
     ), previous AS (
-      SELECT session_id, source_rows, fingerprint FROM analytics_sessions
+      SELECT session_id, source_rows, fingerprint, future_at FROM analytics_sessions
       WHERE space_hash = {$0:String} AND bucket = {$1:UInt8} AND generation = {$2:UUID}
     )
     SELECT if(source.source_rows = 0, previous.session_id, source.session_id)
     FROM source FULL OUTER JOIN previous ON source.session_id = previous.session_id
     WHERE source.source_rows != previous.source_rows OR source.fingerprint != previous.fingerprint
+      OR previous.future_at <= now64(6)
     LIMIT 50001
     SETTINGS max_threads = #{limit(:query_threads, 2)}, max_memory_usage = #{limit(:build_memory_bytes, 1_073_741_824)},
       join_use_nulls = 0, max_execution_time = 60
@@ -110,24 +111,45 @@ defmodule MaveCore.Analytics.Sessions.Query do
     "SELECT countIf(complete = 0) FROM analytics_session_reports PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}"
   end
 
-  def report_range(granularity) when granularity in [:day, :week, :month] do
+  def report_range(granularity, mode \\ :series)
+      when granularity in [:day, :week, :month] and mode in [:series, :videos] do
+    range_query(report_pieces(granularity, mode), mode, "analytics_session_reports")
+  end
+
+  def live_range(granularity, mode)
+      when granularity in [:day, :week, :month] and mode in [:series, :videos] do
+    pieces =
+      report_pieces(granularity, mode, true) <>
+        "\nUNION ALL\n" <> range_pieces(granularity, mode, true)
+
+    range_query(pieces, mode, "analytics_sessions")
+  end
+
+  defp report_pieces(granularity, mode, exclude_future \\ false) do
     key =
-      %{
-        day: "toString(p.2)",
-        week: "toString(toMonday(p.2))",
-        month: "toString(toStartOfMonth(p.2))"
-      }[granularity]
+      if mode == :videos do
+        "p.1"
+      else
+        %{
+          day: "toString(p.2)",
+          week: "toString(toMonday(p.2))",
+          month: "toString(toStartOfMonth(p.2))"
+        }[granularity]
+      end
+
+    filter =
+      if exclude_future,
+        do: "AND session_id NOT IN (#{future_sessions("isNotNull(future_at)")})",
+        else: ""
 
     """
-    WITH pieces AS (
-      SELECT arrayMap(p -> (#{key},p.3,p.4),
-        arrayFilter(p -> (empty({$4:Array(String)}) OR p.1 IN {$4:Array(String)})
-          AND toDateTime64(p.2,6,'UTC') >= {$2:DateTime64(6)}
-          AND toDateTime64(p.2,6,'UTC') < {$3:DateTime64(6)}, days)) AS pieces
-      FROM analytics_session_reports
-      PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}
-    )
-    #{range_aggregation(:series, "analytics_session_reports")}
+    SELECT arrayMap(p -> (#{key},p.3,p.4),
+      arrayFilter(p -> (empty({$4:Array(String)}) OR p.1 IN {$4:Array(String)})
+        AND toDateTime64(p.2,6,'UTC') >= {$2:DateTime64(6)}
+        AND toDateTime64(p.2,6,'UTC') < {$3:DateTime64(6)}, days)) AS pieces
+    FROM analytics_session_reports
+    PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}
+      #{filter}
     """
   end
 
@@ -169,10 +191,9 @@ defmodule MaveCore.Analytics.Sessions.Query do
 
   def revision do
     """
-    WITH arrayMap(e -> e.2, arrayFilter(e -> e.2 >= created_at, events)) AS future_events,
-         arrayMap(e -> e.2, arrayFilter(e -> e.2 < created_at, events)) AS past_events
+    WITH arrayMap(e -> e.2, arrayFilter(e -> e.2 < created_at, events)) AS past_events
     SELECT sum(source_rows), toString(sumWithOverflow(fingerprint)),
-      minOrNullIf(arrayMin(future_events), notEmpty(future_events)),
+      min(future_at),
       maxOrNullIf(arrayMax(past_events), notEmpty(past_events))
     FROM analytics_sessions
     WHERE space_hash = {$0:String} AND bucket = {$1:UInt8} AND generation = {$2:UUID}
@@ -212,10 +233,38 @@ defmodule MaveCore.Analytics.Sessions.Query do
     """
   end
 
-  def overview_at do
+  def overview_at, do: overview_query(detail_metrics())
+  def overview, do: overview_query(compact_metrics())
+
+  def live_overview do
+    affected = future_sessions("future_at <= {$5:DateTime64(6)}")
+
+    overview_query(
+      compact_metrics("AND session_id NOT IN (#{affected})") <>
+        "\nUNION ALL\n" <> detail_metrics("AND future_at <= {$5:DateTime64(6)}")
+    )
+  end
+
+  defp compact_metrics(filter \\ "") do
     """
-    /* mave_perf:sessions.overview */
-    WITH metrics AS (
+      SELECT
+        toMonth(first_at, 'UTC') AS month,
+        nullIf(source_device, '') AS device,
+        nullIf(source_browser, '') AS browser,
+        watched AS watch_year,
+        arraySum(arrayMap(d -> if(d.1 >= toDate({$3:DateTime64(6)}, 'UTC'), d.2, 0), days)) AS watch_month,
+        arraySum(arrayMap(d -> if(d.1 = toDate({$4:DateTime64(6)}, 'UTC'), d.2, 0), days)) AS watch_today
+      FROM analytics_session_years
+      PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}
+      WHERE year = toYear({$2:DateTime64(6)}, 'UTC')
+        #{filter}
+    """
+  end
+
+  defp detail_metrics(filter \\ "") do
+    """
+    SELECT month, device, browser, watch_year, watch_month, watch_today
+    FROM (
       SELECT
         arrayFilter(e -> e.2 >= {$2:DateTime64(6)} AND e.2 < {$5:DateTime64(6)}, events) AS ev,
         arrayFilter(s -> s.2 >= {$2:DateTime64(6)} AND s.3 < {$5:DateTime64(6)}, segments) AS seg,
@@ -228,42 +277,17 @@ defmodule MaveCore.Analytics.Sessions.Query do
         arraySum(arrayMap(s -> if(s.2 >= {$4:DateTime64(6)}, greatest(toInt64(0), dateDiff('millisecond', s.2, s.3)), 0), seg)) AS watch_today
       FROM analytics_sessions
       PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}
+        #{filter}
       WHERE notEmpty(ev)
     )
-    SELECT kind, bucket_month, dimension, views, views_today, views_month,
-      total_watch_today, total_watch_month, total_watch_year
-    FROM (
-      SELECT multiIf(grouping(month) = 0, 'month', grouping(device) = 0, 'device',
-          grouping(browser) = 0, 'browser', 'total') AS kind,
-        if(grouping(month) = 0, toNullable(month), NULL) AS bucket_month,
-        multiIf(grouping(device) = 0, device, grouping(browser) = 0, browser, NULL) AS dimension,
-        countIf(watch_year >= 1000) AS views,
-        countIf(watch_today >= 1000) AS views_today,
-        countIf(watch_month >= 1000) AS views_month,
-        sum(watch_today) AS total_watch_today, sum(watch_month) AS total_watch_month, sum(watch_year) AS total_watch_year
-      FROM metrics
-      GROUP BY GROUPING SETS ((), (month), (device), (browser))
-    )
-    QUALIFY kind IN ('total', 'month') OR
-      row_number() OVER (PARTITION BY kind ORDER BY views DESC, dimension ASC) <= 50
-    SETTINGS max_threads = #{limit(:query_threads, 2)}, max_memory_usage = #{limit(:read_memory_bytes, 536_870_912)}, max_execution_time = 10
     """
   end
 
-  def overview do
+  defp overview_query(metrics) do
     """
     /* mave_perf:sessions.overview */
     WITH metrics AS (
-      SELECT
-        toMonth(first_at, 'UTC') AS month,
-        nullIf(source_device, '') AS device,
-        nullIf(source_browser, '') AS browser,
-        watched AS watch_year,
-        arraySum(arrayMap(d -> if(d.1 >= toDate({$3:DateTime64(6)}, 'UTC'), d.2, 0), days)) AS watch_month,
-        arraySum(arrayMap(d -> if(d.1 = toDate({$4:DateTime64(6)}, 'UTC'), d.2, 0), days)) AS watch_today
-      FROM analytics_session_years
-      PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}
-      WHERE year = toYear({$2:DateTime64(6)}, 'UTC')
+      #{metrics}
     )
     SELECT kind, bucket_month, dimension, views, views_today, views_month,
       total_watch_today, total_watch_month, total_watch_year
@@ -286,11 +310,39 @@ defmodule MaveCore.Analytics.Sessions.Query do
   end
 
   def unique_overview do
-    """
-    WITH intervals AS (
+    compact_unique_query("""
       SELECT unique_intervals AS iv FROM analytics_session_years
       PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}
       WHERE year = toYear({$2:DateTime64(6)}, 'UTC')
+    """)
+  end
+
+  def live_unique_overview do
+    affected = future_sessions("future_at <= {$5:DateTime64(6)}")
+
+    compact_unique_query("""
+    SELECT unique_intervals AS iv FROM analytics_session_years
+    PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}
+    WHERE year = toYear({$2:DateTime64(6)}, 'UTC') AND session_id NOT IN (#{affected})
+    UNION ALL
+    SELECT arrayMap(s -> (toDate(s.2, 'UTC'), toUInt64(greatest(0, floor(s.4))),
+      toUInt64(greatest(0, floor(s.4))) + least(toUInt64(3600),
+        toUInt64(greatest(0, ceil(s.5) - floor(s.4))),
+        toUInt64(greatest(0, intDiv(dateDiff('millisecond', s.2, s.3), 1000))))),
+      arrayFilter(s -> s.2 >= {$2:DateTime64(6)} AND s.3 < {$5:DateTime64(6)}
+        AND dateDiff('millisecond', s.2, s.3) < 3600000
+        AND isFinite(s.4) AND isFinite(s.5) AND s.4 >= 0 AND s.5 > s.4, segments)) AS iv
+    FROM analytics_sessions
+    PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}
+      AND future_at <= {$5:DateTime64(6)}
+    """)
+  end
+
+  defp compact_unique_query(intervals) do
+    """
+    WITH intervals AS (
+      #{intervals}
+
     ), lengths AS (
       SELECT arrayReduce('intervalLengthSum', arrayMap(i -> i.2, iv), arrayMap(i -> i.3, iv)) AS year,
         arrayReduce('intervalLengthSum',
@@ -388,6 +440,10 @@ defmodule MaveCore.Analytics.Sessions.Query do
 
   def range(granularity, mode)
       when granularity in [:day, :week, :month] and mode in [:series, :videos] do
+    range_query(range_pieces(granularity, mode), mode, "analytics_sessions")
+  end
+
+  defp range_pieces(granularity, mode, only_future \\ false) do
     bucket =
       %{
         day: "toDate(p.2, 'UTC')",
@@ -404,23 +460,32 @@ defmodule MaveCore.Analytics.Sessions.Query do
           "if(p.7 < p.6, least(p.3, toDateTime64(addDays(toDate(p.2, 'UTC'), 1), 6, 'UTC')), p.3)",
         else: "p.3"
 
+    filter = if only_future, do: "AND isNotNull(future_at)", else: ""
+
     """
-    /* mave_perf:sessions.range */
-    WITH filtered AS (
+      SELECT arrayMap(p -> (#{key}, dateDiff('microsecond', p.2, p.3),
+        if(isFinite(p.8) AND p.8 > 0 AND isFinite(p.6) AND isFinite(p.7),
+          least(1.0, greatest(0.0, (p.6 + (p.7 - p.6) * dateDiff('microsecond', p.4, #{completion_at})
+            / dateDiff('microsecond', p.4, p.5)) / p.8)), NULL)), #{rows}) AS pieces
+      FROM (
       SELECT arrayMap(s -> (s.1, greatest(s.2, {$2:DateTime64(6)}), least(s.3, {$3:DateTime64(6)}),
         s.2, s.3, s.4, s.5, s.6),
         arrayFilter(s -> (empty({$4:Array(String)}) OR s.1 IN {$4:Array(String)})
           AND s.3 > {$2:DateTime64(6)} AND s.2 < {$3:DateTime64(6)} AND s.3 > s.2, segments)) AS clipped
       FROM analytics_sessions
       PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}
-    ), pieces AS (
-      SELECT arrayMap(p -> (#{key}, dateDiff('microsecond', p.2, p.3),
-        if(isFinite(p.8) AND p.8 > 0 AND isFinite(p.6) AND isFinite(p.7),
-          least(1.0, greatest(0.0, (p.6 + (p.7 - p.6) * dateDiff('microsecond', p.4, #{completion_at})
-            / dateDiff('microsecond', p.4, p.5)) / p.8)), NULL)), #{rows}) AS pieces
-      FROM filtered WHERE notEmpty(clipped)
+        #{filter}
+      ) AS filtered WHERE notEmpty(clipped)
+    """
+  end
+
+  defp range_query(pieces, mode, table) do
+    """
+    /* mave_perf:sessions.range */
+    WITH pieces AS (
+      #{pieces}
     )
-    #{range_aggregation(mode, "analytics_sessions")}
+    #{range_aggregation(mode, table)}
     """
   end
 
@@ -488,6 +553,13 @@ defmodule MaveCore.Analytics.Sessions.Query do
          s.4, s.5, s.6, s.7, s.8),
         range(toUInt32(dateDiff('#{unit}', #{start}, #{finish})) + 1)),
         arrayFilter(s -> #{start} != #{finish}, clipped))))
+    """
+  end
+
+  defp future_sessions(condition) do
+    """
+    SELECT session_id FROM analytics_sessions
+    PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)} AND #{condition}
     """
   end
 

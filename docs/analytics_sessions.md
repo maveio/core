@@ -91,8 +91,7 @@ counts to obtain period views.
 Sixteen deterministic session buckets bound each publication. Initial builds
 read the bucket's source events. Subsequent refreshes compare per-session
 counts/fingerprints, copy unchanged prepared rows into a new immutable
-partition, and recalculate only changed sessions. Session rows, compact year summaries and day reports are copied together. More than 50,000 changed sessions or a due
-future-event deadline uses the bounded full-bucket path. PostgreSQL's
+partition, and recalculate only changed sessions. Session rows, compact year summaries and day reports are copied together. More than 50,000 changed sessions trigger the bounded full-bucket path. PostgreSQL's
 `analytics_session_buckets` publishes one active generation per space/bucket.
 An advisory transaction lock serializes publication and invalidation within a
 space. A failed ClickHouse insert never changes the active pointer. A retry
@@ -102,7 +101,12 @@ Subsequent readers use the last complete bucket versions during refresh.
 Format versions prevent incompatible older generations from being read.
 Future-dated events are excluded from summaries until their time arrives; the
 published metadata records a refresh deadline so they become visible without
-requiring another insert.
+requiring another insert. A materialized per-session deadline also lets the
+processor refresh only those sessions. Between refreshes, current overview and
+date-aligned report queries combine compact rows with detailed calculations for
+the affected sessions; one newly visible event does not force a detailed scan
+of the entire space. Historical and partial-day reads retain precise segment
+calculations.
 
 The `analytics_session_inventory` projection summarizes source row counts and
 field fingerprints. It lives inside the raw MergeTree table, so it follows
