@@ -212,5 +212,10 @@ Both encoder images require the shared Linux parser sandbox. The launcher clears
 inherited credentials, restricts filesystem/process access and bounds resources.
 A per-command broker preserves direct storage streaming and seeking while
 keeping URLs/credentials outside FFmpeg and blocking its native network access.
+It retries temporary read failures up to three times before returning headers,
+preserving the input's authorization and exact byte range. Permanent HTTP
+failures retain their status without forwarding upstream bodies or headers.
+FFmpeg can reconnect to a resumable input for all codecs; inputs without range
+support are not restarted midstream. Incomplete output remains a failed encode.
 See [media security](../../docs/media_security.md) for kernel/runtime requirements,
 Kubernetes policy, resource limits and GPU validation.

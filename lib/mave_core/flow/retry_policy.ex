@@ -24,6 +24,15 @@ defmodule MaveCore.Flow.RetryPolicy do
 
   def booster_gateway_error?({:encoding_booster_http_status, 502}), do: true
 
+  def booster_gateway_error?({:encoding_booster_remote_failed, detail} = reason)
+      when is_binary(detail) do
+    EncodingBooster.transient_error?(reason) and
+      Regex.match?(
+        ~r/(?:source returned http|server returned|http error)\s*:?\s*(?:408|429|5\d\d|5xx)\b/i,
+        detail
+      )
+  end
+
   def booster_gateway_error?(
         {:encoding_booster_request_failed, %Req.TransportError{reason: :closed}}
       ),
@@ -62,6 +71,9 @@ defmodule MaveCore.Flow.RetryPolicy do
     do: media_transport_error?(reason)
 
   defp transient_error_reason?({:media_package_hls_audio_failed, reason}),
+    do: media_transport_error?(reason)
+
+  defp transient_error_reason?({:media_package_hls_variant_failed, reason}),
     do: media_transport_error?(reason)
 
   defp transient_error_reason?({:original_upload_failed, reason}),

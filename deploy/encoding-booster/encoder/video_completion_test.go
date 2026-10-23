@@ -157,7 +157,7 @@ func TestHLSPackagingRetriesInterruptedReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, failure := range []string{"http502", "truncated", "persistent502", "forbidden"} {
+	for _, failure := range []string{"http502", "truncated", "non_resumable", "persistent502", "forbidden"} {
 		t.Run(failure, func(t *testing.T) {
 			var reads atomic.Int32
 			source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -170,7 +170,10 @@ func TestHLSPackagingRetriesInterruptedReads(t *testing.T) {
 					w.WriteHeader(http.StatusBadGateway)
 					return
 				}
-				if failure == "truncated" && attempt == 1 {
+				if (failure == "truncated" || failure == "non_resumable") && attempt == 1 {
+					if failure == "truncated" {
+						w.Header().Set("Accept-Ranges", "bytes")
+					}
 					w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 					_, _ = w.Write(data[:len(data)/2])
 					return
@@ -182,7 +185,7 @@ func TestHLSPackagingRetriesInterruptedReads(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			output, err := exec.CommandContext(ctx, ffmpeg, hlsArgs(source.URL, dir)...).CombinedOutput()
-			if failure == "persistent502" || failure == "forbidden" {
+			if failure == "persistent502" || failure == "forbidden" || failure == "non_resumable" {
 				if err == nil || ctx.Err() != nil {
 					t.Fatalf("expected bounded input failure, err=%v: %s", err, output)
 				}

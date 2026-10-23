@@ -176,6 +176,13 @@ defmodule MaveCore.FlowTest do
       do: {:error, {:encoding_booster_http_status, 502}}
   end
 
+  defmodule MultipartFailureEncodingBoosterAdapterStub do
+    @moduledoc false
+
+    def encode_to_storage(_input_url, _output_upload, _options),
+      do: {:error, {:encoding_booster_remote_failed, "multipart part upload request failed"}}
+  end
+
   @audio_hls_recovery_definition %{
     "steps" => [
       %{"id" => "source", "type" => "source.resolve", "name" => "Resolve Source"},
@@ -3766,6 +3773,47 @@ defmodule MaveCore.FlowTest do
     assert step.status == "failed"
     assert step.attempt == 5
     assert step.error =~ "encoding_booster_http_status"
+  end
+
+  test "a different transient failure preserves the granted gateway retry budget" do
+    old_retry_config = Application.get_env(:mave_core, :flow_step_auto_retry)
+
+    Application.put_env(:mave_core, :flow_step_auto_retry,
+      max_attempts: 3,
+      backoff_seconds: 1,
+      booster_gateway_max_attempts: 5,
+      booster_gateway_backoff_seconds: 1,
+      jitter_seconds: 0
+    )
+
+    Application.put_env(:mave_core, :encoding_booster, enabled: true, fallback_enabled: false)
+    Application.put_env(:mave_core, :encoding_booster_adapter, GatewayEncodingBoosterAdapterStub)
+    on_exit(fn -> restore_env(:flow_step_auto_retry, old_retry_config) end)
+
+    {:ok, template} =
+      Flow.create_template(%{"slug" => "mixed-transient-retry", "name" => "Mixed retry"})
+
+    {:ok, _version} =
+      Flow.create_version(template.id, %{"definition" => @cpu_video_booster_definition})
+
+    run = create_scheduled_booster_run!(template, "retryspace")
+
+    assert {:snooze, 1} = perform_booster_step(run)
+
+    Application.put_env(
+      :mave_core,
+      :encoding_booster_adapter,
+      MultipartFailureEncodingBoosterAdapterStub
+    )
+
+    for _ <- 2..4, do: assert({:snooze, 1} = perform_booster_step(run))
+    step = Repo.get_by!(StepRun, flow_run_id: run.id, step_id: "clip_h264_sd_keyframes")
+    assert step.status == "scheduled"
+    assert step.attempt == 4
+    assert get_in(step.execution_metadata, ["retry_policy", "max_execution_attempts"]) == 5
+
+    assert {:error, _} = perform_booster_step(run)
+    assert Repo.get!(StepRun, step.id).status == "failed"
   end
 
   test "claiming an automatic retry clears its stale error and retry marker" do

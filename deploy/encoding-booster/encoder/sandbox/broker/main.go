@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -74,24 +75,22 @@ func (b *broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s := b.sources[index]
-	request, err := http.NewRequestWithContext(r.Context(), r.Method, s.URL, nil)
+	response, err := b.readSource(r.Context(), r.Method, s, span)
 	if err != nil {
-		http.Error(w, "media input unavailable", 502)
-		return
-	}
-	request.Header = s.Headers.Clone()
-	if span != "" {
-		request.Header.Set("Range", span)
-	}
-	response, err := b.client.Do(request)
-	if err != nil {
+		// Never include the URL, authorization headers or transport error text.
+		log.Print("media source unavailable: transport failure")
 		http.Error(w, "media input unavailable", 502)
 		return
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 && response.StatusCode != 206 && response.StatusCode != 416 {
 		// In particular, do not forward redirects, cookies, error bodies or signed URLs.
-		http.Error(w, "media input unavailable", 502)
+		status := http.StatusBadGateway
+		if response.StatusCode >= 400 && response.StatusCode <= 599 {
+			status = response.StatusCode
+		}
+		log.Printf("media source unavailable: HTTP %d", response.StatusCode)
+		http.Error(w, "media input unavailable", status)
 		return
 	}
 	for _, key := range []string{"Content-Length", "Content-Range", "Content-Type", "Accept-Ranges"} {
@@ -103,6 +102,43 @@ func (b *broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodHead {
 		_, _ = io.Copy(w, response.Body)
 	}
+}
+
+// Retry only idempotent reads before forwarding response headers. Incomplete
+// response bodies remain visible to the parser so it can resume its exact range.
+func (b *broker) readSource(ctx context.Context, method string, s source, span string) (*http.Response, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		request, err := http.NewRequestWithContext(ctx, method, s.URL, nil)
+		if err != nil {
+			return nil, err
+		}
+		request.Header = s.Headers.Clone()
+		if span != "" {
+			request.Header.Set("Range", span)
+		}
+		response, err := b.client.Do(request)
+		retry := err != nil
+		if response != nil {
+			switch response.StatusCode {
+			case 408, 429, 500, 502, 503, 504:
+				retry = true
+			}
+		}
+		if !retry || attempt == 2 || ctx.Err() != nil {
+			return response, err
+		}
+		if response != nil {
+			response.Body.Close()
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	panic("unreachable source retry")
 }
 
 func parseHeaders(raw string) (http.Header, error) {
