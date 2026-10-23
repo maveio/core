@@ -24,13 +24,13 @@ concurrency:
 jobs:
   media-sandbox:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install sandbox test dependencies
-        run: sudo apt-get update && sudo apt-get install --yes build-essential libseccomp-dev ffmpeg python3
+        run: bash .github/scripts/install-media-deps.sh build-essential libseccomp-dev ffmpeg python3
       - name: Build and test the shared streaming broker
         run: |
           artifacts=$(mktemp -d)
@@ -120,8 +120,7 @@ jobs:
           key: test-${{ runner.os }}-otp29.1.1-elixir1.20.4-${{ hashFiles('mix.lock') }}
       - name: Prepare disposable media dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes ffmpeg build-essential
+          bash .github/scripts/install-media-deps.sh ffmpeg build-essential
           docker build --pull --target server --tag mave-ci-minio deploy/minio
           docker run --detach --name mave-ci-minio --publish 127.0.0.1:9010:9000 \
             --env MINIO_ROOT_USER=minioadmin --env MINIO_ROOT_PASSWORD=minioadmin \

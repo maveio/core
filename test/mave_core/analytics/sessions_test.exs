@@ -80,6 +80,25 @@ defmodule MaveCore.Analytics.SessionsTest do
     assert {:ok, %{views: %{year: 1}}} = Analytics.space_data("AAAAA")
   end
 
+  test "the background worker only prepares its configured spaces" do
+    pair(1, "AAAAA", "first", 20, 25, 0, 5)
+    pair(2, "BBBBB", "second", 20, 25, 0, 5)
+
+    Application.put_env(:mave_core, :analytics_sessions,
+      enabled: false,
+      processor_enabled: true,
+      process_spaces: ["AAAAA"],
+      refresh_bucket_limit: 32
+    )
+
+    assert :ok = AnalyticsSessionsWorker.perform(%{})
+    assert {:ok, _} = Sessions.generations("AAAAA")
+    assert {:error, :preparing} = Sessions.generations("BBBBB")
+    assert {:ok, 0} = Sessions.refresh_changed(spaces: [])
+    assert {:error, :invalid_space_hash} = Sessions.refresh_changed(spaces: ["invalid"])
+    assert {:ok, 16} = Sessions.refresh_changed(space_hash: "BBBBB", limit: 32)
+  end
+
   test "a pause arriving first and a later historical play refresh the affected bucket" do
     event(1, "AAAAA", "video", "pause", 10, 5)
     assert {:ok, _} = Sessions.refresh_changed(limit: 32)
