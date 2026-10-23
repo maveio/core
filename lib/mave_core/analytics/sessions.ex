@@ -116,10 +116,12 @@ defmodule MaveCore.Analytics.Sessions do
   def range_data(_space_hash, _from, _to, _opts), do: {:error, :invalid_range}
 
   defp range_query(space, generations, from, to, granularity, mode) do
-    if midnight?(from) and reports_complete?(space, generations) do
+    # Daily completion maxima preserve series semantics. Per-video completion
+    # still needs segment endpoints, especially for rewinds across midnight.
+    if mode == :series and midnight?(from) and reports_complete?(space, generations) do
       cond do
-        midnight?(to) -> Query.report_range(granularity, mode)
-        reports_cover_time?(space, generations, to) -> Query.live_range(granularity, mode)
+        midnight?(to) -> Query.report_range(granularity)
+        reports_cover_time?(space, generations, to) -> Query.live_range(granularity)
         true -> Query.range(granularity, mode)
       end
     else
