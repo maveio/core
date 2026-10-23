@@ -2,12 +2,21 @@ defmodule MaveCore.Analytics.Video do
   @moduledoc false
 
   alias Ecto.Adapters.SQL
+  alias MaveCore.Analytics.Range
+  alias MaveCore.Analytics.RangeReport
   alias MaveCore.ClickHouseRepo
 
   @clickhouse_identifier ~r/^[A-Za-z_][A-Za-z0-9_]*$/
   @min_watch_seconds 1
   # Bound both ClickHouse's seconds table and the API's per-second allocation.
   @max_dropoff_seconds 4 * 60 * 60
+
+  def data(space_hash, embed_hash, params) when is_map(params) do
+    with {:ok, range} <- Range.parse(params),
+         {:ok, data} <- data(space_hash, embed_hash) do
+      RangeReport.attach(data, space_hash, range, embed_hash)
+    end
+  end
 
   def data(embed_id) when is_binary(embed_id) do
     with {:ok, %{space_hash: space_hash, embed_hash: embed_hash}} <- parse_embed_id(embed_id) do
