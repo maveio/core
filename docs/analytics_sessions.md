@@ -103,7 +103,7 @@ Future-dated events are excluded from summaries until their time arrives; the
 published metadata records a refresh deadline so they become visible without
 requiring another insert. A materialized per-session deadline also lets the
 processor refresh only those sessions. Between refreshes, current overview and
-date-aligned report queries combine compact rows with detailed calculations for
+date-aligned time-series queries combine compact rows with detailed calculations for
 the affected sessions; one newly visible event does not force a detailed scan
 of the entire space. Historical and partial-day reads retain precise segment
 calculations.

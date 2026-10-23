@@ -111,31 +111,25 @@ defmodule MaveCore.Analytics.Sessions.Query do
     "SELECT countIf(complete = 0) FROM analytics_session_reports PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}"
   end
 
-  def report_range(granularity, mode \\ :series)
-      when granularity in [:day, :week, :month] and mode in [:series, :videos] do
-    range_query(report_pieces(granularity, mode), mode, "analytics_session_reports")
+  def report_range(granularity) when granularity in [:day, :week, :month] do
+    range_query(report_pieces(granularity), :series, "analytics_session_reports")
   end
 
-  def live_range(granularity, mode)
-      when granularity in [:day, :week, :month] and mode in [:series, :videos] do
+  def live_range(granularity) when granularity in [:day, :week, :month] do
     pieces =
-      report_pieces(granularity, mode, true) <>
-        "\nUNION ALL\n" <> range_pieces(granularity, mode, true)
+      report_pieces(granularity, true) <>
+        "\nUNION ALL\n" <> range_pieces(granularity, :series, true)
 
-    range_query(pieces, mode, "analytics_sessions")
+    range_query(pieces, :series, "analytics_sessions")
   end
 
-  defp report_pieces(granularity, mode, exclude_future \\ false) do
+  defp report_pieces(granularity, exclude_future \\ false) do
     key =
-      if mode == :videos do
-        "p.1"
-      else
-        %{
-          day: "toString(p.2)",
-          week: "toString(toMonday(p.2))",
-          month: "toString(toStartOfMonth(p.2))"
-        }[granularity]
-      end
+      %{
+        day: "toString(p.2)",
+        week: "toString(toMonday(p.2))",
+        month: "toString(toStartOfMonth(p.2))"
+      }[granularity]
 
     filter =
       if exclude_future,

@@ -546,8 +546,11 @@ defmodule MaveCore.Analytics.SessionsTest do
     for mode <- [:series, :videos], granularity <- [:day, :week, :month] do
       range_params = ["AAAAA", generations, year, now, []]
       detailed = ClickHouseRepo.query!(Query.range(granularity, mode), range_params).rows
-      hybrid = ClickHouseRepo.query!(Query.live_range(granularity, mode), range_params).rows
-      assert Enum.sort(hybrid) == Enum.sort(detailed)
+
+      if mode == :series do
+        hybrid = ClickHouseRepo.query!(Query.live_range(granularity), range_params).rows
+        assert Enum.sort(hybrid) == Enum.sort(detailed)
+      end
 
       expected =
         Map.new(detailed, fn [key, views, watched, completion] ->
@@ -557,6 +560,21 @@ defmodule MaveCore.Analytics.SessionsTest do
       assert {:ok, ^expected} =
                Sessions.range_data("AAAAA", year, now, mode: mode, granularity: granularity)
     end
+  end
+
+  test "per-video completion retains rewind endpoints across midnight" do
+    from = DateTime.new!(Date.add(Date.utc_today(), -2), ~T[00:00:00])
+    to = DateTime.add(from, 2 * 86_400)
+    Process.put(:analytics_time, DateTime.add(from, 86_400))
+    pair(1, "AAAAA", "rewind", -2, 2, 8, 2)
+    assert {:ok, _} = Sessions.refresh_changed(limit: 32)
+
+    assert {:ok, %{"rewind" => result}} =
+             Sessions.range_data("AAAAA", from, to, mode: :videos)
+
+    assert result.views == 1
+    assert result.watch_seconds == 4.0
+    assert_in_delta result.completion_rate, 2 / 60, 1.0e-10
   end
 
   test "cleanup retains published generations and removes only expired ones" do
