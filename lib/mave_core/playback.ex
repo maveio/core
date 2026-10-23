@@ -8,6 +8,7 @@ defmodule MaveCore.Playback do
 
   alias MaveCore.Embeds
   alias MaveCore.Embeds.Embed
+  alias MaveCore.Embeds.Release
   alias MaveCore.PublicApi
   alias MaveCore.Repo
   alias MaveCore.Spaces
@@ -60,14 +61,17 @@ defmodule MaveCore.Playback do
     end
   end
 
-  def request_visibility(%Embed{} = embed, visibility) when visibility in [:public, :private] do
+  # A pending release owns the embed's visibility until it completes; only
+  # `MaveCore.Embeds.Release` passes `release: true`.
+  def request_visibility(%Embed{} = embed, visibility, opts \\ [])
+      when visibility in [:public, :private] do
     Repo.transaction(fn ->
       space = Repo.one!(from(s in Space, where: s.id == ^embed.space_id, lock: "FOR UPDATE"))
       current = Repo.get!(Embed, embed.id)
 
-      if current.type != :video or not is_nil(current.deleted_at) or
-           (visibility == :private and not available?(space)) or is_nil(adapter()) do
-        Repo.rollback(:playback_unavailable)
+      case visibility_request_error(space, current, visibility, opts) do
+        nil -> :ok
+        reason -> Repo.rollback(reason)
       end
 
       if current.playback_status == visibility do
@@ -89,14 +93,38 @@ defmodule MaveCore.Playback do
     end)
   end
 
+  defp visibility_request_error(space, current, visibility, opts) do
+    cond do
+      current.type != :video or not is_nil(current.deleted_at) or
+        (visibility == :private and not available?(space)) or is_nil(adapter()) ->
+        :playback_unavailable
+
+      Release.pending?(current) and not Keyword.get(opts, :release, false) ->
+        :release_scheduled
+
+      true ->
+        nil
+    end
+  end
+
   # Call only after dashboard membership authorization; never from a public route.
   def dashboard_session(%Embed{} = embed),
     do: session(embed, System.system_time(:second) + @dashboard_ttl)
 
+  # Dashboard sessions may preview a pending release; customer JWTs may not.
   def authorize(token, %Embed{} = embed) do
     case authorize_dashboard(token, embed) do
-      {:ok, expires_at} -> {:ok, expires_at}
-      _ -> authorize_jwt(token, embed)
+      {:ok, expires_at} ->
+        {:ok, expires_at}
+
+      _ ->
+        authorize_released(token, embed)
+    end
+  end
+
+  defp authorize_released(token, embed) do
+    with {:ok, expires_at} <- authorize_jwt(token, embed) do
+      if Release.pending?(embed), do: {:error, :unreleased}, else: {:ok, expires_at}
     end
   end
 

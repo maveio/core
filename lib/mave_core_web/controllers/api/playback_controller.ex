@@ -2,6 +2,7 @@ defmodule MaveCoreWeb.Api.PlaybackController do
   use MaveCoreWeb, :controller
 
   alias MaveCore.Embeds.Embed
+  alias MaveCore.Embeds.Release
   alias MaveCore.Playback
   alias MaveCore.Playback.Media
   alias MaveCoreWeb.Api.ImageController
@@ -11,7 +12,7 @@ defmodule MaveCoreWeb.Api.PlaybackController do
     token = params["token"] || bearer(conn)
 
     with %Embed{} = embed <- Playback.get_embed(id),
-         {:ok, expires_at} <- Playback.authorize(token, embed),
+         {:ok, expires_at} <- authorize(token, embed, path),
          true <- not Playback.protected?(embed) or Playback.available?(embed.space) do
       base = String.replace_suffix(conn.request_path, "/" <> Enum.join(path, "/"), "")
 
@@ -34,7 +35,27 @@ defmodule MaveCoreWeb.Api.PlaybackController do
         respond_media(conn, Media.response(embed, Enum.join(path, "/"), base, token, expires_at))
       end
     else
-      _ -> send_resp(conn, 401, "Playback authorization required")
+      {:scheduled_release, embed} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(200, Jason.encode!(Release.manifest(embed)))
+
+      _ ->
+        send_resp(conn, 401, "Playback authorization required")
+    end
+  end
+
+  # Before a scheduled release only dashboard sessions reach media. Any other
+  # request for the manifest gets the countdown manifest, which has no media.
+  defp authorize(token, embed, path) do
+    case Playback.authorize(token, embed) do
+      {:ok, expires_at} ->
+        {:ok, expires_at}
+
+      error ->
+        if path == ["manifest.json"] and Release.pending?(embed),
+          do: {:scheduled_release, embed},
+          else: error
     end
   end
 
