@@ -148,7 +148,6 @@ FROM builder_base AS builder
 
 # install mix dependencies
 COPY mix.exs mix.lock ./
-COPY vendor vendor
 RUN mix deps.get --only $MIX_ENV
 RUN mkdir config
 
