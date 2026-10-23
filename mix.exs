@@ -49,6 +49,8 @@ defmodule MaveCore.MixProject do
   defp deps do
     [
       {:phoenix, "~> 1.8.3"},
+      # Keep downstream applications on the patched token/error boundary.
+      {:plug_crypto, ">= 2.2.1 and < 3.0.0"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, "~> 0.22.3"},

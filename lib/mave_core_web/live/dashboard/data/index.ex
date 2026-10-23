@@ -12,6 +12,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   def mount(_params, _session, socket) do
     {:ok,
      socket
+     |> assign(:analytics_preparing, false)
      |> assign(:page_title, gettext("Data"))
      |> assign(:settings_open, false)
      |> assign(:show_all_devices, false)
@@ -31,7 +32,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
           |> assign(:data_access_notice, nil)
           |> assign(:data_access_help, nil)
           |> assign_async_defaults()
-          |> start_async(:fetch_stats, fn -> Analytics.space_data(space_hash) end)
+          |> start_async(:fetch_stats, fn -> Analytics.space_overview(space_hash) end)
 
         {:error, reason} ->
           socket
@@ -44,6 +45,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   end
 
   def handle_async(:fetch_stats, {:ok, {:ok, result}}, socket) do
+    socket = assign(socket, :analytics_preparing, false)
     views_by_month = Enum.map(result.views_by_month, &Map.put(&1, :count, &1.views))
     max_views = Enum.max_by(views_by_month, & &1.count, fn -> %{count: 0} end).count
     max_month = max_views + max_views / 3
@@ -67,10 +69,26 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
      |> assign(:show_all_browsers, false)}
   end
 
+  def handle_async(:fetch_stats, {:ok, {:error, :preparing}}, socket) do
+    Process.send_after(self(), {:refresh_analytics, socket.assigns.current_space.hash}, 5_000)
+    {:noreply, socket |> assign_failed() |> assign(:analytics_preparing, true)}
+  end
+
   def handle_async(:fetch_stats, {:ok, {:error, _reason}}, socket),
     do: {:noreply, assign_failed(socket)}
 
   def handle_async(:fetch_stats, {:exit, _reason}, socket), do: {:noreply, assign_failed(socket)}
+
+  def handle_info({:refresh_analytics, space_hash}, socket) do
+    if socket.assigns.current_space.hash == space_hash and socket.assigns.analytics_preparing do
+      {:noreply,
+       start_async(socket, :fetch_stats, fn -> Analytics.space_overview(space_hash) end)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(_message, socket), do: {:noreply, socket}
 
   def handle_event("toggle_show_all_devices", _, socket) do
     {:noreply, assign(socket, :show_all_devices, !socket.assigns.show_all_devices)}
@@ -99,6 +117,14 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
       <div class="flex-1 overflow-y-auto">
         <div class="content opacity-100 scale-100">
           <div class="max-w-screen-xl px-16 mx-auto pt-8 pb-24">
+            <p
+              :if={@analytics_preparing}
+              id="analytics-preparing"
+              role="status"
+              class="mb-6 text-sm text-stone-500"
+            >
+              {gettext("Analytics are being prepared. Please check back shortly.")}
+            </p>
             <div class="mb-6">
               <.subtitle label={gettext("Numbers")} icon="hero-hashtag" />
             </div>
@@ -229,13 +255,13 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
     """
   end
 
-  attr :title, :string, required: true
-  attr :assign, :any, required: true
-  attr :rows, :list, required: true
-  attr :toggle, :string, required: true
-  attr :expanded, :boolean, required: true
-  attr :key_name, :atom, required: true
-  attr :empty_icon, :string, required: true
+  attr(:title, :string, required: true)
+  attr(:assign, :any, required: true)
+  attr(:rows, :list, required: true)
+  attr(:toggle, :string, required: true)
+  attr(:expanded, :boolean, required: true)
+  attr(:key_name, :atom, required: true)
+  attr(:empty_icon, :string, required: true)
 
   defp source_panel(assigns) do
     ~H"""

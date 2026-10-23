@@ -37,6 +37,8 @@ config :mave_core, Oban,
     {Oban.Plugins.Cron,
      crontab: [
        {"* * * * *", MaveCore.Workers.FlowRecoveryWorker},
+       {"* * * * *", MaveCore.Workers.AnalyticsSessionsWorker},
+       {"* * * * *", MaveCore.Workers.AnalyticsSessionsCleanupWorker},
        {"23 * * * *", MaveCore.Workers.CliAuthorizationPruneWorker}
      ]}
   ],
@@ -49,6 +51,7 @@ config :mave_core, Oban,
     flow_media: 10,
     flow_imports: 10,
     flow_low: 5,
+    analytics: 1,
     webhooks: 20
   ]
 
@@ -253,3 +256,6 @@ config :mime, :types, %{
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
+
+# Opt-in until the historical session backfill has been verified.
+config :mave_core, :analytics_sessions, enabled: false

@@ -16,7 +16,7 @@ config :mave_core, MaveCore.Repo,
   password: "postgres",
   hostname: postgres_host,
   port: String.to_integer(postgres_port),
-  database: "mave_core_test",
+  database: System.get_env("MAVE_TEST_POSTGRES_DATABASE") || "mave_core_test",
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: 10
 
@@ -57,8 +57,8 @@ config :phoenix_live_view, :test_warnings, missing_form_id: :raise
 # Sort query params output of verified routes for robust url comparisons
 config :mave_core, MaveCore.ClickHouseRepo,
   hostname: System.get_env("CLICKHOUSE_HOST") || "localhost",
-  port: 8123,
-  database: "mave_metrics_test",
+  port: String.to_integer(System.get_env("CLICKHOUSE_PORT") || "8123"),
+  database: System.get_env("MAVE_TEST_CLICKHOUSE_DATABASE") || "mave_metrics_test",
   username: "default",
   password: "password",
   scheme: "http",

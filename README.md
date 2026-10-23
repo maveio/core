@@ -117,6 +117,10 @@ local MinIO support and deployment adapter integration.
   register it in [StepRegistry](lib/mave_core/flow/step_registry.ex), and use it
   in your pipeline. New step implementations require rebuilding Core; see
   [contributing](CONTRIBUTING.md) for local development and tests.
+- **Analytics at scale:** prepare playback sessions in bounded background batches,
+  then enable the reader for selected spaces. See
+  [prepared analytics operations](docs/analytics_sessions.md) for backfill,
+  activation, resource budgets and capacity checks.
 
 ## Prefer managed hosting?
 

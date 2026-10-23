@@ -44,4 +44,12 @@ defmodule MaveCore.Playback.SessionTest do
     expired = Phoenix.Token.sign(Endpoint, "media-playback-v1", %{claims | expires_at: now - 1})
     assert {:error, :unauthorized} == Playback.authorize(expired, embed)
   end
+
+  test "malformed request token types are rejected without a crypto exception" do
+    embed = %Embed{id: Ecto.UUID.generate(), space_id: Ecto.UUID.generate()}
+
+    for token <- [["token"], %{"token" => "value"}, 42, true] do
+      assert {:error, :unauthorized} == Playback.authorize(token, embed)
+    end
+  end
 end

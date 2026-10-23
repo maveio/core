@@ -3,6 +3,7 @@ defmodule MaveCoreWeb.Api.Data.SpacesControllerTest do
 
   alias MaveCore.Accounts
   alias MaveCore.Analytics
+  alias MaveCore.Analytics.Sessions
   alias MaveCore.Spaces
 
   defmodule DataBlockedUsageLimits do
@@ -37,6 +38,41 @@ defmodule MaveCoreWeb.Api.Data.SpacesControllerTest do
   end
 
   describe "GET /api/v1/spaces/:space_hash/data" do
+    test "prepared analytics reports a pending backfill as unavailable", %{
+      conn: conn,
+      space: space,
+      auth: auth
+    } do
+      previous = Application.get_env(:mave_core, :analytics_sessions)
+      Application.put_env(:mave_core, :analytics_sessions, enabled: true)
+      on_exit(fn -> Application.put_env(:mave_core, :analytics_sessions, previous || []) end)
+
+      MaveCore.ClickHouseRepo.query!(
+        """
+        INSERT INTO events (timestamp, name, session_id, space_hash, embed_hash)
+        VALUES (now64(6), 'play', '00000000-0000-0000-0000-000000005555', {$0:String}, 'AAAAAAAAAA')
+        """,
+        [space.hash]
+      )
+
+      response =
+        conn
+        |> put_req_header("authorization", auth)
+        |> get(~p"/api/v1/spaces/#{space.hash}/data")
+
+      assert response.status == 503
+      assert get_resp_header(response, "retry-after") == ["60"]
+
+      assert {:ok, _} = Sessions.refresh_changed(limit: 32)
+
+      response =
+        conn
+        |> put_req_header("authorization", auth)
+        |> get(~p"/api/v1/spaces/#{space.hash}/data")
+
+      assert %{"data" => %{"views" => %{"year" => 0}}} = json_response(response, 200)
+    end
+
     test "space_monthly_watch_time returns only the current month watch time", %{
       db_name: db_name,
       space: space
