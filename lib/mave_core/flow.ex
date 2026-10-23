@@ -1766,7 +1766,12 @@ defmodule MaveCore.Flow do
 
   defp maybe_schedule_transient_step_retry(execution, reason, execution_metadata, opts) do
     attempt = execution_cycle_attempts(execution.step_run)
-    max_attempts = transient_step_retry_max_attempts(reason)
+
+    max_attempts =
+      max(
+        transient_step_retry_max_attempts(reason),
+        previous_transient_retry_limit(execution.step_run)
+      )
 
     cond do
       not transient_step_auto_retry_requested?(opts) ->
@@ -1801,6 +1806,15 @@ defmodule MaveCore.Flow do
         )
 
         {:retry, seconds}
+    end
+  end
+
+  defp previous_transient_retry_limit(%StepRun{execution_metadata: metadata}) do
+    # A gateway/transport failure can change shape on the next attempt. Keep
+    # the budget already granted to this cycle; manual recovery clears it.
+    case get_in(metadata || %{}, ["last_retry", "max_attempts"]) do
+      limit when is_integer(limit) and limit > 0 -> limit
+      _ -> 0
     end
   end
 

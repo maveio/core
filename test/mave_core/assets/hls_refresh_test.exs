@@ -25,13 +25,16 @@ defmodule MaveCore.Assets.HlsRefreshTest do
     Storage.reset!()
 
     on_exit(fn ->
-      Application.put_env(:mave_core, :flow_storage_adapter, previous)
-      Application.put_env(:mave_core, :cdn_cache_purger, previous_purger)
+      restore_env(:flow_storage_adapter, previous)
+      restore_env(:cdn_cache_purger, previous_purger)
       Storage.reset!()
     end)
 
     :ok
   end
+
+  defp restore_env(key, nil), do: Application.delete_env(:mave_core, key)
+  defp restore_env(key, value), do: Application.put_env(:mave_core, key, value)
 
   test "opaque rendition IDs resolve to stored HLS paths and absent external audio is omitted" do
     embed = embed_fixture()

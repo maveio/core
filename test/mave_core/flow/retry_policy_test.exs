@@ -3,6 +3,26 @@ defmodule MaveCore.Flow.RetryPolicyTest do
 
   alias MaveCore.Flow.RetryPolicy
 
+  test "retries packaged video input failures without retrying denied sources" do
+    for detail <- [
+          "could not package HLS: HTTP error 502 Bad Gateway",
+          "could not package HLS: Server returned 5XX Server Error reply"
+        ] do
+      reason = {:media_package_hls_variant_failed, {:encoding_booster_remote_failed, detail}}
+      assert RetryPolicy.transient_error?(reason)
+      assert RetryPolicy.booster_gateway_error?(reason)
+    end
+
+    for status <- [400, 401, 403, 404, 410] do
+      reason =
+        {:media_package_hls_variant_failed,
+         {:encoding_booster_remote_failed, "Error opening input: HTTP error #{status}"}}
+
+      refute RetryPolicy.transient_error?(reason)
+      refute RetryPolicy.booster_gateway_error?(reason)
+    end
+  end
+
   test "retries temporary source HTTP failures but not missing or protected sources" do
     for status <- [408, 429, 500, 502, 503, 504] do
       assert RetryPolicy.transient_error?({:http_error, status})

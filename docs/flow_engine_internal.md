@@ -86,7 +86,10 @@ Current strict knobs:
   requeueing after the worker job is no longer active.
 - A status-only encoding-booster `502` or a closed booster transport uses a
   consistent five-execution budget across booster-backed steps, with bounded
-  backoff. A `502` carrying a deterministic source error remains terminal.
+  backoff. Reported transient input HTTP failures use the same budget, including
+  HLS video packaging. A changed transient error message does not shrink an
+  already granted budget within that cycle. A `502` carrying a deterministic
+  source error remains terminal.
 - `MAVE_FLOW_STALE_STEP_RECOVERY_ENABLED` controls the recovery scanner.
 - `MAVE_FLOW_STALE_STEP_RECOVERY_AFTER_MS` defaults to five minutes.
 - `MAVE_FLOW_STALE_STEP_RECOVERY_LIMIT` bounds candidates processed per scan.

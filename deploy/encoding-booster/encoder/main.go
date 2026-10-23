@@ -1429,6 +1429,7 @@ func ffmpegBaseArgs(request encodeRequest) []string {
 		"-progress", "pipe:2", "-stats_period", "0.5", "-nostats",
 		"-format_whitelist", inputFormats,
 	}
+	args = append(args, sourceRetryArgs(request.InputURL)...)
 	if headers := ffmpegSourceHeaders(request.InputReferer, request.InputBasicAuth); headers != "" {
 		args = append(args, "-headers", headers)
 	}
@@ -1751,7 +1752,7 @@ func hlsArgsWithReferer(inputPath string, outputDir string, inputReferer string,
 		"-xerror", "-abort_on", "empty_output",
 		"-format_whitelist", safeInputFormats,
 	}
-	args = append(args, hlsSourceRetryArgs(inputPath)...)
+	args = append(args, sourceRetryArgs(inputPath)...)
 	if headers := ffmpegSourceHeaders(inputReferer, inputBasicAuth); headers != "" {
 		args = append(args, "-headers", headers)
 	}
@@ -1773,7 +1774,7 @@ func hlsAudioArgsWithReferer(inputPath string, outputDir string, inputReferer st
 		"-xerror", "-abort_on", "empty_output",
 		"-format_whitelist", safeInputFormats,
 	}
-	args = append(args, hlsSourceRetryArgs(inputPath)...)
+	args = append(args, sourceRetryArgs(inputPath)...)
 	if headers := ffmpegSourceHeaders(inputReferer, inputBasicAuth); headers != "" {
 		args = append(args, "-headers", headers)
 	}
@@ -1790,14 +1791,14 @@ func hlsAudioArgsWithReferer(inputPath string, outputDir string, inputReferer st
 	)
 }
 
-func hlsSourceRetryArgs(inputPath string) []string {
+func sourceRetryArgs(inputPath string) []string {
 	if !strings.HasPrefix(inputPath, "https://") && !strings.HasPrefix(inputPath, "http://") {
 		return nil
 	}
-	// HLS can process large renditions without retaining the entire source on
-	// scratch disk. Resume interrupted reads and bound transient HTTP retries.
+	// Stream large inputs without retaining the entire source on scratch disk.
+	// Resume interrupted reads and bound transient HTTP retries for every codec.
 	return []string{
-		"-reconnect", "1", "-reconnect_streamed", "1",
+		"-reconnect", "1", "-reconnect_streamed", "0",
 		"-reconnect_on_network_error", "1", "-reconnect_on_http_error", "408,429,5xx",
 		"-reconnect_max_retries", "3", "-reconnect_delay_max", "5",
 		"-reconnect_delay_total_max", "15",
