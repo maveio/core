@@ -9,8 +9,11 @@ defmodule MaveCore.Workers.AnalyticsSessionsWorker do
 
   @impl true
   def perform(_job) do
-    if Sessions.processing_enabled?() do
-      with {:ok, _} <- Sessions.refresh_changed(), do: :ok
+    config = Application.get_env(:mave_core, :analytics_sessions, [])
+    spaces = Keyword.get(config, :process_spaces, :all)
+
+    if Sessions.processing_enabled?() and spaces != [] do
+      with {:ok, _} <- Sessions.refresh_changed(spaces: spaces), do: :ok
     else
       :ok
     end

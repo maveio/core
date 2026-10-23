@@ -182,8 +182,10 @@ defmodule MaveCore.Analytics.Sessions do
   def refresh_changed(opts \\ []) do
     limit = Keyword.get(opts, :limit, setting(:refresh_bucket_limit, 4))
     target = Keyword.get(opts, :space_hash)
+    scope = Keyword.get(opts, :spaces, :all)
 
     with :ok <- validate_optional_hash(target),
+         :ok <- validate_scope(scope),
          {:ok, %{rows: inventory}} <- ch(Query.inventory(), [], 30_000),
          {:ok, %{rows: published}} <-
            Repo.query(
@@ -212,6 +214,7 @@ defmodule MaveCore.Analytics.Sessions do
       spaces = Enum.uniq(Enum.map(Map.keys(source), &elem(&1, 0)) ++ Enum.map(published, &hd/1))
       spaces = Enum.filter(spaces, &(validate_hash(&1) == :ok))
       spaces = if target, do: Enum.filter(spaces, &(&1 == target)), else: spaces
+      spaces = if scope == :all, do: spaces, else: Enum.filter(spaces, &(&1 in scope))
 
       changes =
         for space <- Enum.sort(spaces),
@@ -232,6 +235,16 @@ defmodule MaveCore.Analytics.Sessions do
       if errors == 0, do: {:ok, count}, else: {:error, {:buckets_failed, errors}}
     end
   end
+
+  defp validate_scope(:all), do: :ok
+
+  defp validate_scope(spaces) when is_list(spaces) do
+    if Enum.all?(spaces, &(validate_hash(&1) == :ok)),
+      do: :ok,
+      else: {:error, :invalid_space_hash}
+  end
+
+  defp validate_scope(_spaces), do: {:error, :invalid_space_hash}
 
   defp rebuild_one({space, bucket, revision}, {count, errors}) do
     case refresh_bucket(space, bucket, revision) do

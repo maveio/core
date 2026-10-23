@@ -33,6 +33,12 @@ spaces retain the original reader, and the processor can still prepare all
 spaces. An empty list selects no prepared readers. It does not alter access
 control. Direct `Sessions` calls remain explicit prepared-data operations.
 
+The worker can be restricted separately with `process_spaces: ["AAAAA"]`, or
+`MAVE_ANALYTICS_PROCESS_SPACES`. It defaults to all spaces, accepts `*` for all
+and an empty value for none. Use this during a capacity-limited rollout so the
+worker does not begin preparing the entire installation. Explicit per-space
+maintenance/backfill calls remain independent of this worker setting.
+
 The corresponding runtime variables are `MAVE_ANALYTICS_SESSIONS`,
 `MAVE_ANALYTICS_PROCESSOR_ENABLED`, `MAVE_ANALYTICS_READ_SPACES` (comma-separated
 hashes, `*` for all, empty for none), `MAVE_ANALYTICS_BUILD_MEMORY_BYTES`,

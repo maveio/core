@@ -26,6 +26,12 @@ defmodule MaveCore.Analytics.Sessions.ConfigTest do
     assert settings[:cleanup_space_limit] == 32
     assert Config.from_env!(%{"MAVE_ANALYTICS_READ_SPACES" => ""}) == [read_spaces: []]
     assert Config.from_env!(%{"MAVE_ANALYTICS_READ_SPACES" => "*"}) == [read_spaces: :all]
+
+    assert Config.from_env!(%{"MAVE_ANALYTICS_PROCESS_SPACES" => "AAAAA,AAAAA"}) ==
+             [process_spaces: ["AAAAA"]]
+
+    assert Config.from_env!(%{"MAVE_ANALYTICS_PROCESS_SPACES" => "*"}) == [process_spaces: :all]
+    assert Config.from_env!(%{"MAVE_ANALYTICS_PROCESS_SPACES" => ""}) == [process_spaces: []]
   end
 
   test "invalid rollout settings fail startup instead of enabling an unintended scope" do
@@ -35,7 +41,8 @@ defmodule MaveCore.Analytics.Sessions.ConfigTest do
           %{"MAVE_ANALYTICS_QUERY_THREADS" => "0"},
           %{"MAVE_ANALYTICS_READ_MEMORY_BYTES" => "-1"},
           %{"MAVE_ANALYTICS_READER_GRACE_SECONDS" => "119"},
-          %{"MAVE_ANALYTICS_READ_SPACES" => "invalid"}
+          %{"MAVE_ANALYTICS_READ_SPACES" => "invalid"},
+          %{"MAVE_ANALYTICS_PROCESS_SPACES" => "invalid"}
         ] do
       assert_raise ArgumentError, fn -> Config.from_env!(env) end
     end

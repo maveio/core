@@ -30,7 +30,9 @@ defmodule MaveCore.Analytics.Sessions.Config do
           nil -> []
           value -> [{key, integer_setting!(name, value)}]
         end
-      end) ++ read_spaces(env)
+      end) ++
+      space_list(env, "MAVE_ANALYTICS_READ_SPACES", :read_spaces) ++
+      space_list(env, "MAVE_ANALYTICS_PROCESS_SPACES", :process_spaces)
   end
 
   defp integer_setting!("MAVE_ANALYTICS_READER_GRACE_SECONDS" = name, value) do
@@ -48,21 +50,21 @@ defmodule MaveCore.Analytics.Sessions.Config do
     end
   end
 
-  defp read_spaces(env) do
-    case Map.get(env, "MAVE_ANALYTICS_READ_SPACES") do
+  defp space_list(env, name, key) do
+    case Map.get(env, name) do
       nil ->
         []
 
       "*" ->
-        [read_spaces: :all]
+        [{key, :all}]
 
       value ->
         spaces = value |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
 
         unless Enum.all?(spaces, &Regex.match?(~r/\A[A-Za-z0-9]{5}\z/, &1)),
-          do: raise(ArgumentError, "MAVE_ANALYTICS_READ_SPACES must contain space hashes")
+          do: raise(ArgumentError, "#{name} must contain space hashes")
 
-        [read_spaces: Enum.uniq(spaces)]
+        [{key, Enum.uniq(spaces)}]
     end
   end
 end
