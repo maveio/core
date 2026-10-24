@@ -79,9 +79,14 @@ defmodule MaveCore.Playback.Media do
     ttl = expires_at - System.system_time(:second)
     bucket = Storage.bucket_for_space(embed.space.hash, embed.space.region)
 
+    # Public objects carry long-lived shared caching metadata. A signed URL must
+    # not outlive its signature in a shared cache.
+    query = [{"response-cache-control", "private, max-age=#{ttl}"}]
+
     if ttl > 0 do
       case storage().presigned_get_url(bucket, embed.hash <> "/" <> path, embed.space.region,
-             expires: ttl
+             expires: ttl,
+             query_params: query
            ) do
         {:ok, url} -> {:redirect, url}
         {:error, _reason} -> {:error, :storage_unavailable}
