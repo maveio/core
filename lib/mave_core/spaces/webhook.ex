@@ -28,7 +28,8 @@ defmodule MaveCore.Spaces.Webhook do
     field :description, :string
     field :enabled, :boolean, default: true
     field :url, :string
-    field :secret, :string
+    field :secret, :string, redact: true
+    field :deleted_at, :utc_datetime_usec
     field :enabled_events, {:array, Ecto.Enum}, values: @mave_events
 
     belongs_to :space, Space
@@ -42,6 +43,23 @@ defmodule MaveCore.Spaces.Webhook do
     |> validate_required(@required_fields, message: @empty_message)
     |> update_change(:url, &String.trim/1)
     |> validate_url(:url)
+  end
+
+  def registration_changeset(webhook, attrs) do
+    webhook
+    |> cast(attrs, @required_fields)
+    |> validate_required(@required_fields, message: @empty_message)
+    |> update_change(:url, &String.trim/1)
+    |> update_change(:enabled_events, &(&1 |> Enum.uniq() |> Enum.sort()))
+    |> validate_length(:enabled_events, min: 1)
+    |> validate_url(:url)
+    |> validate_length(:secret, max: 255)
+    |> validate_change(:url, fn field, url ->
+      case MaveCore.PublicHttpUrl.validate(url) do
+        :ok -> []
+        {:error, _reason} -> [{field, "must resolve to a public HTTPS destination"}]
+      end
+    end)
   end
 
   def validate_url(changeset, field, opts \\ []) do

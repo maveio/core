@@ -400,7 +400,8 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.IndexTest do
     |> render_click()
 
     stop_live_view(view)
-    refute Repo.get(Webhook, webhook.id)
+    assert %{enabled: false, deleted_at: %DateTime{}} = Repo.get!(Webhook, webhook.id)
+    refute Spaces.get_webhook_for_space(space, webhook.id)
   end
 
   test "/settings/team is DB-backed for member add/remove actions", %{conn: conn} do
