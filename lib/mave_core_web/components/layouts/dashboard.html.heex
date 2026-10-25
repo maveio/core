@@ -19,7 +19,7 @@
   </div>
 
   <!-- Top Bar & Content -->
-  <div class="flex-1 flex flex-col min-w-0 relative">
+  <div data-dashboard-content class="flex-1 flex flex-col min-w-0 relative">
     <.bar
       user_email={Map.get(assigns[:current_user] || %{}, :email, "")}
       route={nil}

@@ -25,7 +25,7 @@ defmodule MaveCoreWeb.DashboardComponents.Settings do
       </.settings_panel>
   """
   attr :id, :string, default: nil
-  attr :class, :string, default: nil
+  attr :class, :any, default: nil
   attr :rest, :global
   slot :inner_block, required: true
   slot :footer
@@ -45,7 +45,7 @@ defmodule MaveCoreWeb.DashboardComponents.Settings do
         <img src="/images/glyph.svg" class="w-4 h-4 opacity-30 invert" alt="" />
       </div>
 
-      <div class="flex-grow overflow-y-scroll scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+      <div class="min-h-0 flex-grow overflow-y-scroll scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
         {render_slot(@inner_block)}
       </div>
 

@@ -4,7 +4,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   use MaveCoreWeb, :live_component
 
   import MaveCoreWeb.DashboardComponents.Settings
-  import MaveCoreWeb.DashboardComponents.States, only: [progress_bar: 1]
+  import MaveCoreWeb.DashboardComponents.States, only: [progress_bar: 1, progress_status_row: 1]
 
   alias MaveCore.Assets
   alias MaveCore.Embeds
@@ -2484,54 +2484,37 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
     ~H"""
     <div :if={@encoding != []}>
-      <div
-        :for={rendition <- @encoding}
+      <.progress_status_row
+        :for={{rendition, index} <- Enum.with_index(@encoding)}
         id={"rendition_#{rendition.id}"}
-        class="h-[calc(4rem+1px)] overflow-hidden px-3.5 pt-3.5 pb-3 border-t border-stone-800"
+        status={encoding_progress_status(rendition)}
+        progress={rendition.progress || 0}
+        indicator_class={[
+          "rendition-status-indicator",
+          rendition.status == "failed" && "rendition-status-failed"
+        ]}
+        style={"animation-delay: #{min(index, 4) * 60}ms"}
       >
-        <div class="flex items-center">
-          <div class="mr-2">
-            <div class={[
-              "rendition-status-indicator w-3 h-3 rounded-full",
-              cond do
-                rendition.status == "failed" ->
-                  "rendition-status-failed bg-red-500/70 ring-1 ring-inset ring-red-400/60"
-
-                rendition.progress == 0 || is_nil(rendition.progress) ->
-                  "bg-black/15 ring-1 ring-inset ring-stone-800"
-
-                true ->
-                  "border border-stone-600/80 animate-spin"
-              end
-            ]}>
-              <div
-                :if={
-                  rendition.status != "failed" && rendition.progress != 0 &&
-                    !is_nil(rendition.progress)
-                }
-                class="rendition-activity-notch w-1 h-0.5 bg-stone-900"
-              >
-              </div>
-            </div>
-          </div>
-          <div class="flex-grow text-xs text-stone-600/80">
-            {encoding_status_label(rendition)}
-          </div>
-          <div class="w-10 font-condensed text-center rounded text-xs text-stone-600/80 ring-1 ring-inset ring-stone-700/50 shadow px-1 pt-[0.02rem] pb-[0.09rem] mr-1">
+        {encoding_status_label(rendition)}
+        <:metadata>
+          <div class="w-10 shrink-0 font-condensed text-center rounded text-xs text-stone-600/80 ring-1 ring-inset ring-stone-700/50 shadow px-1 pt-[0.02rem] pb-[0.09rem] mr-1">
             {rendition.codec}
           </div>
           <div
             :if={rendition.size}
-            class="w-10 text-center bg-stone-800 rounded text-xs text-stone-600/80 ring-1 ring-inset ring-stone-700/50 shadow px-1 py-[0.05rem]"
+            class="w-10 shrink-0 text-center bg-stone-800 rounded text-xs text-stone-600/80 ring-1 ring-inset ring-stone-700/50 shadow px-1 py-[0.05rem]"
           >
             {rendition.size}
           </div>
-        </div>
-        <.progress_bar progress={rendition.progress || 0} class="my-2.5" />
-      </div>
+        </:metadata>
+      </.progress_status_row>
     </div>
     """
   end
+
+  defp encoding_progress_status(%{status: "failed"}), do: "failed"
+  defp encoding_progress_status(%{progress: progress}) when progress in [nil, 0], do: "queued"
+  defp encoding_progress_status(_rendition), do: "active"
 
   defp encoding_status_label(%{status: "failed"}), do: gettext("Failed")
 

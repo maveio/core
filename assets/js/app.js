@@ -27,6 +27,7 @@ import { hooks as colocatedHooks } from "phoenix-colocated/mave_core"
 import topbar from "../vendor/topbar"
 import "@lottiefiles/lottie-player"
 import { ChartHook } from "./hooks/chart"
+import { VideoListUploadHook } from "./hooks/video_list_upload"
 import { cdn } from "./upload"
 
 let selectedEmbed = null
@@ -711,6 +712,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
     chart: ChartHook,
     content_editable: ContentEditableHook,
     upload_bridge: UploadBridgeHook,
+    video_list_upload: VideoListUploadHook,
     component_loader: ComponentLoaderHook,
     folder: FolderDropHook,
     breadcrumb: BreadcrumbDropHook,

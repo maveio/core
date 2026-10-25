@@ -7,6 +7,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Index do
   alias MaveCore.Embeds
   alias MaveCore.Embeds.Events, as: EmbedEvents
   alias MaveCore.UsageLimits
+  alias MaveCoreWeb.Dashboard.Videos.ListUpload
   alias MaveCoreWeb.DashboardComponents
   alias MaveCoreWeb.DashboardRoutes
   alias Phoenix.LiveView.JS
@@ -56,6 +57,18 @@ defmodule MaveCoreWeb.Dashboard.Videos.Index do
 
   def handle_event("create", _params, socket) do
     handle_event("create_video", %{}, socket)
+  end
+
+  def handle_event("prepare_video_upload", params, socket) do
+    case ListUpload.prepare(socket, params) do
+      {:ok, upload} ->
+        {:reply, Map.put(upload, :ok, true),
+         assign_dashboard_items(socket, socket.assigns.current_tab, socket.assigns.page)}
+
+      {:error, message} ->
+        {:reply, %{ok: false, error: message},
+         socket |> assign_video_creation_status() |> put_flash(:error, message)}
+    end
   end
 
   def handle_event("create_video", _params, socket) do
@@ -158,7 +171,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Index do
 
   def render(assigns) do
     ~H"""
-    <div class="h-full flex flex-col">
+    <div class="video-upload-page h-full flex flex-col">
       <.title title={gettext("Videos")}>
         <div class="flex items-center gap-3">
           <div
@@ -195,97 +208,107 @@ defmodule MaveCoreWeb.Dashboard.Videos.Index do
         </div>
       </.title>
 
-      <div class="flex-1 overflow-y-auto">
-        <div class={[
-          "max-w-screen-xl mx-auto px-16 w-full relative",
-          (@folders == [] and @videos == []) && "h-full"
-        ]}>
-          <%= if @folders == [] and @videos == [] do %>
-            <div id="videos-empty-state" class="flex min-h-full flex-col items-center justify-center">
-              <div class="w-24 h-24 mt-16">
-                <.animated_icon
-                  name="upload"
-                  class="w-24 h-24 opacity-30 invert grayscale"
-                  speed="1"
-                />
-              </div>
-              <div class="text-stone-300 text-2xl mt-5 select-none cursor-default">
-                {if @current_tab == :archive,
-                  do: gettext("Your archive is empty"),
-                  else: gettext("Create your first video")}
-              </div>
-              <%= if @current_tab != :archive do %>
-                <.create_menu_button
-                  id="videos-empty-create-button"
-                  class="mt-8 ml-0"
-                  video_disabled={!@can_create_video}
-                  video_disabled_title={@video_creation_help}
-                />
-              <% end %>
-              <div class="w-12 mt-16 mb-12 mx-auto border-t border-stone-100"></div>
-            </div>
-          <% else %>
-            <div class="mt-8">
-              <div id="folders" phx-update="replace">
-                <%= for folder <- @folders do %>
-                  <DashboardComponents.media_item
-                    id={"folder-row-#{folder.uuid}"}
-                    type={:folder}
-                    name={folder.name}
-                    navigate={video_path(@current_space, folder.id, @current_tab, @route_scope)}
-                    draggable
-                    class="_folder"
-                    phx-hook="folder"
-                    data-embed-id={folder.uuid}
-                    data-target-folder-id={folder.uuid}
-                  >
-                    <:badges>
-                      <DashboardComponents.media_badge>
-                        {folder.video_count} {ngettext("video", "videos", folder.video_count)}
-                      </DashboardComponents.media_badge>
-                    </:badges>
-                  </DashboardComponents.media_item>
+      <.video_list_upload
+        id="videos-dropzone"
+        disabled={!@can_create_video}
+        disabled_message={@video_creation_help}
+      >
+        <div class="flex-1 overflow-y-auto">
+          <div class={[
+            "max-w-screen-xl mx-auto px-16 w-full relative",
+            (@folders == [] and @videos == []) && "h-full"
+          ]}>
+            <%= if @folders == [] and @videos == [] do %>
+              <div
+                id="videos-empty-state"
+                class="flex min-h-full flex-col items-center justify-center"
+              >
+                <div class="w-24 h-24 mt-16">
+                  <.animated_icon
+                    name="upload"
+                    class="w-24 h-24 opacity-30 invert grayscale"
+                    speed="1"
+                  />
+                </div>
+                <div class="text-stone-300 text-2xl mt-5 select-none cursor-default">
+                  {if @current_tab == :archive,
+                    do: gettext("Your archive is empty"),
+                    else: gettext("Create your first video")}
+                </div>
+                <%= if @current_tab != :archive do %>
+                  <.create_menu_button
+                    id="videos-empty-create-button"
+                    class="mt-8 ml-0"
+                    video_disabled={!@can_create_video}
+                    video_disabled_title={@video_creation_help}
+                  />
                 <% end %>
+                <div class="w-12 mt-16 mb-12 mx-auto border-t border-stone-100"></div>
               </div>
+            <% else %>
+              <div class="mt-8">
+                <div id="folders" phx-update="replace">
+                  <%= for folder <- @folders do %>
+                    <DashboardComponents.media_item
+                      id={"folder-row-#{folder.uuid}"}
+                      type={:folder}
+                      name={folder.name}
+                      navigate={video_path(@current_space, folder.id, @current_tab, @route_scope)}
+                      draggable
+                      class="_folder"
+                      phx-hook="folder"
+                      data-embed-id={folder.uuid}
+                      data-target-folder-id={folder.uuid}
+                      data-upload-folder-name={folder.name}
+                    >
+                      <:badges>
+                        <DashboardComponents.media_badge>
+                          {folder.video_count} {ngettext("video", "videos", folder.video_count)}
+                        </DashboardComponents.media_badge>
+                      </:badges>
+                    </DashboardComponents.media_item>
+                  <% end %>
+                </div>
 
-              <div id="videos" phx-update="replace">
-                <%= for video <- @videos do %>
-                  <DashboardComponents.media_item
-                    id={"video-row-#{video.uuid}"}
-                    type={:video}
-                    name={video.name}
-                    thumbnail={video.thumb}
-                    empty={video.empty}
-                    date={video.inserted_at}
-                    navigate={video_path(@current_space, video.id, @current_tab, @route_scope)}
-                    draggable
-                    phx-hook="draggable"
-                    data-embed-id={video.uuid}
-                  >
-                    <:badges>
-                      <%= if video.state do %>
-                        <DashboardComponents.media_badge>
-                          {video_state_label(video.state)}
-                        </DashboardComponents.media_badge>
-                      <% end %>
-                      <%= if is_nil(video.state) && video.resolution do %>
-                        <DashboardComponents.media_badge>
-                          {video.resolution}
-                        </DashboardComponents.media_badge>
-                      <% end %>
-                      <%= if is_nil(video.state) && video.fps do %>
-                        <DashboardComponents.media_badge>
-                          {video.fps}fps
-                        </DashboardComponents.media_badge>
-                      <% end %>
-                    </:badges>
-                  </DashboardComponents.media_item>
-                <% end %>
+                <div id="videos" phx-update="replace">
+                  <%= for video <- @videos do %>
+                    <DashboardComponents.media_item
+                      id={"video-row-#{video.uuid}"}
+                      type={:video}
+                      name={video.name}
+                      thumbnail={video.thumb}
+                      empty={video.empty}
+                      date={video.inserted_at}
+                      navigate={video_path(@current_space, video.id, @current_tab, @route_scope)}
+                      draggable
+                      phx-hook="draggable"
+                      data-embed-id={video.uuid}
+                    >
+                      <:badges>
+                        <%= if video.state do %>
+                          <DashboardComponents.media_badge>
+                            {video_state_label(video.state)}
+                          </DashboardComponents.media_badge>
+                        <% end %>
+                        <%= if is_nil(video.state) && video.resolution do %>
+                          <DashboardComponents.media_badge>
+                            {video.resolution}
+                          </DashboardComponents.media_badge>
+                        <% end %>
+                        <%= if is_nil(video.state) && video.fps do %>
+                          <DashboardComponents.media_badge>
+                            {video.fps}fps
+                          </DashboardComponents.media_badge>
+                        <% end %>
+                      </:badges>
+                    </DashboardComponents.media_item>
+                  <% end %>
+                </div>
               </div>
-            </div>
-          <% end %>
+            <% end %>
+          </div>
         </div>
-      </div>
+      </.video_list_upload>
 
       <%= if @folders != [] or @videos != [] do %>
         <.footer page={@page} total_pages={@total_pages} />

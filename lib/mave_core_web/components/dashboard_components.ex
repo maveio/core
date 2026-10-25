@@ -78,12 +78,14 @@ defmodule MaveCoreWeb.DashboardComponents do
 
   defdelegate media_item(assigns), to: MaveCoreWeb.DashboardComponents.Media
   defdelegate media_badge(assigns), to: MaveCoreWeb.DashboardComponents.Media
+  defdelegate video_list_upload(assigns), to: MaveCoreWeb.DashboardComponents.ListUpload
 
   defdelegate empty_state(assigns), to: MaveCoreWeb.DashboardComponents.States
   defdelegate breadcrumb(assigns), to: MaveCoreWeb.DashboardComponents.States
   defdelegate breadcrumb_bar(assigns), to: MaveCoreWeb.DashboardComponents.States
   defdelegate usage_bar(assigns), to: MaveCoreWeb.DashboardComponents.States
   defdelegate progress_bar(assigns), to: MaveCoreWeb.DashboardComponents.States
+  defdelegate progress_status_row(assigns), to: MaveCoreWeb.DashboardComponents.States
   defdelegate led_indicator(assigns), to: MaveCoreWeb.DashboardComponents.States
   defdelegate rendition_badge(assigns), to: MaveCoreWeb.DashboardComponents.States
 

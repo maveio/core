@@ -58,7 +58,8 @@ defmodule MaveCoreWeb.DashboardComponents.Media do
       class={[
         "flex border-b ring-1 ring-inset ring-transparent border-b-stone-100/60",
         "hover:border-transparent hover:rounded-xl hover:ring-blue-200",
-        "active:bg-blue-100/50",
+        "active:bg-blue-100/50 transition-[background-color,box-shadow,border-color] duration-150 motion-reduce:transition-none",
+        "data-[file-drop-target]:bg-stone-100 data-[file-drop-target]:ring-stone-300 data-[file-drop-target]:rounded-xl data-[file-drop-target]:border-transparent",
         "cursor-pointer select-none -mx-3.5 py-2 px-3.5 2xl:mr-0",
         @deleted && "hidden",
         @class

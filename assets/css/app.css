@@ -236,3 +236,102 @@ input[type=number] {
     radial-gradient(circle at top, rgb(59 130 246 / 0.12), transparent 56%),
     rgb(28 25 23 / 0.96);
 }
+
+.video-upload-drop {
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+
+.video-upload-area[data-drop-active="true"] .video-upload-drop {
+  opacity: 1;
+}
+
+.video-upload-queue {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 60;
+  width: 14rem;
+  height: 100dvh;
+  min-height: 0;
+}
+
+.video-upload-queue:not(.is-open) {
+  display: none;
+}
+
+/* Leave the same space for the upload sidebar as for video settings. */
+@media (min-width: 1024px) {
+  [data-dashboard-content]:has(.video-upload-queue.is-open) .video-upload-page {
+    margin-right: 14rem;
+  }
+
+  [data-dashboard-content]:has(.video-upload-queue.is-open) :is([data-dashboard-topbar], [data-dashboard-footer]) {
+    padding-right: 14rem;
+  }
+}
+
+.video-upload-preview .video-upload-queue {
+  position: absolute;
+  height: 100%;
+}
+
+.video-upload-preview:has(.video-upload-queue.is-open) .video-upload-list {
+  margin-right: 14rem;
+}
+
+.progress-status-row {
+  animation: progress-status-enter 240ms ease-out both;
+}
+
+@keyframes progress-status-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.progress-status-indicator {
+  background: rgb(0 0 0 / 0.15);
+  box-shadow: inset 0 0 0 1px var(--color-stone-800);
+}
+
+.progress-status-notch {
+  display: none;
+}
+
+.progress-status-row[data-progress-status="active"] .progress-status-indicator {
+  background: transparent;
+  box-shadow: none;
+  border: 1px solid color-mix(in oklab, var(--color-stone-600) 80%, transparent);
+  animation: spin 1s linear infinite;
+}
+
+.progress-status-row[data-progress-status="active"] .progress-status-notch {
+  display: block;
+}
+
+.progress-status-row[data-progress-status="completed"] .progress-status-indicator {
+  background: linear-gradient(to bottom, var(--color-green-400), var(--color-green-600));
+  box-shadow: none;
+}
+
+.progress-status-row[data-progress-status="failed"] .progress-status-indicator {
+  background: color-mix(in oklab, var(--color-red-500) 70%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-red-400) 60%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-status-row,
+  .progress-status-row *,
+  .video-upload-area *,
+  .video-upload-area *::before,
+  .video-upload-area *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

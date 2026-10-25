@@ -106,6 +106,16 @@ defmodule MaveCoreWeb.Live.Dashboard.UsageLimitsUITest do
     assert %{videos: []} = Embeds.list_folder_items(space, folder)
   end
 
+  test "drop upload cannot bypass a host's video creation limit", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    Application.put_env(:mave_core, :usage_limits_backend, VideoBlockedUsageLimits)
+    {:ok, view, _html} = live(conn, "/videos")
+
+    assert has_element?(view, "#videos-dropzone[data-upload-disabled=true]")
+    render_hook(view, "prepare_video_upload", %{name: "Blocked.mp4", size: 1024, file_count: 1})
+    assert PublicApi.count_videos(space, show_collections: true) == 0
+  end
+
   test "/settings/team uses neutral copy when a host blocks member creation", %{conn: conn} do
     {conn, _space} = authenticated_conn(conn)
     Application.put_env(:mave_core, :usage_limits_backend, TeamBlockedUsageLimits)

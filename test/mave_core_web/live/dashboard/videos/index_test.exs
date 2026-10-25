@@ -10,6 +10,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.IndexTest do
   alias MaveCore.Embeds.Events
   alias MaveCore.Flow
   alias MaveCore.Flow.{Run, StepRun, Version}
+  alias MaveCore.Media.RemoteSource
   alias MaveCore.Repo
   alias MaveCore.Spaces.Space
   alias MaveCoreWeb.DashboardRoutes
@@ -151,11 +152,11 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.IndexTest do
     video = video_embed_fixture(space, %{name: "Queued Import", status: "uploading"})
     create_processing_run(space, video, step_status: "queued")
 
-    {:ok, _view, html} = live(conn, "/videos")
+    {:ok, view, html} = live(conn, "/videos")
 
     assert html =~ "Queued Import"
     assert html =~ "Queued"
-    refute html =~ "Processing"
+    refute has_element?(view, "#video-row-#{video.id} .font-condensed", "Processing")
     refute html =~ "Custom"
   end
 
@@ -218,8 +219,8 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.IndexTest do
     Events.broadcast_updated(space.id, video.id, %{"phase" => "processing"})
 
     assert_eventually(fn ->
-      html = render(view)
-      html =~ "Realtime Import" and html =~ "Processing" and not (html =~ "Queued")
+      has_element?(view, "#video-row-#{video.id}", "Processing") and
+        not has_element?(view, "#video-row-#{video.id}", "Queued")
     end)
   end
 
@@ -229,10 +230,10 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.IndexTest do
     video = video_embed_fixture(space, %{name: "Playable Import", status: "playable"})
     create_processing_run(space, video)
 
-    {:ok, _view, html} = live(conn, "/videos")
+    {:ok, view, html} = live(conn, "/videos")
 
     assert html =~ "Playable Import"
-    refute html =~ "Processing"
+    refute has_element?(view, "#video-row-#{video.id} .font-condensed", "Processing")
   end
 
   test "/:space_id/videos opens the same root list for a shared space url", %{conn: conn} do
@@ -457,6 +458,94 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.IndexTest do
 
     assert refreshed_user.current_space_membership.space.id == original_space_id
     refute refreshed_user.current_space_membership.space.id == new_space_id
+  end
+
+  test "dropping a file creates a named root video without leaving the list", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, "/videos")
+
+    assert has_element?(view, "#videos-dropzone[phx-hook=video_list_upload]")
+    assert has_element?(view, "#videos-dropzone-status[data-upload-status]")
+    assert has_element?(view, "#videos-dropzone-rows[data-upload-rows]")
+    assert has_element?(view, "#videos-dropzone-status template[data-upload-template]")
+
+    render_hook(view, "prepare_video_upload", %{
+      name: "Launch film.mp4",
+      size: 1024,
+      file_count: 1
+    })
+
+    assert %{videos: [%{uuid: id, name: "Launch film"}]} = MaveCore.Embeds.list_root_items(space)
+    assert has_element?(view, "#video-row-#{id}", "Launch film")
+    assert has_element?(view, "#videos-dropzone")
+  end
+
+  test "dropping onto a folder creates the video only inside that folder", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    folder = folder_embed_fixture(space, %{name: "Campaigns"})
+    {:ok, view, _html} = live(conn, "/videos")
+
+    assert has_element?(view, "#folder-row-#{folder.id}[data-upload-folder-name=Campaigns]")
+
+    render_hook(view, "prepare_video_upload", %{
+      name: "Campaign.mp4",
+      size: 1024,
+      file_count: 1,
+      folder_id: folder.id
+    })
+
+    assert %{videos: []} = MaveCore.Embeds.list_root_items(space)
+    assert %{videos: [%{name: "Campaign"}]} = MaveCore.Embeds.list_folder_items(space, folder)
+  end
+
+  test "drop upload rejects another space's folder and non-folder destinations", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    {_other_conn, other_space} = authenticated_conn(build_conn())
+    foreign_folder = folder_embed_fixture(other_space, %{name: "Private folder"})
+    video = video_embed_fixture(space, %{name: "Existing video"})
+    deleted_folder = folder_embed_fixture(space, %{name: "Deleted folder"})
+    deleted_folder |> Ecto.Changeset.change(deleted_at: DateTime.utc_now()) |> Repo.update!()
+    {:ok, view, _html} = live(conn, "/videos")
+
+    for destination <- [foreign_folder.id, video.id, deleted_folder.id, "missing", %{}] do
+      render_hook(view, "prepare_video_upload", %{
+        name: "Rejected.mp4",
+        size: 1024,
+        file_count: 1,
+        folder_id: destination
+      })
+
+      assert has_element?(view, "#flash-error", "This folder is no longer available.")
+    end
+
+    assert %{videos: [%{uuid: id}]} = MaveCore.Embeds.list_root_items(space)
+    assert id == video.id
+    assert %{videos: []} = MaveCore.Embeds.list_folder_items(other_space, foreign_folder)
+  end
+
+  test "each upload preparation requires one valid file within the size limit", %{
+    conn: conn
+  } do
+    {conn, space} = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, "/videos")
+
+    for params <- [
+          %{name: "Two.mp4", size: 1024, file_count: 2},
+          %{name: "Empty.mp4", size: 0, file_count: 1},
+          %{name: "Invalid.mp4", size: "1024", file_count: 1},
+          %{name: "Large.mp4", size: RemoteSource.max_bytes() + 1, file_count: 1}
+        ] do
+      render_hook(view, "prepare_video_upload", params)
+      assert %{videos: []} = MaveCore.Embeds.list_root_items(space)
+    end
+  end
+
+  test "drop upload preserves the archive destination", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, "/videos?tab=archive")
+    render_hook(view, "prepare_video_upload", %{name: "Archived.mp4", size: 1024, file_count: 1})
+    assert %{videos: []} = MaveCore.Embeds.list_root_items(space, :all)
+    assert %{videos: [%{name: "Archived"}]} = MaveCore.Embeds.list_root_items(space, :archive)
   end
 
   defp authenticated_conn(conn) do
