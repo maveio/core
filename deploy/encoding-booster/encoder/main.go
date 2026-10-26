@@ -1751,6 +1751,10 @@ func hlsArgsWithReferer(inputPath string, outputDir string, inputReferer string,
 		"-hide_banner", "-nostdin", "-y", "-loglevel", "error",
 		"-xerror", "-abort_on", "empty_output",
 		"-format_whitelist", safeInputFormats,
+		// HLS consumes packets in order. Building a fragmented-MP4 index first
+		// reads the entire remote rendition before rewinding and reading it again.
+		// Keep HTTP seeking available so interrupted reads can still resume.
+		"-fflags", "+ignidx",
 	}
 	args = append(args, sourceRetryArgs(inputPath)...)
 	if headers := ffmpegSourceHeaders(inputReferer, inputBasicAuth); headers != "" {
@@ -2284,8 +2288,7 @@ func uploadHLSFiles(
 	ctx context.Context,
 	hlsDir string,
 	targets []hlsUploadTarget,
-	encoder *json.Encoder,
-	flusher http.Flusher,
+	progress *hlsProgress,
 	uploadedBytesOffset int64,
 	uploadedFilesOffset int,
 ) ([]hlsFile, int64, error) {
@@ -2345,12 +2348,11 @@ func uploadHLSFiles(
 			Name: target.Name, Key: target.Key, ContentType: target.ContentType, SizeBytes: target.SizeBytes,
 		})
 		uploadedBytes += target.SizeBytes
-		_ = encoder.Encode(hlsUploadEvent{
+		if err := progress.send(hlsUploadEvent{
 			Status: "uploading", UploadedBytes: uploadedBytes,
 			FileCount: uploadedFilesOffset + len(uploaded),
-		})
-		if flusher != nil {
-			flusher.Flush()
+		}); err != nil {
+			return nil, uploadedBytes, err
 		}
 	}
 	if len(uploaded) != len(targets) {
@@ -2460,8 +2462,7 @@ func uploadAndRemoveHLSFiles(
 	files []hlsFile,
 	uploaded map[string]hlsFile,
 	uploadedBytes int64,
-	encoder *json.Encoder,
-	flusher http.Flusher,
+	progress *hlsProgress,
 ) (int64, error) {
 	if len(files) == 0 {
 		return uploadedBytes, nil
@@ -2474,8 +2475,7 @@ func uploadAndRemoveHLSFiles(
 		ctx,
 		hlsDir,
 		targets,
-		encoder,
-		flusher,
+		progress,
 		uploadedBytes,
 		len(uploaded),
 	)
@@ -2517,15 +2517,18 @@ func streamHLSToStorage(
 	callbackURL string,
 	startedAt time.Time,
 ) {
+	ctx, cancelWork := context.WithCancel(ctx)
+	defer cancelWork()
 	writer.Header().Set("Content-Type", "application/x-ndjson")
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(http.StatusOK)
 	flusher, _ := writer.(http.Flusher)
-	encoder := json.NewEncoder(writer)
-	_ = encoder.Encode(hlsUploadEvent{Status: "packaging"})
-	if flusher != nil {
-		flusher.Flush()
+	progress := newHLSProgress(writer, flusher)
+	if progress.send(hlsUploadEvent{Status: "packaging"}) != nil {
+		return
 	}
+	stopHeartbeat := progress.keepAlive(ctx, multipartHeartbeatInterval, cancelWork)
+	defer stopHeartbeat()
 
 	ffmpegContext, cancelFFmpeg := context.WithCancel(ctx)
 	defer cancelFFmpeg()
@@ -2541,6 +2544,11 @@ func streamHLSToStorage(
 
 	uploaded := make(map[string]hlsFile)
 	var uploadedBytes int64
+	defer func() {
+		if ctx.Err() != nil {
+			log.Printf("hls-package-canceled: elapsed_ms=%d files=%d bytes=%d", time.Since(startedAt).Milliseconds(), len(uploaded), uploadedBytes)
+		}
+	}()
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -2557,23 +2565,20 @@ func streamHLSToStorage(
 			files,
 			uploaded,
 			uploadedBytes,
-			encoder,
-			flusher,
+			progress,
 		)
 		return err
 	}
 
 	fail := func(message string) {
-		_ = encoder.Encode(hlsUploadEvent{Status: "failed", Error: message})
-		if flusher != nil {
-			flusher.Flush()
-		}
+		_ = progress.send(hlsUploadEvent{Status: "failed", Error: message})
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			cancelFFmpeg()
+			<-resultChannel
 			return
 
 		case <-ticker.C:
@@ -2614,8 +2619,7 @@ func streamHLSToStorage(
 				controlFiles,
 				uploaded,
 				uploadedBytes,
-				encoder,
-				flusher,
+				progress,
 			)
 			if err != nil {
 				log.Printf("hls-direct-upload-error: %v", err)
@@ -2628,13 +2632,10 @@ func streamHLSToStorage(
 				fail("invalid HLS output")
 				return
 			}
-			_ = encoder.Encode(hlsUploadEvent{
+			_ = progress.send(hlsUploadEvent{
 				Status: "completed", UploadedBytes: uploadedBytes, FileCount: len(files),
 				FFmpegElapsedMS: time.Since(startedAt).Milliseconds(), Files: files,
 			})
-			if flusher != nil {
-				flusher.Flush()
-			}
 			return
 		}
 	}

@@ -1666,7 +1666,7 @@ func TestHLSFilesUploadDirectlyThroughScopedDestinations(t *testing.T) {
 		t.Fatalf("expected only the finalized segment, got %v", pending)
 	}
 	response := httptest.NewRecorder()
-	encoder := json.NewEncoder(response)
+	progress := newHLSProgress(response, nil)
 	metadataByName := make(map[string]hlsFile)
 	uploadedBytes, err := uploadAndRemoveHLSFiles(
 		context.Background(),
@@ -1676,8 +1676,7 @@ func TestHLSFilesUploadDirectlyThroughScopedDestinations(t *testing.T) {
 		files,
 		metadataByName,
 		0,
-		encoder,
-		nil,
+		progress,
 	)
 	if err != nil {
 		t.Fatal(err)

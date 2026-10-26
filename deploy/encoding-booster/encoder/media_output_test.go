@@ -147,7 +147,7 @@ func TestHLSUploadRejectsReplacementAfterCollection(t *testing.T) {
 			old := http.DefaultClient
 			http.DefaultClient = server.Client()
 			defer func() { http.DefaultClient = old }()
-			_, err = uploadAndRemoveHLSFiles(context.Background(), job, server.URL+"/callback", "test", files, map[string]hlsFile{}, 0, json.NewEncoder(io.Discard), nil)
+			_, err = uploadAndRemoveHLSFiles(context.Background(), job, server.URL+"/callback", "test", files, map[string]hlsFile{}, 0, newHLSProgress(io.Discard, nil))
 			if err == nil || err.Error() != "could not open HLS output" {
 				t.Fatalf("expected output rejection, got %v", err)
 			}
