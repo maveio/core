@@ -3,6 +3,9 @@
 !go.mod
 !main.go
 !main_test.go
+!hls_progress.go
+!hls_progress_test.go
+!hls_streaming_test.go
 !video_completion_test.go
 !concat_source.go
 !segment_source.go

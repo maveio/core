@@ -144,13 +144,19 @@ func TestVideoUploadsRejectIncompleteInputs(t *testing.T) {
 }
 
 func TestHLSPackagingRetriesInterruptedReads(t *testing.T) {
+	for _, layout := range []string{"+faststart", "frag_keyframe+empty_moov+default_base_moof"} {
+		t.Run(layout, func(t *testing.T) { testHLSPackagingRetriesInterruptedReads(t, layout) })
+	}
+}
+
+func testHLSPackagingRetriesInterruptedReads(t *testing.T, layout string) {
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		t.Skip("ffmpeg is not installed")
 	}
 	input := filepath.Join(t.TempDir(), "input.mp4")
 	if output, err := exec.Command(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10",
-		"-t", "8", "-c:v", "libx264", "-threads", "1", "-g", "10", "-movflags", "+faststart", input).CombinedOutput(); err != nil {
+		"-t", "8", "-c:v", "libx264", "-threads", "1", "-g", "10", "-movflags", layout, input).CombinedOutput(); err != nil {
 		t.Fatalf("generate source: %v: %s", err, output)
 	}
 	data, err := os.ReadFile(input)

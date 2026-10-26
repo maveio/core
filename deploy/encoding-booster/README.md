@@ -68,6 +68,11 @@ errors, but first attempts to resume interrupted HTTP reads and retries temporar
 408/429/5xx responses, up to three retries with at most 15 seconds of retry delay.
 Normal EOF is not retried. HLS sources remain streamed
 so large renditions do not require holding the full source on scratch disk.
+HLS reads packets sequentially without first building a fragmented-MP4 index;
+HTTP range support remains enabled for interrupted-read recovery. The response
+sends periodic progress heartbeats during packaging and storage uploads. A lost
+response cancels the work, and cancellation logs contain elapsed time and output
+counts rather than source URLs.
 
 The previous Alpine runtime supplied FFmpeg 6.1.2. FFmpeg 9.0.2 is built from the
 official release tarball with its SHA-256 pinned in the Dockerfile, so changing
