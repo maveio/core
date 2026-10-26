@@ -86,8 +86,7 @@ build is needed, but the browser needs internet access.
 
 See the [self-hosting guide](deploy/self-hosted/README.md) for public hosting,
 HTTPS, email, ports, storage, and upgrades. The existing scripted installer is
-also supported. Neither standalone startup path changes applications embedding
-Core, including Mave SaaS.
+also supported. Applications embedding Core manage their own startup configuration.
 
 ## From upload to playback
 
