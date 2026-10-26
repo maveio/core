@@ -449,6 +449,10 @@ defmodule MaveCore.Analytics.Sessions.Query do
     SELECT space_hash FROM analytics_overview_days GROUP BY space_hash
     UNION DISTINCT
     SELECT space_hash FROM analytics_overview_views GROUP BY space_hash
+    UNION DISTINCT
+    SELECT space_hash FROM analytics_breakdown_days GROUP BY space_hash
+    UNION DISTINCT
+    SELECT space_hash FROM analytics_breakdown_views GROUP BY space_hash
     """
   end
 
@@ -467,6 +471,12 @@ defmodule MaveCore.Analytics.Sessions.Query do
     WHERE space_hash = {$0:String} GROUP BY generation
     UNION DISTINCT
     SELECT toString(generation) FROM analytics_overview_views
+    WHERE space_hash = {$0:String} GROUP BY generation
+    UNION DISTINCT
+    SELECT toString(generation) FROM analytics_breakdown_days
+    WHERE space_hash = {$0:String} GROUP BY generation
+    UNION DISTINCT
+    SELECT toString(generation) FROM analytics_breakdown_views
     WHERE space_hash = {$0:String} GROUP BY generation
     """
   end

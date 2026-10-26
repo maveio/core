@@ -194,9 +194,9 @@ defmodule MaveCore.Analytics.Overview do
 
   defp query_overview(space_hash, period, window) do
     if Sessions.enabled?(space_hash) do
-      case Sessions.overview_generations(space_hash) do
+      case Sessions.breakdown_generations(space_hash) do
         {:ok, generations} ->
-          run_overview(OverviewPrepared.views_cte(), period, window, [
+          run_overview(OverviewPrepared.views_cte(true), period, window, [
             space_hash,
             generations,
             window.previous_from,
@@ -218,20 +218,23 @@ defmodule MaveCore.Analytics.Overview do
     sql = """
     /* mave_perf:spaces.overview */
     #{cte}
-    SELECT kind,
+    SELECT kind AS category,
       multiIf(kind = 'total', if(started_at >= #{datetime_literal(window.from)}, 'current', 'previous'),
         kind = 'series', formatDateTime(toDateTime(#{bucket_sql(window.bucket)}(started_at, 'UTC'), 'UTC'), '%Y-%m-%d %H:%i:%S', 'UTC'),
-        kind = 'device', ifNull(device, ''), ifNull(browser, '')) AS key,
+        kind = 'device', ifNull(device, ''), kind = 'browser', ifNull(browser, ''),
+        kind = 'os', ifNull(os, ''), kind = 'website', ifNull(website, ''),
+        concat(toString(toDayOfWeek(started_at, 0, 'UTC')), '-', toString(toHour(started_at, 'UTC')))) AS key,
       toUInt64(count()) AS views,
       toInt64(if(kind IN ('total', 'series'), sum(watch_ms), 0)) AS watch_ms,
-      toFloat64(if(kind = 'total', ifNotFinite(avgIf(completion, video_duration > 0), 0), 0)) AS value
+      toFloat64(if(kind = 'total', ifNotFinite(avgIf(completion, video_duration > 0), 0), 0)) AS value,
+      [#{reach_counts_sql()}] AS reach_counts
     FROM views
     ARRAY JOIN if(started_at >= #{datetime_literal(window.from)},
-      ['total', 'series', 'device', 'browser'], ['total']) AS kind
+      ['total', 'series', 'device', 'browser', 'os', 'website', 'hour'], ['total']) AS kind
     WHERE started_at >= #{datetime_literal(window.from)} OR started_at < #{datetime_literal(window.previous_to)}
     GROUP BY kind, key
-    ORDER BY kind, views DESC, key
-    LIMIT 50 BY kind
+    ORDER BY category, views DESC, key
+    LIMIT 168 BY category
     SETTINGS max_threads = 1, max_memory_usage = #{query_limit(:read_memory_bytes, 536_870_912)},
       max_block_size = 512, preferred_block_size_bytes = 524288,
       aggregation_memory_efficient_merge_threads = 1,
@@ -309,8 +312,25 @@ defmodule MaveCore.Analytics.Overview do
     """
   end
 
+  defp reach_counts_sql do
+    Enum.map_join(@reach_percents, ", ", fn percent ->
+      "countIf(kind = 'total' AND video_duration > 0 AND completion * 100 >= #{percent})"
+    end)
+  end
+
   defp build_overview(rows, period, window) do
-    grouped = Enum.group_by(rows, &hd/1, &tl/1)
+    reach_rows =
+      Enum.flat_map(rows, fn
+        ["total", "current", _, _, _, counts] ->
+          Enum.zip_with(@reach_percents, counts, fn percent, count ->
+            ["reach", Integer.to_string(percent), count, 0, 0.0]
+          end)
+
+        _ ->
+          []
+      end)
+
+    grouped = Enum.group_by(Enum.map(rows, &Enum.take(&1, 5)) ++ reach_rows, &hd/1, &tl/1)
 
     totals =
       Map.new(Map.get(grouped, "total", []), fn [key | values] -> {key, totals(values)} end)
@@ -355,8 +375,6 @@ defmodule MaveCore.Analytics.Overview do
       {{weekday, hour}, to_int(views)}
     end)
   end
-
-  defp reach_sql, do: "[" <> Enum.map_join(@reach_percents, ", ", &Integer.to_string/1) <> "]"
 
   defp totals([views, watch_ms, completion]) do
     views = to_int(views)

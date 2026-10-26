@@ -198,6 +198,29 @@ defmodule MaveCore.Analytics.Sessions do
     end
   end
 
+  @doc "Active generations with complete source and engagement breakdowns."
+  def breakdown_generations(space_hash) do
+    with :ok <- validate_hash(space_hash) do
+      if SharedStorageSpace.hash?(space_hash) do
+        {:empty, space_hash}
+      else
+        do_breakdown_generations(space_hash)
+      end
+    end
+  end
+
+  defp do_breakdown_generations(space_hash) do
+    case Repo.query(
+           "SELECT array_agg(generation::text ORDER BY bucket), count(*), bool_and(overview_ready AND coalesce(breakdown_generation = generation, false)) FROM analytics_session_buckets WHERE space_hash=$1 AND format_version=$2",
+           [space_hash, Query.version()]
+         ) do
+      {:ok, %{rows: [[generations, 16, true]]}} -> {:ok, generations}
+      {:ok, %{rows: [[_, 0, _]]}} -> source_readiness(space_hash)
+      {:ok, _} -> {:error, :preparing}
+      _ -> {:error, :analytics_unavailable}
+    end
+  end
+
   defp do_overview_generations(space_hash) do
     case Repo.query(
            "SELECT array_agg(generation::text ORDER BY bucket), count(*), bool_and(overview_ready) FROM analytics_session_buckets WHERE space_hash=$1 AND format_version=$2",
@@ -246,7 +269,7 @@ defmodule MaveCore.Analytics.Sessions do
          {:ok, %{rows: inventory}} <- ch(Query.inventory(), [], 30_000),
          {:ok, %{rows: published}} <-
            Repo.query(
-             "SELECT space_hash, bucket, source_rows, fingerprint, updated_at, format_version, refresh_after, overview_ready FROM analytics_session_buckets"
+             "SELECT space_hash, bucket, source_rows, fingerprint, updated_at, format_version, refresh_after, (overview_ready AND coalesce(breakdown_generation = generation, false)) FROM analytics_session_buckets"
            ) do
       current =
         published
@@ -326,7 +349,7 @@ defmodule MaveCore.Analytics.Sessions do
 
     existing =
       Repo.query!(
-        "SELECT source_rows, fingerprint, format_version, refresh_after, overview_ready FROM analytics_session_buckets WHERE space_hash = $1 AND bucket = $2",
+        "SELECT source_rows, fingerprint, format_version, refresh_after, (overview_ready AND coalesce(breakdown_generation = generation, false)) FROM analytics_session_buckets WHERE space_hash = $1 AND bucket = $2",
         [space, bucket]
       ).rows
 
@@ -345,6 +368,14 @@ defmodule MaveCore.Analytics.Sessions do
       ).rows == [[true]]
 
     engagement_full = if ready, do: full, else: 1
+
+    breakdown_ready =
+      Repo.query!(
+        "SELECT breakdown_generation = generation FROM analytics_session_buckets WHERE space_hash=$1 AND bucket=$2",
+        [space_hash, bucket]
+      ).rows == [[true]]
+
+    breakdown_full = if breakdown_ready, do: full, else: 1
 
     with :ok <-
            copy_previous(
@@ -383,6 +414,8 @@ defmodule MaveCore.Analytics.Sessions do
              [space_hash, bucket, generation, changed, engagement_full],
              90_000
            ),
+         :ok <-
+           prepare_breakdowns(space_hash, bucket, generation, previous, changed, breakdown_full),
          {:ok, %{rows: [[count, fingerprint, refresh_after, latest]]}} <-
            ch(Query.revision(), Enum.take(params, 3)) do
       retire_previous!(space_hash, bucket)
@@ -392,13 +425,13 @@ defmodule MaveCore.Analytics.Sessions do
       Repo.query!(
         """
         INSERT INTO analytics_session_buckets
-          (space_hash, bucket, generation, source_rows, fingerprint, format_version, refresh_after, latest_event_at, updated_at, overview_ready)
-        VALUES ($1, $2, $3::text::uuid, $4, $5, $6, $7, $8, now(), true)
+          (space_hash, bucket, generation, source_rows, fingerprint, format_version, refresh_after, latest_event_at, updated_at, overview_ready, breakdown_generation)
+        VALUES ($1, $2, $3::text::uuid, $4, $5, $6, $7, $8, now(), true, $3::text::uuid)
         ON CONFLICT (space_hash, bucket) DO UPDATE SET
           generation = EXCLUDED.generation, source_rows = EXCLUDED.source_rows,
           fingerprint = EXCLUDED.fingerprint, format_version = EXCLUDED.format_version,
           refresh_after = EXCLUDED.refresh_after, latest_event_at = EXCLUDED.latest_event_at, updated_at = EXCLUDED.updated_at,
-          overview_ready = true
+          overview_ready = true, breakdown_generation = EXCLUDED.generation
         """,
         [
           space_hash,
@@ -428,6 +461,26 @@ defmodule MaveCore.Analytics.Sessions do
 
     with {:ok, _} <- ch(OverviewPrepared.copy(), params, 90_000),
          {:ok, _} <- ch(OverviewPrepared.copy_views(), params, 90_000),
+         do: :ok
+  end
+
+  defp prepare_breakdowns(space, bucket, generation, previous, changed, full) do
+    params = [space, bucket, generation, changed, full]
+
+    with :ok <- copy_breakdowns(space, bucket, generation, previous, changed, full),
+         {:ok, _} <- ch(OverviewPrepared.build(true), params, 150_000),
+         {:ok, _} <- ch(OverviewPrepared.build_views(true), params, 90_000),
+         do: :ok
+  end
+
+  defp copy_breakdowns(_space, _bucket, _generation, _previous, _changed, 1), do: :ok
+  defp copy_breakdowns(_space, _bucket, _generation, nil, _changed, _full), do: :ok
+
+  defp copy_breakdowns(space, bucket, generation, previous, changed, 0) do
+    params = [space, bucket, generation, previous, changed]
+
+    with {:ok, _} <- ch(OverviewPrepared.copy(true), params, 90_000),
+         {:ok, _} <- ch(OverviewPrepared.copy_views(true), params, 90_000),
          do: :ok
   end
 
@@ -664,23 +717,29 @@ defmodule MaveCore.Analytics.Sessions do
       with {:ok, _} <- ch(Query.cleanup(), [space, generation], 60_000),
            {:ok, _} <- ch(Query.cleanup_overview(), [space, generation], 60_000),
            {:ok, _} <- ch(Query.cleanup_reports(), [space, generation], 60_000),
-           {:ok, _} <-
-             ch(
-               "ALTER TABLE analytics_overview_days DROP PARTITION ({$0:String}, {$1:UUID})",
-               [space, generation],
-               60_000
-             ),
-           {:ok, _} <-
-             ch(
-               "ALTER TABLE analytics_overview_views DROP PARTITION ({$0:String}, {$1:UUID})",
-               [space, generation],
-               60_000
-             ) do
+           :ok <- delete_engagement_tables(space, generation) do
         {:cont, :ok}
       else
         _ -> {:halt, {:error, :cleanup_failed}}
       end
     end)
+  end
+
+  defp delete_engagement_tables(space, generation) do
+    Enum.reduce_while(
+      ~w(analytics_overview_days analytics_overview_views analytics_breakdown_days analytics_breakdown_views),
+      :ok,
+      fn table, :ok ->
+        case ch(
+               "ALTER TABLE #{table} DROP PARTITION ({$0:String}, {$1:UUID})",
+               [space, generation],
+               60_000
+             ) do
+          {:ok, _} -> {:cont, :ok}
+          _ -> {:halt, {:error, :cleanup_failed}}
+        end
+      end
+    )
   end
 
   defp setting(key, default) do

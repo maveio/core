@@ -278,7 +278,7 @@ defmodule MaveCore.Analytics.OverviewTest do
     assert {:ok, before} = Sessions.overview_generations("space")
 
     ClickHouseRepo.query!(
-      "RENAME TABLE analytics_overview_views TO analytics_overview_views_hidden"
+      "RENAME TABLE analytics_breakdown_views TO analytics_breakdown_views_hidden"
     )
 
     try do
@@ -293,7 +293,7 @@ defmodule MaveCore.Analytics.OverviewTest do
       assert {:ok, ^before} = Sessions.overview_generations("space")
     after
       ClickHouseRepo.query!(
-        "RENAME TABLE analytics_overview_views_hidden TO analytics_overview_views"
+        "RENAME TABLE analytics_breakdown_views_hidden TO analytics_breakdown_views"
       )
     end
   end
@@ -458,6 +458,78 @@ defmodule MaveCore.Analytics.OverviewTest do
     assert {:error, :invalid_request} = Overview.top_videos("space", "5y")
   end
 
+  test "source metadata follows the first event inside each calendar window", %{db_name: db_name} do
+    events =
+      for {offset, os, url} <- [
+            {-3 * 86_400, "Mac OS", "https://www.first.example/page"},
+            {-60, "Linux", "https://second.example/path"},
+            {3_600, "Windows", "https://future.example"}
+          ],
+          {name, delta} <- [{"play", 0}, {"pause", 3}],
+          do: {offset + delta, name, 1, "AAAAAAAAAA", delta * 1.0, os, url}
+
+    insert_events(db_name, events, @now)
+
+    expected =
+      for period <- Overview.periods(), into: %{} do
+        {:ok, data} = Overview.space_overview("space", period, @now)
+        {period, data}
+      end
+
+    assert [%{os: "Linux", views: 1}] = expected["today"].operating_systems
+    assert [%{website: "second.example", views: 1}] = expected["today"].websites
+    assert [%{website: "first.example", views: 1}] = expected["year"].websites
+
+    Application.put_env(:mave_core, :analytics_sessions, enabled: true)
+    assert {:ok, 16} = Sessions.refresh_changed(space_hash: "space", limit: 16)
+    ClickHouseRepo.query!("TRUNCATE TABLE #{db_name}.events")
+
+    for {period, data} <- expected do
+      assert {:ok, actual} = Overview.space_overview("space", period, @now)
+      assert_overview(actual, data)
+    end
+  end
+
+  test "breakdown readiness belongs to the published generation", %{db_name: db_name} do
+    insert_events(
+      db_name,
+      [{-60, "play", 1, "AAAAAAAAAA", 0.0}, {-57, "pause", 1, "AAAAAAAAAA", 3.0}],
+      @now
+    )
+
+    Application.put_env(:mave_core, :analytics_sessions, enabled: true)
+    assert {:ok, 16} = Sessions.refresh_changed(space_hash: "space", limit: 16)
+
+    MaveCore.Repo.query!(
+      "UPDATE analytics_session_buckets SET breakdown_generation=NULL WHERE space_hash='space' AND bucket=0"
+    )
+
+    assert {:error, :preparing} = Overview.space_overview("space", "today", @now)
+    assert {:ok, [_]} = Overview.top_videos("space", "today", 25, @now)
+    assert {:ok, 1} = Sessions.refresh_changed(space_hash: "space", limit: 16)
+    assert {:ok, _} = Overview.space_overview("space", "today", @now)
+
+    MaveCore.Repo.query!(
+      "UPDATE analytics_session_buckets SET breakdown_generation=$1::text::uuid WHERE space_hash='space' AND bucket=0",
+      [Ecto.UUID.generate()]
+    )
+
+    assert {:error, :preparing} = Overview.space_overview("space", "today", @now)
+  end
+
+  test "the activity grid retains all 168 weekday and hour cells", %{db_name: db_name} do
+    events =
+      for day <- 0..6, hour <- 0..23, {name, delta} <- [{"play", 0}, {"pause", 3}] do
+        at = DateTime.add(~U[2026-10-05 00:00:00Z], day * 86_400 + hour * 3600 + delta)
+        {DateTime.diff(at, @now), name, day * 24 + hour + 1, "AAAAAAAAAA", delta * 1.0}
+      end
+
+    insert_events(db_name, events, @now)
+    assert {:ok, data} = Overview.space_overview("space", "month", @now)
+    assert map_size(data.hours) == 168
+    assert Enum.all?(data.hours, fn {_, count} -> count == 1 end)
+  end
+
   defp assert_overview(actual, expected) do
     assert Map.drop(actual, [:current, :previous]) == Map.drop(expected, [:current, :previous])
 
@@ -471,13 +543,23 @@ defmodule MaveCore.Analytics.OverviewTest do
 
   defp insert_events(db_name, events, now \\ DateTime.utc_now()) do
     values =
-      Enum.map_join(events, ",\n", fn {offset, name, session, embed_hash, video_time} ->
+      Enum.map_join(events, ",\n", fn event ->
+        {offset, name, session, embed_hash, video_time, os, url} =
+          case event do
+            {offset, name, session, embed_hash, video_time} ->
+              {offset, name, session, embed_hash, video_time, "Mac OS",
+               "https://example.com/page"}
+
+            metadata_event ->
+              metadata_event
+          end
+
         timestamp =
           now |> DateTime.add(round(offset * 1000), :millisecond) |> DateTime.to_iso8601()
 
         session_id = "00000000-0000-0000-0000-#{String.pad_leading("#{session}", 12, "0")}"
 
-        "(parseDateTime64BestEffort('#{timestamp}'), '#{name}', '#{session_id}', 'space', '#{embed_hash}', #{video_time}, 120, 'https://example.com/page', 'Chrome', '120', 'Mac OS', '14', 'Desktop', 'Apple')"
+        "(parseDateTime64BestEffort('#{timestamp}'), '#{name}', '#{session_id}', 'space', '#{embed_hash}', #{video_time}, 120, '#{url}', 'Chrome', '120', '#{os}', '14', 'Desktop', 'Apple')"
       end)
 
     {:ok, _} =

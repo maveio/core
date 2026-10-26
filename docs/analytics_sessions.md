@@ -57,12 +57,15 @@ ClickHouse representations are complete:
 - `analytics_session_reports`: per-video daily watch totals and completion data.
 - `analytics_overview_days`: daily engagement summaries with exact boundary data.
 - `analytics_overview_views`: per-video session totals for reads within a complete interval.
+- `analytics_breakdown_days` and `analytics_breakdown_views`: engagement and
+  source metadata for calendar breakdowns.
 
 Initial readers require all sixteen current-format pointers, including empty
 buckets. Until then they return `:preparing`; database failures return
 `:analytics_unavailable`. Existing complete generations remain readable during
 refreshes. Failures do not publish partially built data. The engagement overview
-also waits for its readiness marker; existing prepared reads remain available
+also waits for its readiness marker. Source breakdowns require a marker matching
+the published generation; existing prepared reads remain available
 while an older installation builds those additional summaries.
 
 The processor detects new, changed and late events. Future-dated events become
