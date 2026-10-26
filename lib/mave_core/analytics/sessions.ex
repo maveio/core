@@ -115,6 +115,33 @@ defmodule MaveCore.Analytics.Sessions do
 
   def range_data(_space_hash, _from, _to, _opts), do: {:error, :invalid_range}
 
+  @doc """
+  Ranked per-video views in the UTC interval `[from, to)`, limited in ClickHouse.
+  Whole days use compact reports. Sessions touching a partial day, containing
+  future events, or lacking complete reports use exact segment clipping instead.
+  The one-second threshold applies once per session and video across the window.
+  """
+  def top_videos(space_hash, from, to, limit \\ 25)
+
+  def top_videos(space_hash, %DateTime{} = from, %DateTime{} = to, limit)
+      when is_integer(limit) and limit in 1..250 do
+    with :ok <- validate_hash(space_hash),
+         true <- DateTime.diff(to, from) in 1..(732 * 86_400),
+         {:ok, generations} <- generations(space_hash),
+         {:ok, %{rows: rows}} <-
+           ch(Query.top_videos(), [space_hash, generations, from, to, limit], 20_000) do
+      {:ok, Enum.map(rows, fn [hash, views] -> %{embed_hash: hash, views: views} end)}
+    else
+      {:empty, _} -> {:ok, []}
+      false -> {:error, :invalid_range}
+      {:error, :preparing} -> {:error, :preparing}
+      {:error, :invalid_space_hash} -> {:error, :invalid_space_hash}
+      _ -> {:error, :analytics_unavailable}
+    end
+  end
+
+  def top_videos(_space_hash, _from, _to, _limit), do: {:error, :invalid_range}
+
   defp range_query(space, generations, from, to, granularity, mode) do
     # Daily completion maxima preserve series semantics. Per-video completion
     # still needs segment endpoints, especially for rewinds across midnight.

@@ -5,6 +5,8 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
 
   alias MaveCore.Accounts
   alias MaveCore.ClickHouseRepo
+  alias MaveCore.Embeds
+  alias MaveCore.Repo
   alias MaveCoreWeb.Dashboard.Data.Index
   alias Phoenix.LiveView.AsyncResult
 
@@ -52,6 +54,9 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
   test "/data formats analytics counts with dot thousands separators" do
     html =
       %{
+        live_action: :index,
+        route_scope: :unscoped,
+        current_space: %{id: "space-id"},
         data_access_notice: nil,
         analytics_preparing: false,
         data_access_help: nil,
@@ -86,6 +91,9 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
 
     html =
       %{
+        live_action: :index,
+        route_scope: :unscoped,
+        current_space: %{id: "space-id"},
         data_access_notice: nil,
         analytics_preparing: false,
         data_access_help: nil,
@@ -109,6 +117,69 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
     assert html =~ ~s(aria-busy="true")
     assert html =~ "data-loading-skeleton"
     refute html =~ "..."
+  end
+
+  test "/data shows overview and top list tabs", %{conn: conn} do
+    {conn, _space} = authenticated_conn(conn)
+
+    {:ok, view, html} = live(conn, "/data")
+
+    assert html =~ "Overview"
+    assert html =~ "Top list"
+    assert has_element?(view, ~s(a[href="/data/top"]), "Top list")
+
+    view |> element(~s(a[href="/data/top"])) |> render_click()
+    assert_patch(view, "/data/top")
+  end
+
+  test "/data/top ranks the space's videos by views", %{conn: conn, db_name: db_name} do
+    {conn, space} = authenticated_conn(conn)
+    {:ok, popular} = Embeds.create_video_embed(space)
+    {:ok, quiet} = Embeds.create_video_embed(space)
+    {:ok, deleted} = Embeds.create_video_embed(space)
+    {:ok, _deleted} = Repo.update(Ecto.Changeset.change(deleted, deleted_at: DateTime.utc_now()))
+
+    rows =
+      [
+        {popular.hash, 1},
+        {popular.hash, 2},
+        {quiet.hash, 3},
+        {deleted.hash, 4},
+        {deleted.hash, 5},
+        {deleted.hash, 6}
+      ]
+      |> Enum.map_join(",\n", fn {embed_hash, session} ->
+        session_id = "00000000-0000-0000-0000-00000000200#{session}"
+
+        """
+        (addSeconds(now64(6), -30), 'play', '#{session_id}', '#{space.hash}', '#{embed_hash}', 0.0, 10, 'https://example.com', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple'),
+        (addSeconds(now64(6), -27), 'pause', '#{session_id}', '#{space.hash}', '#{embed_hash}', 3.0, 10, 'https://example.com', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple')
+        """
+      end)
+
+    {:ok, _} =
+      ClickHouseRepo.query("""
+      INSERT INTO #{db_name}.events
+      (timestamp, name, session_id, space_hash, embed_hash, video_time, duration, source_url, browser, browser_version, os, os_version, device, device_brand)
+      VALUES
+      #{rows}
+      """)
+
+    {:ok, view, _html} = live(conn, "/data/top")
+    _ = render_async(view, 5_000)
+
+    links =
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("#data-top-list a")
+      |> Enum.map(&LazyHTML.attribute(&1, "href"))
+      |> List.flatten()
+
+    assert links == [
+             "/videos/#{Embeds.dashboard_embed_id(popular)}",
+             "/videos/#{Embeds.dashboard_embed_id(quiet)}"
+           ]
   end
 
   defp authenticated_conn(conn, space_hash \\ nil) do
