@@ -318,29 +318,120 @@ defmodule MaveCore.Analytics.OverviewTest do
     assert actual.current.watch_ms == 54_000
   end
 
-  test "ranks videos with watch time, completion and views per bucket", %{db_name: db_name} do
-    now = DateTime.utc_now()
+  test "ranks videos with watch time and completion", %{db_name: db_name} do
+    now = @now
 
-    insert_events(db_name, [
-      {-3_600, "play", 1, "AAAAAAAAAA", 0.0},
-      {-3_540, "pause", 1, "AAAAAAAAAA", 60.0},
-      {-1_800, "play", 2, "BBBBBBBBBB", 0.0},
-      {-1_680, "pause", 2, "BBBBBBBBBB", 120.0},
-      {-600, "play", 3, "BBBBBBBBBB", 0.0},
-      {-570, "pause", 3, "BBBBBBBBBB", 30.0},
-      # Outside the 7-day period.
-      {-8 * 86_400, "play", 4, "AAAAAAAAAA", 0.0},
-      {-8 * 86_400 + 60, "pause", 4, "AAAAAAAAAA", 60.0}
-    ])
+    insert_events(
+      db_name,
+      [
+        {-3_600, "play", 1, "AAAAAAAAAA", 0.0},
+        {-3_540, "pause", 1, "AAAAAAAAAA", 60.0},
+        {-1_800, "play", 2, "BBBBBBBBBB", 0.0},
+        {-1_680, "pause", 2, "BBBBBBBBBB", 120.0},
+        {-600, "play", 3, "BBBBBBBBBB", 0.0},
+        {-570, "pause", 3, "BBBBBBBBBB", 30.0},
+        # Outside the calendar week.
+        {-8 * 86_400, "play", 4, "AAAAAAAAAA", 0.0},
+        {-8 * 86_400 + 60, "pause", 4, "AAAAAAAAAA", 60.0}
+      ],
+      now
+    )
 
     assert {:ok, [first, second]} = Overview.top_videos("space", "week", 25, now)
 
     assert %{embed_hash: "BBBBBBBBBB", views: 2, watch_ms: 150_000} = first
     assert_in_delta first.avg_completion, (1.0 + 0.25) / 2, 0.001
-    assert length(first.series) == 7
-    assert Enum.sum(first.series) == 2
 
     assert %{embed_hash: "AAAAAAAAAA", views: 1, watch_ms: 60_000} = second
+  end
+
+  test "top list ranks all candidates before limiting, using either reader", %{db_name: db_name} do
+    ordinary =
+      for video <- 1..60,
+          session <- 1..2,
+          {name, seconds, position} <- [{"play", 0, 0.0}, {"pause", 3, 3.0}] do
+        hash = "A" <> String.pad_leading(to_string(video), 9, "0")
+        {-600 + seconds, name, video * 2 + session, hash, position}
+      end
+
+    insert_events(
+      db_name,
+      ordinary ++
+        [
+          {-300, "play", 500, "ZZZZZZZZZZ", 0.0},
+          {-180, "pause", 500, "ZZZZZZZZZZ", 120.0}
+        ],
+      @now
+    )
+
+    for prepared? <- [false, true] do
+      Application.put_env(:mave_core, :analytics_sessions, enabled: prepared?)
+
+      if prepared?,
+        do: assert({:ok, 16} = Sessions.refresh_changed(space_hash: "space", limit: 16))
+
+      if prepared?, do: ClickHouseRepo.query!("TRUNCATE TABLE #{db_name}.events")
+
+      assert {:ok, views} = Overview.top_videos("space", "today", 50, @now, "views")
+      assert length(views) == 50
+      refute Enum.any?(views, &(&1.embed_hash == "ZZZZZZZZZZ"))
+
+      for sort <- ~w(watch_time completion) do
+        assert {:ok, [best]} = Overview.top_videos("space", "today", 1, @now, sort)
+        assert best.embed_hash == "ZZZZZZZZZZ"
+        assert best.views == 1
+        assert best.watch_ms == 120_000
+        assert best.avg_completion == 1.0
+      end
+    end
+  end
+
+  test "prepared top list preserves calendar boundaries without raw events", %{db_name: db_name} do
+    insert_events(
+      db_name,
+      [
+        {-86_400, "play", 1, "AAAAAAAAAA", 0.0},
+        {-86_398, "pause", 1, "AAAAAAAAAA", 2.0},
+        {-60, "play", 1, "AAAAAAAAAA", 2.0},
+        {-57, "pause", 1, "AAAAAAAAAA", 5.0},
+        {-50, "play", 1, "BBBBBBBBBB", 0.0},
+        {-45, "pause", 1, "BBBBBBBBBB", 5.0},
+        {-2, "play", 2, "AAAAAAAAAA", 0.0},
+        {1, "pause", 2, "AAAAAAAAAA", 3.0},
+        {-40 * 86_400, "play", 3, "CCCCCCCCCC", 0.0},
+        {-40 * 86_400 + 60, "pause", 3, "CCCCCCCCCC", 60.0}
+      ],
+      @now
+    )
+
+    expected =
+      for period <- Overview.periods(), sort <- ~w(views watch_time completion), into: %{} do
+        assert {:ok, rows} = Overview.top_videos("space", period, 50, @now, sort)
+        {{period, sort}, rows}
+      end
+
+    Application.put_env(:mave_core, :analytics_sessions, enabled: true)
+    assert {:error, :preparing} = Overview.top_videos("space", "today", 50, @now)
+    assert {:ok, 16} = Sessions.refresh_changed(space_hash: "space", limit: 16)
+    ClickHouseRepo.query!("TRUNCATE TABLE #{db_name}.events")
+
+    for {{period, sort}, rows} <- expected do
+      assert {:ok, actual} = Overview.top_videos("space", period, 50, @now, sort)
+
+      assert Enum.map(actual, &Map.delete(&1, :avg_completion)) ==
+               Enum.map(rows, &Map.delete(&1, :avg_completion))
+
+      for {left, right} <- Enum.zip(actual, rows),
+          do: assert_in_delta(left.avg_completion, right.avg_completion, 1.0e-12)
+    end
+  end
+
+  test "top list rejects invalid limits and sorts" do
+    for limit <- [0, -1, 251, "25"] do
+      assert {:error, :invalid_request} = Overview.top_videos("space", "today", limit, @now)
+    end
+
+    assert {:error, :invalid_request} = Overview.top_videos("space", "today", 25, @now, "unknown")
   end
 
   test "rejects unknown periods" do

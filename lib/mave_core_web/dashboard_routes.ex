@@ -24,7 +24,12 @@ defmodule MaveCoreWeb.DashboardRoutes do
   end
 
   def data_top_list_path(space_or_user, opts \\ []) do
-    path_for(space_or_user, "/data/top", period_params(opts) ++ sort_params(opts), opts)
+    path_for(
+      space_or_user,
+      "/data/top",
+      period_params(opts) ++ sort_params(opts) ++ direction_params(opts),
+      opts
+    )
   end
 
   def settings_path(space_or_user, tab \\ nil, opts \\ []) do
@@ -70,6 +75,10 @@ defmodule MaveCoreWeb.DashboardRoutes do
       sort when is_binary(sort) and sort != "" -> [sort: sort]
       _ -> []
     end
+  end
+
+  defp direction_params(opts) do
+    if Keyword.get(opts, :direction) == "asc", do: [direction: "asc"], else: []
   end
 
   defp maybe_put_param(params, _key, false, _value), do: params

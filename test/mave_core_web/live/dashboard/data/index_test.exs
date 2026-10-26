@@ -284,7 +284,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
       view
       |> render()
       |> LazyHTML.from_fragment()
-      |> LazyHTML.query("#data-top-list tbody a")
+      |> LazyHTML.query(~s(#data-top-list [id^="data-top-video-"] a))
       |> Enum.map(&LazyHTML.attribute(&1, "href"))
       |> List.flatten()
 
@@ -294,7 +294,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
            ]
   end
 
-  test "/data/top sorts by watch time and keeps the period", %{
+  test "/data/top sorts the selected videos and keeps the period", %{
     conn: conn,
     db_name: db_name
   } do
@@ -328,17 +328,95 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
 
     view |> element(~s(#data-top-list a[data-sort="watch_time"])) |> render_click()
     assert_patch(view, "/data/top?period=week&sort=watch_time")
-    _ = render_async(view, 5_000)
-
     assert top_list_links(view) == ["/videos/#{long.id}", "/videos/#{short.id}"]
-    assert has_element?(view, ~s(#data-top-list a[aria-sort="descending"]), "Watch time")
+    refute has_element?(view, "#data-top-list-loading")
+    refute has_element?(view, "#data-top-list svg")
+    refute has_element?(view, "#data-top-list", "Trend")
+
+    view |> element(~s(#data-top-list a[data-sort="watch_time"])) |> render_click()
+    assert_patch(view, "/data/top?period=week&sort=watch_time&direction=asc")
+    assert top_list_links(view) == ["/videos/#{short.id}", "/videos/#{long.id}"]
+    refute has_element?(view, "#data-top-list-loading")
+
+    view |> element("#data-period-switch a", "This year") |> render_click()
+    assert_patch(view, "/data/top?period=year&sort=watch_time&direction=asc")
+    _ = render_async(view, 5_000)
+    assert top_list_links(view) == ["/videos/#{short.id}", "/videos/#{long.id}"]
+  end
+
+  test "sorting stays within the 25 most viewed videos without reloading analytics", %{
+    conn: conn,
+    db_name: db_name
+  } do
+    {conn, space} = authenticated_conn(conn)
+
+    videos =
+      for _ <- 1..26 do
+        {:ok, video} = Embeds.create_video_embed(space)
+        video
+      end
+
+    high_watch = Enum.at(videos, 24)
+    outside = List.last(videos)
+
+    rows =
+      for {video, index} <- Enum.with_index(videos),
+          session <- 1..if(index == 25, do: 1, else: 2) do
+        seconds =
+          cond do
+            index == 25 -> 60
+            index == 24 -> 8
+            true -> 3
+          end
+
+        session_id =
+          "00000000-0000-0000-0000-#{String.pad_leading(to_string(10000 + index * 2 + session), 12, "0")}"
+
+        """
+        (addSeconds(now64(6), -120), 'play', '#{session_id}', '#{space.hash}', '#{video.hash}', 0.0, 120),
+        (addSeconds(now64(6), #{seconds - 120}), 'pause', '#{session_id}', '#{space.hash}', '#{video.hash}', #{seconds}.0, 120)
+        """
+      end
+
+    ClickHouseRepo.query!("""
+    INSERT INTO #{db_name}.events (timestamp,name,session_id,space_hash,embed_hash,video_time,duration)
+    VALUES #{Enum.join(rows, ",")}
+    """)
+
+    {:ok, view, _} = live(conn, "/data/top?period=year")
+    _ = render_async(view, 5_000)
+    selected = top_list_links(view)
+    assert length(selected) == 25
+    refute "/videos/#{outside.id}" in selected
+
+    # Sorting is a display operation on the loaded selection, not another query.
+    ClickHouseRepo.query!("TRUNCATE TABLE #{db_name}.events")
+
+    # All three states retain the same loaded selection.
+    for sort <- ~w(watch_time completion views) do
+      view |> element(~s(#data-top-list a[data-sort="#{sort}"])) |> render_click()
+      descending = top_list_links(view)
+      assert MapSet.new(descending) == MapSet.new(selected)
+      refute has_element?(view, "#data-top-list-loading")
+      if sort != "views", do: assert(hd(descending) == "/videos/#{high_watch.id}")
+
+      view |> element(~s(#data-top-list a[data-sort="#{sort}"])) |> render_click()
+      assert top_list_links(view) == Enum.reverse(descending)
+      refute has_element?(view, "#data-top-list-loading")
+
+      view |> element(~s(#data-top-list a[data-sort="#{sort}"])) |> render_click()
+      assert_patch(view, "/data/top?period=year")
+      assert top_list_links(view) == selected
+      refute has_element?(view, "#data-top-list a[aria-current]")
+      refute has_element?(view, "#data-top-list-loading")
+    end
   end
 
   defp top_list_links(view) do
     view
     |> render()
     |> LazyHTML.from_fragment()
-    |> LazyHTML.query("#data-top-list tbody a")
+    |> LazyHTML.query(~s(#data-top-list [id^="data-top-video-"] a))
     |> Enum.map(&LazyHTML.attribute(&1, "href"))
     |> List.flatten()
   end

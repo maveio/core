@@ -150,6 +150,9 @@ defmodule MaveCoreWeb.DashboardComponents.DataTable do
   @doc """
   Data table container with rounded border styling.
 
+  Use `variant={:compact}` on the table, header cells, rows and cells to match
+  compact analytics panels. The default retains the settings table spacing.
+
   ## Examples
 
       <.data_table>
@@ -163,13 +166,25 @@ defmodule MaveCoreWeb.DashboardComponents.DataTable do
         </.data_table_row>
       </.data_table>
   """
+  attr :variant, :atom, values: [:default, :compact], default: :default
   slot :header
   slot :inner_block, required: true
 
   def data_table(assigns) do
     ~H"""
-    <div class="border rounded-md border-stone-200/50">
-      <div :if={@header != []} class="w-full flex py-2.5 border-b border-stone-100">
+    <div class={
+      if @variant == :compact,
+        do: "rounded-lg overflow-hidden border border-stone-200/50 shadow-sm shadow-stone-100",
+        else: "border rounded-md border-stone-200/50"
+    }>
+      <div
+        :if={@header != []}
+        class={
+          if @variant == :compact,
+            do: "w-full flex gap-4 px-3 py-1.5 bg-stone-100 border-b border-stone-200/50",
+            else: "w-full flex py-2.5 border-b border-stone-100"
+        }
+      >
         {render_slot(@header)}
       </div>
       {render_slot(@inner_block)}
@@ -185,6 +200,7 @@ defmodule MaveCoreWeb.DashboardComponents.DataTable do
       <.data_table_header_cell width="12rem">Name</.data_table_header_cell>
       <.data_table_header_cell width="8rem" align="right">Actions</.data_table_header_cell>
   """
+  attr :variant, :atom, values: [:default, :compact], default: :default
   attr :width, :string, default: nil
   attr :min_width, :string, default: nil
   attr :align, :string, values: ~w(left right center), default: "left"
@@ -205,7 +221,10 @@ defmodule MaveCoreWeb.DashboardComponents.DataTable do
     ~H"""
     <div
       class={[
-        "text-sm text-stone-300 px-2 flex items-center",
+        if(@variant == :compact,
+          do: "text-xs uppercase text-stone-400 font-medium tracking-wide flex items-center",
+          else: "text-sm text-stone-300 px-2 flex items-center"
+        ),
         @align == "right" && "justify-end text-right",
         @align == "center" && "justify-center text-center",
         @class
@@ -229,14 +248,24 @@ defmodule MaveCoreWeb.DashboardComponents.DataTable do
         </:actions>
       </.data_table_row>
   """
+  attr :variant, :atom, values: [:default, :compact], default: :default
   attr :id, :string, default: nil
   slot :inner_block, required: true
   slot :actions
 
   def data_table_row(assigns) do
     ~H"""
-    <div id={@id} class="w-full flex items-center border-b border-stone-100 last:border-none">
-      <div class="w-full p-3.5 text-stone-400 text-sm cursor-default flex items-center">
+    <div
+      id={@id}
+      class={[
+        "w-full flex items-center border-b border-stone-100 last:border-none",
+        @variant == :compact && "hover:bg-stone-50 active:bg-blue-50"
+      ]}
+    >
+      <div class={[
+        "w-full text-stone-400 text-sm cursor-default flex items-center",
+        if(@variant == :compact, do: "gap-4 px-3 py-2.5", else: "p-3.5")
+      ]}>
         {render_slot(@inner_block)}
       </div>
       <div :if={@actions != []} class="flex items-center">
@@ -254,6 +283,7 @@ defmodule MaveCoreWeb.DashboardComponents.DataTable do
       <.data_table_cell width="12rem">John Doe</.data_table_cell>
       <.data_table_cell width="8rem" truncate>very-long-email@example.com</.data_table_cell>
   """
+  attr :variant, :atom, values: [:default, :compact], default: :default
   attr :width, :string, default: nil
   attr :min_width, :string, default: nil
   attr :truncate, :boolean, default: false
@@ -274,7 +304,8 @@ defmodule MaveCoreWeb.DashboardComponents.DataTable do
     ~H"""
     <div
       class={[
-        "text-sm text-stone-300 px-2 select-text flex items-center h-6",
+        "text-sm select-text flex items-center",
+        if(@variant == :compact, do: "text-stone-400 h-5", else: "text-stone-300 px-2 h-6"),
         @truncate && "truncate",
         @class
       ]}
