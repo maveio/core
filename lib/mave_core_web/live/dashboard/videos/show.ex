@@ -13,6 +13,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   alias MaveCore.Spaces
   alias MaveCore.Uploads.Token
   alias MaveCore.UsageLimits
+  alias MaveCoreWeb.Dashboard.Videos.ListUpload
   alias MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent
   alias MaveCoreWeb.DashboardRoutes
   alias MaveCoreWeb.Formatter
@@ -610,6 +611,21 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
 
       {:error, _changeset} ->
         {:noreply, put_flash(socket, :error, gettext("Could not create folder"))}
+    end
+  end
+
+  def handle_event(
+        "prepare_video_upload",
+        params,
+        %{assigns: %{mode: :collection, resource_embed: folder}} = socket
+      ) do
+    case ListUpload.prepare(socket, params, folder.id) do
+      {:ok, upload} ->
+        {:reply, Map.put(upload, :ok, true), assign_folder_embed(socket, folder)}
+
+      {:error, message} ->
+        {:reply, %{ok: false, error: message},
+         socket |> assign_video_creation_status() |> put_flash(:error, message)}
     end
   end
 

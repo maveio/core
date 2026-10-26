@@ -745,7 +745,10 @@ defmodule MaveCoreWeb.DashboardComponents.Navigation do
   def footer(%{page: page} = assigns) when not is_nil(page) do
     ~H"""
     <div class="flex-none h-16"></div>
-    <div class={["fixed left-56 bottom-0 w-full z-50 flex", @extra_padding && "pr-56"]}>
+    <div
+      data-dashboard-footer
+      class={["fixed left-56 bottom-0 w-full z-50 flex", @extra_padding && "pr-56"]}
+    >
       <div class="w-full bg-stone-100 border-t border-stone-200/70">
         <div class="max-w-screen-xl mx-auto h-16 px-16 flex items-center -mr-0.5">
           <div class="flex-grow"></div>
@@ -780,7 +783,11 @@ defmodule MaveCoreWeb.DashboardComponents.Navigation do
       <div class="h-16"></div>
     </div>
     <div :if={!@static} class="flex-none h-16"></div>
-    <div :if={!@static} class={["fixed left-56 bottom-0 w-full z-40 flex", @extra_padding && "pr-56"]}>
+    <div
+      :if={!@static}
+      data-dashboard-footer
+      class={["fixed left-56 bottom-0 w-full z-40 flex", @extra_padding && "pr-56"]}
+    >
       <div class="w-full bg-stone-100 border-t border-stone-200/70">
         <div class="h-16"></div>
       </div>
@@ -837,7 +844,10 @@ defmodule MaveCoreWeb.DashboardComponents.Navigation do
 
   def bar(assigns) do
     ~H"""
-    <div class={"absolute w-full top-0 flex-none z-40 #{if @extra_padding, do: "pr-56"}"}>
+    <div
+      data-dashboard-topbar
+      class={"absolute w-full top-0 flex-none z-40 #{if @extra_padding, do: "pr-56"}"}
+    >
       <a class="absolute left-6 top-16 w-14 h-16 z-20 transform-gpu" href="#"></a>
       <div class="h-16 flex items-center pr-12 bg-stone-100 border-b border-stone-200/70">
         <div class="relative h-full ml-16">

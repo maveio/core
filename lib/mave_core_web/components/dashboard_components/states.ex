@@ -27,6 +27,7 @@ defmodule MaveCoreWeb.DashboardComponents.States do
   """
   attr :title, :string, required: true
   attr :icon, :string, default: nil
+  attr :title_attrs, :map, default: %{}
   slot :inner_block
   slot :action
 
@@ -36,7 +37,10 @@ defmodule MaveCoreWeb.DashboardComponents.States do
       <div :if={@icon} class="w-24 h-24 flex items-center justify-center">
         <.empty_state_icon name={@icon} />
       </div>
-      <div class="text-stone-300 text-2xl mt-5 select-none cursor-default">
+      <div
+        class="text-stone-300 text-2xl mt-5 select-none cursor-default"
+        {@title_attrs}
+      >
         {@title}
       </div>
       <div :if={@inner_block != []} class="text-stone-400 text-sm mt-3 max-w-md text-center">
@@ -343,6 +347,7 @@ defmodule MaveCoreWeb.DashboardComponents.States do
       @class
     ]}>
       <div
+        data-progress-fill
         class={[
           "relative h-full rounded-full bg-blue-600 transition-all ease-out duration-125",
           @progress == 0 && "hidden"
@@ -356,6 +361,53 @@ defmodule MaveCoreWeb.DashboardComponents.States do
           <div class="absolute w-0.5 h-0.5 bg-white rounded-full"></div>
         </div>
       </div>
+    </div>
+    """
+  end
+
+  @doc """
+  Compact status row shared by render progress and the upload queue.
+  """
+  attr :id, :string, default: nil
+  attr :status, :string, values: ~w(queued active completed failed), default: "queued"
+  attr :progress, :integer, default: 0
+  attr :class, :any, default: nil
+  attr :indicator_class, :any, default: nil
+  attr :progress_attrs, :map, default: %{}
+  attr :rest, :global
+  slot :inner_block, required: true
+  slot :metadata
+  slot :detail
+
+  def progress_status_row(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      data-progress-status={@status}
+      class={[
+        "progress-status-row group/progress-status h-[calc(4rem+1px)] min-w-0 overflow-hidden px-3.5 pt-3.5 pb-3 border-t border-stone-800",
+        @class
+      ]}
+      {@rest}
+    >
+      <div class="flex items-center">
+        <div class="mr-2 shrink-0" aria-hidden="true">
+          <div class={[
+            "progress-status-indicator w-3 h-3 rounded-full",
+            @indicator_class
+          ]}>
+            <div class="progress-status-notch w-1 h-0.5 bg-stone-900"></div>
+          </div>
+        </div>
+        <div class="min-w-0 flex-grow text-xs text-stone-600/80">
+          {render_slot(@inner_block)}
+        </div>
+        {render_slot(@metadata)}
+      </div>
+      <div {@progress_attrs}>
+        <.progress_bar progress={@progress} class="my-2.5" />
+      </div>
+      {render_slot(@detail)}
     </div>
     """
   end

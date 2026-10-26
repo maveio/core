@@ -1,4 +1,7 @@
-<div class={["h-full flex flex-col", @settings_open && @mode == :video && "mr-56"]}>
+<div class={[
+  "video-upload-page h-full flex flex-col",
+  @settings_open && @mode == :video && "mr-56"
+]}>
   <%= if @mode == :collection do %>
     <.title
       title={@folder.name}
@@ -134,76 +137,85 @@
       </:item>
     </.breadcrumb_bar>
 
-    <div class="flex-1 overflow-y-auto">
-      <div class="max-w-screen-xl mx-auto px-16 w-full relative mt-8">
-        <%= if @folders == [] and @videos == [] do %>
-          <div class="flex flex-col items-center justify-center h-[calc(100vh-20rem)]">
-            <div class="w-24 h-24 mt-16">
-              <.animated_icon
-                name="upload"
-                class="w-24 h-24 opacity-30 invert grayscale"
-                speed="1"
-              />
+    <.video_list_upload
+      id={"folder-dropzone-#{@resource_embed.id}"}
+      folder_id={@resource_embed.id}
+      destination={@folder.name}
+      disabled={!@can_create_video}
+      disabled_message={@video_creation_help}
+    >
+      <div class="flex-1 overflow-y-auto">
+        <div class="max-w-screen-xl mx-auto px-16 w-full relative mt-8">
+          <%= if @folders == [] and @videos == [] do %>
+            <div class="flex flex-col items-center justify-center h-[calc(100vh-20rem)]">
+              <div class="w-24 h-24 mt-16">
+                <.animated_icon
+                  name="upload"
+                  class="w-24 h-24 opacity-30 invert grayscale"
+                  speed="1"
+                />
+              </div>
+              <div class="text-stone-300 text-2xl mt-5 select-none cursor-default">
+                {gettext("This folder is empty")}
+              </div>
+              <div class="w-12 mt-16 mb-12 mx-auto border-t border-stone-100"></div>
             </div>
-            <div class="text-stone-300 text-2xl mt-5 select-none cursor-default">
-              {gettext("This folder is empty")}
+          <% else %>
+            <div id="folders" phx-update="replace">
+              <%= for folder <- @folders do %>
+                <.media_item
+                  id={"folder-row-#{folder.uuid}"}
+                  type={:folder}
+                  name={folder.name}
+                  navigate={video_path(@current_space, folder.id, @current_tab, @route_scope)}
+                  draggable
+                  class="_folder"
+                  phx-hook="folder"
+                  data-embed-id={folder.uuid}
+                  data-target-folder-id={folder.uuid}
+                  data-upload-folder-name={folder.name}
+                >
+                  <:badges>
+                    <.media_badge>
+                      {folder.video_count} {ngettext("video", "videos", folder.video_count)}
+                    </.media_badge>
+                  </:badges>
+                </.media_item>
+              <% end %>
             </div>
-            <div class="w-12 mt-16 mb-12 mx-auto border-t border-stone-100"></div>
-          </div>
-        <% else %>
-          <div id="folders" phx-update="replace">
-            <%= for folder <- @folders do %>
-              <.media_item
-                id={"folder-row-#{folder.uuid}"}
-                type={:folder}
-                name={folder.name}
-                navigate={video_path(@current_space, folder.id, @current_tab, @route_scope)}
-                draggable
-                class="_folder"
-                phx-hook="folder"
-                data-embed-id={folder.uuid}
-                data-target-folder-id={folder.uuid}
-              >
-                <:badges>
-                  <.media_badge>
-                    {folder.video_count} {ngettext("video", "videos", folder.video_count)}
-                  </.media_badge>
-                </:badges>
-              </.media_item>
-            <% end %>
-          </div>
 
-          <div id="videos" phx-update="replace">
-            <%= for video <- @videos do %>
-              <.media_item
-                id={"video-row-#{video.uuid}"}
-                type={:video}
-                name={video.name}
-                thumbnail={video.thumb}
-                empty={video.empty}
-                date={video.inserted_at}
-                navigate={video_path(@current_space, video.id, @current_tab, @route_scope)}
-                draggable
-                phx-hook="draggable"
-                data-embed-id={video.uuid}
-              >
-                <:badges>
-                  <%= if video.state do %>
-                    <.media_badge>{video_state_label(video.state)}</.media_badge>
-                  <% end %>
-                  <%= if is_nil(video.state) && video.resolution do %>
-                    <.media_badge>{video.resolution}</.media_badge>
-                  <% end %>
-                  <%= if is_nil(video.state) && video.fps do %>
-                    <.media_badge>{video.fps}fps</.media_badge>
-                  <% end %>
-                </:badges>
-              </.media_item>
-            <% end %>
-          </div>
-        <% end %>
+            <div id="videos" phx-update="replace">
+              <%= for video <- @videos do %>
+                <.media_item
+                  id={"video-row-#{video.uuid}"}
+                  type={:video}
+                  name={video.name}
+                  thumbnail={video.thumb}
+                  empty={video.empty}
+                  date={video.inserted_at}
+                  navigate={video_path(@current_space, video.id, @current_tab, @route_scope)}
+                  draggable
+                  phx-hook="draggable"
+                  data-embed-id={video.uuid}
+                >
+                  <:badges>
+                    <%= if video.state do %>
+                      <.media_badge>{video_state_label(video.state)}</.media_badge>
+                    <% end %>
+                    <%= if is_nil(video.state) && video.resolution do %>
+                      <.media_badge>{video.resolution}</.media_badge>
+                    <% end %>
+                    <%= if is_nil(video.state) && video.fps do %>
+                      <.media_badge>{video.fps}fps</.media_badge>
+                    <% end %>
+                  </:badges>
+                </.media_item>
+              <% end %>
+            </div>
+          <% end %>
+        </div>
       </div>
-    </div>
+    </.video_list_upload>
   <% else %>
     <div
       id="video-components-loader"

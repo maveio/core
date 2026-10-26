@@ -782,7 +782,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
 
     failed_rendition_selector = "#rendition_pending-#{failed_hls_step.id}"
     assert has_element?(view, "#{failed_rendition_selector} .rendition-status-failed")
-    refute has_element?(view, "#{failed_rendition_selector} .rendition-activity-notch")
+    assert has_element?(view, "#{failed_rendition_selector}[data-progress-status=failed]")
 
     render_click(element(view, ~s([phx-value-tab="info"])))
     html = render(view)
@@ -2686,6 +2686,30 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
              :count,
              :id
            ) == 1
+  end
+
+  test "folder drop upload defaults to the current folder and supports a nested destination", %{
+    conn: conn
+  } do
+    {conn, space} = authenticated_conn(conn)
+    folder = folder_embed_fixture(space, %{name: "Parent"})
+    nested = folder_embed_fixture(space, %{name: "Nested"})
+    link_embed_to_folder(folder, nested)
+    {:ok, view, _html} = live(conn, "/videos/#{folder.id}")
+
+    assert has_element?(view, "#folder-dropzone-#{folder.id}[data-folder-id='#{folder.id}']")
+    render_hook(view, "prepare_video_upload", %{name: "Current.mp4", size: 1024, file_count: 1})
+
+    render_hook(view, "prepare_video_upload", %{
+      name: "Child.mp4",
+      size: 1024,
+      file_count: 1,
+      folder_id: nested.id
+    })
+
+    assert %{videos: [%{name: "Current"}]} = MaveCore.Embeds.list_folder_items(space, folder)
+    assert %{videos: [%{name: "Child"}]} = MaveCore.Embeds.list_folder_items(space, nested)
+    assert %{videos: []} = MaveCore.Embeds.list_root_items(space)
   end
 
   test "/videos/:id folder mode updates when another session creates a child video", %{conn: conn} do
