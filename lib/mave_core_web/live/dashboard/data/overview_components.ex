@@ -124,10 +124,14 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
     <.video_data_section label={gettext("How far people watch")}>
       <.async_result :let={overview} assign={@overview}>
         <:loading>
-          <div id="data-reach-loading" class="grid gap-3 p-4" role="status">
+          <div
+            id="data-reach-loading"
+            class="h-48 flex flex-col justify-between p-4"
+            role="status"
+          >
             <div
               :for={width <- [100, 80, 62, 45, 33]}
-              class="data-loading-skeleton h-2.5 rounded-full"
+              class="data-loading-skeleton h-4 rounded-full"
               style={"width: #{width}%"}
               aria-hidden="true"
             >
@@ -140,7 +144,7 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
             {gettext("Data is unavailable")}
           </div>
         </:failed>
-        <div id="data-reach" class="grid gap-3 p-4">
+        <div id="data-reach" class="h-48 flex flex-col justify-between p-4">
           <div
             :for={step <- overview.reach}
             class="grid grid-cols-[5.5rem_minmax(0,1fr)_3rem] items-center gap-3 text-xs text-stone-400"
@@ -153,7 +157,7 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
               >
               </div>
             </div>
-            <span class="text-right text-stone-500 tabular-nums">{round(step.share * 100)}%</span>
+            <span class="text-right tabular-nums">{round(step.share * 100)}%</span>
           </div>
         </div>
       </.async_result>
@@ -168,8 +172,8 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
     <.video_data_section label={gettext("When people watch")}>
       <.async_result :let={overview} assign={@overview}>
         <:loading>
-          <div id="data-hours-loading" class="p-4" role="status">
-            <div class="data-loading-skeleton h-36 rounded-md" aria-hidden="true"></div>
+          <div id="data-hours-loading" class="h-48 p-4" role="status">
+            <div class="data-loading-skeleton h-full rounded-md" aria-hidden="true"></div>
             <span class="sr-only">{gettext("Loading data")}</span>
           </div>
         </:loading>
@@ -180,22 +184,21 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
         </:failed>
         <div
           id="data-hours"
-          class="grid grid-cols-[2rem_repeat(24,minmax(0,1fr))] gap-0.5 p-4 text-[10px] text-stone-300"
+          class="h-48 grid grid-cols-[2rem_repeat(24,minmax(0,1fr))] grid-rows-[repeat(8,minmax(0,1fr))] gap-0.5 p-4 text-xs text-stone-400"
         >
-          <span></span>
-          <span :for={hour <- 0..23} class="text-center">{if rem(hour, 6) == 0, do: hour}</span>
+          <span class="self-start" title={gettext("Hours in UTC")}>UTC</span>
+          <span :for={hour <- 0..23} class="self-start text-center">{if rem(hour, 6) == 0, do: hour}</span>
           <%= for {weekday, label} <- weekdays() do %>
-            <span class="self-center">{label}</span>
+            <span class={if weekday == 7, do: "self-end", else: "self-center"}>{label}</span>
             <div
               :for={hour <- 0..23}
-              class="aspect-square rounded-sm bg-blue-500"
+              class="rounded-sm bg-blue-500"
               style={"opacity: #{hour_opacity(overview.hours, weekday, hour)}"}
               title={"#{label} #{hour}:00 · #{format_number(Map.get(overview.hours, {weekday, hour}, 0))} #{gettext("views")}"}
             >
             </div>
           <% end %>
         </div>
-        <p class="px-4 pb-3 text-xs text-stone-300">{gettext("Hours in UTC")}</p>
       </.async_result>
     </.video_data_section>
     """
