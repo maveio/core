@@ -143,7 +143,8 @@ git diff --check
 
 `mix precommit` removes unused lockfile entries, formats, compiles with warnings
 as errors, and runs the xref audit; it does not replace tests. Review generated
-changes. The security commands are automated checks, not a complete assessment.
+changes. The [security checks](docs/security_checks.md) are automated checks, not a
+complete assessment.
 
 For installer, container, or media-flow changes, also run the
 [isolated smoke test](deploy/self-hosted/README.md#automated-smoke-test) and the
@@ -158,7 +159,10 @@ not a repeat of the full media journey.
 - Add deterministic regression tests close to the changed behavior.
 - Preserve tenant isolation, upload/API authorization, player manifests,
   object paths, and webhook contracts.
-- Update affected documentation and state which checks passed or were skipped.
+- Update documentation when setup, usage or public contracts change; prefer an
+  existing guide. Keep implementation details in docstrings and tests, and omit
+  session logs, completed migration plans and duplicated framework instructions.
+- State which checks passed or were skipped.
 - Never include credentials or customer data. Preserve attribution and licences
   for borrowed material; see [Third-party notices](THIRD_PARTY_NOTICES.md).
 
@@ -186,8 +190,8 @@ published manifests/media and send playback events to Core.
 
 Technical reference, as needed:
 
-- [Flow engine](docs/flow_engine.md) and [debugging](docs/flow_engine_internal.md):
-  versioned templates, execution, retry behavior, and admin access.
+- [Flow engine](docs/flow_engine.md): templates, execution, retries and debugging.
+- [Prepared analytics](docs/analytics_sessions.md): setup and data lifecycle.
 - [Webhook delivery](docs/webhook_delivery_outbox.md): signed lifecycle events.
 - [Encoding boosters](deploy/encoding-booster/README.md): optional remote compute;
   not needed for the single-host installation.
