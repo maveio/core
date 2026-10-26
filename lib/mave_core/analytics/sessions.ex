@@ -7,6 +7,7 @@ defmodule MaveCore.Analytics.Sessions do
   Inventory revisions are measured from the rows actually used by the build, so
   an insert racing with a refresh is picked up by the following inventory poll.
   """
+  alias MaveCore.Analytics.OverviewPrepared
   alias MaveCore.Analytics.Sessions.Query
   alias MaveCore.{ClickHouseRepo, Repo, SharedStorageSpace}
 
@@ -186,6 +187,29 @@ defmodule MaveCore.Analytics.Sessions do
       else: do_generations(space_hash)
   end
 
+  @doc "Active generations whose engagement summaries have been published."
+  def overview_generations(space_hash) do
+    with :ok <- validate_hash(space_hash) do
+      if SharedStorageSpace.hash?(space_hash) do
+        {:empty, space_hash}
+      else
+        do_overview_generations(space_hash)
+      end
+    end
+  end
+
+  defp do_overview_generations(space_hash) do
+    case Repo.query(
+           "SELECT array_agg(generation::text ORDER BY bucket), count(*), bool_and(overview_ready) FROM analytics_session_buckets WHERE space_hash=$1 AND format_version=$2",
+           [space_hash, Query.version()]
+         ) do
+      {:ok, %{rows: [[generations, 16, true]]}} -> {:ok, generations}
+      {:ok, %{rows: [[_, 0, _]]}} -> source_readiness(space_hash)
+      {:ok, _} -> {:error, :preparing}
+      _ -> {:error, :analytics_unavailable}
+    end
+  end
+
   defp do_generations(space_hash) do
     with :ok <- validate_hash(space_hash),
          {:ok, %{rows: rows}} <-
@@ -222,22 +246,24 @@ defmodule MaveCore.Analytics.Sessions do
          {:ok, %{rows: inventory}} <- ch(Query.inventory(), [], 30_000),
          {:ok, %{rows: published}} <-
            Repo.query(
-             "SELECT space_hash, bucket, source_rows, fingerprint, updated_at, format_version, refresh_after FROM analytics_session_buckets"
+             "SELECT space_hash, bucket, source_rows, fingerprint, updated_at, format_version, refresh_after, overview_ready FROM analytics_session_buckets"
            ) do
       current =
         published
-        |> Enum.filter(fn [_, _, _, _, _, version, _] -> version == Query.version() end)
-        |> Map.new(fn [space, bucket, count, hash, _, _, _] ->
+        |> Enum.filter(fn [_, _, _, _, _, version, _, ready] ->
+          version == Query.version() and ready
+        end)
+        |> Map.new(fn [space, bucket, count, hash, _, _, _, _] ->
           {{space, bucket}, {count, hash}}
         end)
 
       ages =
-        Map.new(published, fn [space, bucket, _, _, updated, _, _] ->
+        Map.new(published, fn [space, bucket, _, _, updated, _, _, _] ->
           {{space, bucket}, to_string(updated)}
         end)
 
       due =
-        Map.new(published, fn [space, bucket, _, _, _, _, at] ->
+        Map.new(published, fn [space, bucket, _, _, _, _, at, _] ->
           {{space, bucket}, refresh_due?(at)}
         end)
 
@@ -300,7 +326,7 @@ defmodule MaveCore.Analytics.Sessions do
 
     existing =
       Repo.query!(
-        "SELECT source_rows, fingerprint, format_version, refresh_after FROM analytics_session_buckets WHERE space_hash = $1 AND bucket = $2",
+        "SELECT source_rows, fingerprint, format_version, refresh_after, overview_ready FROM analytics_session_buckets WHERE space_hash = $1 AND bucket = $2",
         [space, bucket]
       ).rows
 
@@ -311,6 +337,14 @@ defmodule MaveCore.Analytics.Sessions do
     generation = Ecto.UUID.generate()
     {previous, changed, full, report_full, overview_full} = build_plan!(space_hash, bucket)
     params = [space_hash, bucket, generation, changed, full]
+
+    ready =
+      Repo.query!(
+        "SELECT overview_ready FROM analytics_session_buckets WHERE space_hash=$1 AND bucket=$2",
+        [space_hash, bucket]
+      ).rows == [[true]]
+
+    engagement_full = if ready, do: full, else: 1
 
     with :ok <-
            copy_previous(
@@ -335,6 +369,20 @@ defmodule MaveCore.Analytics.Sessions do
              [space_hash, bucket, generation, changed, report_full],
              90_000
            ),
+         :ok <-
+           copy_engagement(space_hash, bucket, generation, previous, changed, engagement_full),
+         {:ok, _} <-
+           ch(
+             OverviewPrepared.build(),
+             [space_hash, bucket, generation, changed, engagement_full],
+             150_000
+           ),
+         {:ok, _} <-
+           ch(
+             OverviewPrepared.build_views(),
+             [space_hash, bucket, generation, changed, engagement_full],
+             90_000
+           ),
          {:ok, %{rows: [[count, fingerprint, refresh_after, latest]]}} <-
            ch(Query.revision(), Enum.take(params, 3)) do
       retire_previous!(space_hash, bucket)
@@ -344,12 +392,13 @@ defmodule MaveCore.Analytics.Sessions do
       Repo.query!(
         """
         INSERT INTO analytics_session_buckets
-          (space_hash, bucket, generation, source_rows, fingerprint, format_version, refresh_after, latest_event_at, updated_at)
-        VALUES ($1, $2, $3::text::uuid, $4, $5, $6, $7, $8, now())
+          (space_hash, bucket, generation, source_rows, fingerprint, format_version, refresh_after, latest_event_at, updated_at, overview_ready)
+        VALUES ($1, $2, $3::text::uuid, $4, $5, $6, $7, $8, now(), true)
         ON CONFLICT (space_hash, bucket) DO UPDATE SET
           generation = EXCLUDED.generation, source_rows = EXCLUDED.source_rows,
           fingerprint = EXCLUDED.fingerprint, format_version = EXCLUDED.format_version,
-          refresh_after = EXCLUDED.refresh_after, latest_event_at = EXCLUDED.latest_event_at, updated_at = EXCLUDED.updated_at
+          refresh_after = EXCLUDED.refresh_after, latest_event_at = EXCLUDED.latest_event_at, updated_at = EXCLUDED.updated_at,
+          overview_ready = true
         """,
         [
           space_hash,
@@ -369,6 +418,17 @@ defmodule MaveCore.Analytics.Sessions do
         discard_generation(space_hash, generation)
         Repo.rollback(:analytics_unavailable)
     end
+  end
+
+  defp copy_engagement(_space, _bucket, _generation, _previous, _changed, 1), do: :ok
+  defp copy_engagement(_space, _bucket, _generation, nil, _changed, _full), do: :ok
+
+  defp copy_engagement(space, bucket, generation, previous, changed, 0) do
+    params = [space, bucket, generation, previous, changed]
+
+    with {:ok, _} <- ch(OverviewPrepared.copy(), params, 90_000),
+         {:ok, _} <- ch(OverviewPrepared.copy_views(), params, 90_000),
+         do: :ok
   end
 
   defp build_plan!(space, bucket) do
@@ -485,6 +545,18 @@ defmodule MaveCore.Analytics.Sessions do
              "ALTER TABLE analytics_session_reports DELETE WHERE space_hash = {$0:String} SETTINGS mutations_sync = 1",
              [space],
              60_000
+           ),
+         {:ok, _} <-
+           ch(
+             "ALTER TABLE analytics_overview_days DELETE WHERE space_hash = {$0:String} SETTINGS mutations_sync = 1",
+             [space],
+             60_000
+           ),
+         {:ok, _} <-
+           ch(
+             "ALTER TABLE analytics_overview_views DELETE WHERE space_hash = {$0:String} SETTINGS mutations_sync = 1",
+             [space],
+             60_000
            ) do
       Repo.query!("DELETE FROM analytics_session_retirements WHERE space_hash = $1", [space])
       :ok
@@ -591,7 +663,19 @@ defmodule MaveCore.Analytics.Sessions do
     Enum.reduce_while(generations, :ok, fn generation, :ok ->
       with {:ok, _} <- ch(Query.cleanup(), [space, generation], 60_000),
            {:ok, _} <- ch(Query.cleanup_overview(), [space, generation], 60_000),
-           {:ok, _} <- ch(Query.cleanup_reports(), [space, generation], 60_000) do
+           {:ok, _} <- ch(Query.cleanup_reports(), [space, generation], 60_000),
+           {:ok, _} <-
+             ch(
+               "ALTER TABLE analytics_overview_days DROP PARTITION ({$0:String}, {$1:UUID})",
+               [space, generation],
+               60_000
+             ),
+           {:ok, _} <-
+             ch(
+               "ALTER TABLE analytics_overview_views DROP PARTITION ({$0:String}, {$1:UUID})",
+               [space, generation],
+               60_000
+             ) do
         {:cont, :ok}
       else
         _ -> {:halt, {:error, :cleanup_failed}}
@@ -603,7 +687,7 @@ defmodule MaveCore.Analytics.Sessions do
     Application.get_env(:mave_core, :analytics_sessions, []) |> Keyword.get(key, default)
   end
 
-  defp unchanged?([[count, fingerprint, version, refresh_after]], {count, fingerprint}),
+  defp unchanged?([[count, fingerprint, version, refresh_after, true]], {count, fingerprint}),
     do: version == Query.version() and not refresh_due?(refresh_after)
 
   defp unchanged?(_, _), do: false

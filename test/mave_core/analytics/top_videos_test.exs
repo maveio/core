@@ -8,7 +8,8 @@ defmodule MaveCore.Analytics.TopVideosTest do
     previous = Application.get_env(:mave_core, :analytics_sessions)
     Application.put_env(:mave_core, :analytics_sessions, enabled: true)
 
-    for table <- ~w(events analytics_sessions analytics_session_years analytics_session_reports) do
+    for table <-
+          ~w(events analytics_sessions analytics_session_years analytics_session_reports analytics_overview_days analytics_overview_views) do
       ClickHouseRepo.query!("TRUNCATE TABLE #{table}")
     end
 

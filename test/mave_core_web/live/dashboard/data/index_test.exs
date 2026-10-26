@@ -9,6 +9,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
   alias MaveCore.Embeds
   alias MaveCore.Repo
   alias MaveCoreWeb.Dashboard.Data.Index
+  alias MaveCoreWeb.Dashboard.Data.OverviewComponents
   alias Phoenix.LiveView.AsyncResult
 
   setup do
@@ -48,8 +49,10 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
     assert html =~ "Sources"
     assert html =~ "Device"
     assert html =~ "Browser"
-    assert html =~ ~s(id="data-trend")
-    # The default 30-day period includes both views; the earlier one is two days old.
+    assert has_element?(view, "#data-trend .w-1")
+    assert has_element?(view, "#data-trend .bg-blue-500")
+    refute has_element?(view, "#data-trend svg")
+    # The default calendar month includes both views.
     assert view |> element("#data-kpis") |> render() =~ ~r/>\s*2\s*</
     refute html =~ "font-family: 'Sofia'"
   end
@@ -75,15 +78,16 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
     {:ok, view, _html} = live(conn, "/data")
     _ = render_async(view, 5_000)
 
-    view |> element(~s(#data-period-switch a[href="/data?period=24h"])) |> render_click()
-    assert_patch(view, "/data?period=24h")
+    view |> element(~s(#data-period-switch a[href="/data?period=today"])) |> render_click()
+    assert_patch(view, "/data?period=today")
     _ = render_async(view, 5_000)
 
     kpis = view |> element("#data-kpis") |> render()
-    # One view in the last 24 hours against one view 30 hours ago.
-    assert kpis =~ "vs previous 24 hours"
-    assert has_element?(view, ~s(#data-period-switch a[aria-current="page"]), "24 hours")
-    assert has_element?(view, ~s(a[href="/data/top-list?period=24h"]))
+    # One view today against one in the elapsed part of yesterday.
+    assert kpis =~ ~s(title="vs yesterday at the same time")
+    assert kpis =~ "± 0,0%"
+    assert has_element?(view, ~s(#data-period-switch a[aria-current="page"]), "Today")
+    assert has_element?(view, ~s(a[href="/data/top?period=today"]))
   end
 
   test "/data formats analytics counts with dot thousands separators" do
@@ -92,13 +96,13 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
         live_action: :index,
         route_scope: :unscoped,
         current_space: %{id: "space-id"},
-        period: "30d",
+        period: "month",
         data_access_notice: nil,
         analytics_preparing: false,
         data_access_help: nil,
         overview:
           async_ok(%{
-            Overview.empty("30d")
+            Overview.empty("month")
             | current: %{views: 123_456, watch_ms: 0, avg_watch_ms: 0, avg_completion: 0.0},
               devices: [%{device: "desktop", views: 12_345}],
               browsers: [%{browser: "chrome", views: 67_890}]
@@ -117,6 +121,88 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
     refute html =~ "123456"
   end
 
+  test "empty periods do not display negative comparisons" do
+    previous = %{views: 10, watch_ms: 60_000, avg_watch_ms: 6_000, avg_completion: 0.5}
+    current = %{views: 0, watch_ms: 0, avg_watch_ms: 0, avg_completion: 0.0}
+
+    html =
+      render_component(&OverviewComponents.kpis/1,
+        overview: async_ok(%{current: current, previous: previous}),
+        period: "month"
+      )
+
+    refute html =~ "data-metric-delta"
+
+    html =
+      render_component(&OverviewComponents.kpis/1,
+        overview:
+          async_ok(%{
+            current: %{
+              current
+              | views: 5,
+                watch_ms: 30_000,
+                avg_watch_ms: 6_000,
+                avg_completion: 0.25
+            },
+            previous: previous
+          }),
+        period: "month"
+      )
+
+    assert html =~ "▼ 50,0%"
+    assert html =~ "data-metric-delta"
+  end
+
+  test "history uses consistent interactive bars for every period" do
+    for {period, count} <- [{"today", 24}, {"week", 7}, {"month", 31}, {"year", 12}] do
+      overview = Overview.empty(period, ~U[2026-10-26 12:00:00Z])
+
+      overview = %{
+        overview
+        | series: Enum.map(overview.series, &%{&1 | views: 123_456, watch_ms: 5_400_000})
+      }
+
+      html =
+        render_component(&OverviewComponents.trend/1,
+          overview: async_ok(overview),
+          period: period
+        )
+
+      dom = LazyHTML.from_document(html)
+      assert Enum.count(LazyHTML.query(dom, "#data-trend button")) == count
+      labels = Enum.count(LazyHTML.query(dom, "#data-trend-axis > span"))
+      if count <= 12, do: assert(labels == count), else: assert(labels in 4..6)
+      assert Enum.count(LazyHTML.query(dom, "#data-trend button[aria-label*='123.456']")) == count
+      assert Enum.empty?(LazyHTML.query(dom, "#data-trend .truncate"))
+      refute html =~ "Select a bar for details"
+      assert Enum.count(LazyHTML.query(dom, "#data-trend-plot button")) == count
+    end
+  end
+
+  test "history loading skeleton follows each selected calendar period" do
+    for period <- Overview.periods() do
+      expected_count = length(Overview.empty(period).series)
+
+      html =
+        render_component(&OverviewComponents.trend/1,
+          overview: AsyncResult.loading(),
+          period: period
+        )
+
+      dom = LazyHTML.from_document(html)
+
+      assert Enum.count(LazyHTML.query(dom, "#data-trend-loading button[disabled]")) ==
+               expected_count
+
+      assert Enum.count(LazyHTML.query(dom, "#data-trend-plot .data-loading-skeleton")) ==
+               expected_count
+
+      assert Enum.empty?(LazyHTML.query(dom, ".data-history-tooltip"))
+      assert html =~ "h-60"
+      assert html =~ "Loading history"
+    end
+  end
+
   test "/data renders stable, accessible placeholders while analytics load" do
     loading = AsyncResult.loading()
 
@@ -125,7 +211,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
         live_action: :index,
         route_scope: :unscoped,
         current_space: %{id: "space-id"},
-        period: "30d",
+        period: "month",
         data_access_notice: nil,
         analytics_preparing: false,
         data_access_help: nil,

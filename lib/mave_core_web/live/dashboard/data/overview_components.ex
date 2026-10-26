@@ -4,25 +4,19 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
   use MaveCoreWeb, :html
   import MaveCoreWeb.DashboardComponents, except: [icon: 1]
 
+  alias MaveCore.Analytics.Overview
   alias MaveCoreWeb.Formatter
-  alias Phoenix.LiveView.AsyncResult
+  alias Phoenix.LiveView.{AsyncResult, JS}
 
   @period_labels [
-    {"24h", "24 hours"},
-    {"7d", "7 days"},
-    {"30d", "30 days"},
-    {"12m", "12 months"}
+    {"today", "Today"},
+    {"week", "This week"},
+    {"month", "This month"},
+    {"year", "This year"}
   ]
 
-  @chart_width 960
-  @chart_height 200
-  @chart_left 44
-  @chart_right 8
-  @chart_top 12
-  @chart_bottom 26
-
-  attr :period, :string, required: true
-  attr :path, :any, required: true, doc: "function that builds the path for a period"
+  attr(:period, :string, required: true)
+  attr(:path, :any, required: true, doc: "function that builds the path for a period")
 
   def period_switch(assigns) do
     assigns = assign(assigns, :periods, @period_labels)
@@ -49,8 +43,8 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
     """
   end
 
-  attr :overview, AsyncResult, required: true
-  attr :period, :string, required: true
+  attr(:overview, AsyncResult, required: true)
+  attr(:period, :string, required: true)
 
   def kpis(assigns) do
     assigns =
@@ -65,7 +59,8 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
         label={gettext("Views")}
         value={kpi_value(@data, :views)}
         loading={@loading}
-        delta={kpi_delta(@data, :views, @period)}
+        delta={kpi_delta(@data, :views)}
+        delta_title={versus(@period)}
         delta_tone={kpi_tone(@data, :views)}
       />
       <.video_metric_card
@@ -73,7 +68,8 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
         unit={watch_time_unit(@data)}
         value={kpi_value(@data, :watch_ms)}
         loading={@loading}
-        delta={kpi_delta(@data, :watch_ms, @period)}
+        delta={kpi_delta(@data, :watch_ms)}
+        delta_title={versus(@period)}
         delta_tone={kpi_tone(@data, :watch_ms)}
       />
       <.video_metric_card
@@ -81,7 +77,8 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
         unit={gettext("watched")}
         value={kpi_value(@data, :avg_watch_ms)}
         loading={@loading}
-        delta={kpi_delta(@data, :avg_watch_ms, @period)}
+        delta={kpi_delta(@data, :avg_watch_ms)}
+        delta_title={versus(@period)}
         delta_tone={kpi_tone(@data, :avg_watch_ms)}
       />
       <.video_metric_card
@@ -89,35 +86,25 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
         unit={gettext("of each video")}
         value={kpi_value(@data, :avg_completion)}
         loading={@loading}
-        delta={kpi_delta(@data, :avg_completion, @period)}
+        delta={kpi_delta(@data, :avg_completion)}
+        delta_title={gettext("Percentage points") <> " · " <> versus(@period)}
         delta_tone={kpi_tone(@data, :avg_completion)}
       />
     </div>
     """
   end
 
-  attr :overview, AsyncResult, required: true
+  attr(:overview, AsyncResult, required: true)
+  attr(:period, :string, required: true)
 
   def trend(assigns) do
+    assigns = assign(assigns, :loading_chart, chart(Overview.empty(assigns.period)))
+
     ~H"""
     <.video_data_section>
       <.async_result :let={overview} assign={@overview}>
         <:loading>
-          <div
-            id="data-trend-loading"
-            class="h-56 flex items-end gap-2 px-12 pb-8 pt-6"
-            role="status"
-            aria-label={gettext("Loading history")}
-          >
-            <div
-              :for={height <- [42, 67, 52, 78, 58, 86, 70, 47, 62, 38, 55, 31, 64, 49, 72]}
-              class="data-loading-skeleton flex-1 rounded-sm"
-              style={"height: #{height}%"}
-              aria-hidden="true"
-            >
-            </div>
-            <span class="sr-only">{gettext("Loading data")}</span>
-          </div>
+          <.trend_chart chart={@loading_chart} loading />
         </:loading>
         <:failed>
           <div class="py-16 text-center text-sm font-medium text-stone-400">
@@ -130,166 +117,169 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
     """
   end
 
-  attr :chart, :map, required: true
+  attr(:chart, :map, required: true)
+  attr(:loading, :boolean, default: false)
 
   defp trend_chart(assigns) do
     ~H"""
-    <div class="px-4 pt-4 pb-2">
-      <div class="flex items-center justify-end gap-4 px-2 pb-2 text-xs text-stone-400">
-        <span class="flex items-center gap-1.5">
-          <span class="inline-block size-2 rounded-sm bg-blue-500"></span>{gettext("views")}
-        </span>
-        <span class="flex items-center gap-1.5">
-          <span class="inline-block w-3 h-px bg-stone-400"></span>{gettext("watch time")}
+    <div
+      id={if @loading, do: "data-trend-loading", else: "data-trend"}
+      class="w-full h-60 flex flex-col"
+      role={if @loading, do: "status", else: "group"}
+      aria-label={if @loading, do: gettext("Loading history"), else: gettext("Views per period")}
+    >
+      <.plot_chart chart={@chart} loading={@loading} />
+      <span :if={@loading} class="sr-only">{gettext("Loading data")}</span>
+      <span :if={!@loading && @chart.empty?} class="sr-only">{gettext("No views in this period yet")}</span>
+    </div>
+    """
+  end
+
+  attr(:chart, :map, required: true)
+  attr(:loading, :boolean, default: false)
+
+  defp plot_chart(assigns) do
+    ~H"""
+    <div class="flex min-h-0 flex-1 gap-3 px-4 pt-10">
+      <div
+        class="relative w-8 shrink-0 text-xs font-medium tabular-nums text-stone-400"
+        aria-hidden="true"
+      >
+        <span
+          :for={
+            {value, position} <- [
+              {@chart.ceiling, "top-0 -translate-y-1/2"},
+              {@chart.ceiling / 2, "top-1/2 -translate-y-1/2"},
+              {0, "bottom-0 translate-y-1/2"}
+            ]
+          }
+          class={["absolute right-0", position]}
+        >
+          <span :if={@loading} class="data-loading-skeleton block h-3 w-6 rounded-full"></span>
+          <span :if={!@loading}>{axis_number(value)}</span>
         </span>
       </div>
-      <svg
-        id="data-trend"
-        viewBox={"0 0 #{@chart.width} #{@chart.height}"}
-        class="w-full h-auto overflow-visible"
-        role="img"
-        aria-label={gettext("Views and watch time per period")}
+      <div
+        id="data-trend-plot"
+        class="relative flex min-w-0 flex-1 items-end"
+        aria-hidden={@loading && "true"}
       >
-        <g :for={tick <- @chart.ticks}>
-          <line
-            x1={@chart.left}
-            x2={@chart.width - @chart.right}
-            y1={tick.y}
-            y2={tick.y}
-            class="stroke-stone-100"
-          />
-          <text
-            x={@chart.left - 8}
-            y={tick.y + 3}
-            text-anchor="end"
-            class="fill-stone-300 text-[10px]"
-          >
-            {tick.label}
-          </text>
-        </g>
-        <rect
+        <button
           :for={bar <- @chart.bars}
-          x={bar.x}
-          y={bar.y}
-          width={bar.width}
-          height={bar.height}
-          rx="1.5"
-          class={["fill-blue-500", !bar.last && "opacity-60"]}
-          data-views={bar.views}
+          id={"data-trend-bar-#{bar.index}"}
+          type="button"
+          class="group static z-10 flex h-full min-w-0 flex-1 items-end justify-center rounded-sm hover:z-30 focus:z-20 focus:outline-none"
+          aria-label={if !@loading, do: bar.title}
+          disabled={@loading}
+          phx-click={JS.focus(to: "#data-trend-bar-#{bar.index}")}
+          phx-keydown={JS.focus(to: "#data-period-switch a[aria-current]")}
+          phx-key="Escape"
         >
-          <title>{bar.title}</title>
-        </rect>
-        <polyline
-          :if={@chart.line != ""}
-          points={@chart.line}
-          fill="none"
-          class="stroke-stone-400"
-          stroke-width="1.5"
-          stroke-linejoin="round"
-        />
-        <text
-          :for={label <- @chart.labels}
-          x={label.x}
-          y={@chart.height - 6}
-          text-anchor="middle"
-          class="fill-stone-300 text-[10px]"
-        >
-          {label.text}
-        </text>
-      </svg>
-      <p :if={@chart.empty?} class="pb-4 text-center text-sm text-stone-400">
-        {gettext("No views in this period yet")}
-      </p>
+          <span
+            :if={!@loading}
+            aria-hidden="true"
+            class="data-history-tooltip pointer-events-none absolute z-30 w-44 max-w-full rounded-lg bg-white px-3 py-2 text-left text-xs leading-tight shadow-sm shadow-stone-100 ring-1 ring-stone-200/70 opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100"
+            style={"left: clamp(0px, calc(#{bar.position}% - 5.5rem), max(0px, calc(100% - 11rem))); bottom: min(calc(#{bar.height}% + 10px), calc(100% - 80px))"}
+          >
+            <span class="block text-xs text-stone-400">{bar.date_label}</span>
+            <span class="mt-1 block text-sm font-medium text-stone-500">{format_number(bar.views)} {gettext(
+              "views"
+            )}</span>
+            <span class="mt-1 block text-xs text-stone-400">{bar.watch_label} {gettext("watched")}</span>
+          </span>
+          <span
+            aria-hidden="true"
+            class={[
+              "flex h-full w-1 items-end overflow-hidden rounded-full",
+              @loading && "data-loading-skeleton",
+              !@loading && "bg-stone-50"
+            ]}
+          >
+            <span
+              :if={!@loading}
+              class="w-full rounded-full bg-blue-500 transition-colors group-hover:bg-blue-600 group-focus:bg-blue-600"
+              style={"height: #{bar.height}%; min-height: #{if bar.views > 0, do: 2, else: 0}px"}
+            ></span>
+          </span>
+        </button>
+      </div>
+    </div>
+    <div
+      id="data-trend-axis"
+      class="relative ml-[3.75rem] mr-4 h-10 flex-none text-xs font-medium tabular-nums text-stone-400"
+      aria-hidden="true"
+    >
+      <span
+        :for={bar <- @chart.bars}
+        :if={bar.label != ""}
+        class={[
+          "absolute top-3 whitespace-nowrap",
+          !bar.first? && !bar.last? && "-translate-x-1/2",
+          bar.last? && "-translate-x-full"
+        ]}
+        style={"left: #{bar.position}%"}
+      >{bar.label}</span>
     </div>
     """
   end
 
   @doc false
   def chart(%{series: series, bucket: bucket}) do
-    count = max(length(series), 1)
-    plot_width = @chart_width - @chart_left - @chart_right
-    plot_height = @chart_height - @chart_top - @chart_bottom
-    slot = plot_width / count
-    max_views = series |> Enum.map(& &1.views) |> Enum.max(fn -> 0 end) |> nice_max()
-    max_watch = series |> Enum.map(& &1.watch_ms) |> Enum.max(fn -> 0 end)
-    y = fn value, max -> @chart_top + plot_height * (1 - value / max) end
-    last_index = count - 1
+    max_views = max(Enum.max(Enum.map(series, & &1.views), fn -> 0 end), 1)
+    count = length(series)
+    magnitude = trunc(:math.pow(10, floor(:math.log10(max_views))))
+    ceiling = max(ceil(max_views / magnitude) * magnitude, 2)
 
     bars =
       series
       |> Enum.with_index()
       |> Enum.map(fn {point, index} ->
-        top = y.(point.views, max_views)
-
         %{
-          x: Float.round(@chart_left + index * slot + slot * 0.15, 2),
-          y: Float.round(top, 2),
-          width: Float.round(slot * 0.7, 2),
-          height: Float.round(@chart_top + plot_height - top, 2),
+          index: index,
+          first?: index == 0,
+          last?: index == count - 1,
+          position: 100 * (index + 0.5) / count,
           views: point.views,
-          last: index == last_index,
+          date_label: bucket_label(point.start, bucket, :long),
+          watch_label: format_watch_time(point.watch_ms),
+          height: 100 * point.views / ceiling,
+          label:
+            if(axis_tick?(point.start, bucket, index, count),
+              do: bucket_label(point.start, bucket, :short),
+              else: ""
+            ),
           title:
             "#{bucket_label(point.start, bucket, :long)} · #{format_number(point.views)} #{gettext("views")} · #{format_watch_time(point.watch_ms)}"
         }
       end)
 
-    line =
-      if max_watch > 0 do
-        series
-        |> Enum.with_index()
-        |> Enum.map_join(" ", fn {point, index} ->
-          "#{Float.round(@chart_left + index * slot + slot / 2, 2)},#{Float.round(y.(point.watch_ms, max_watch * 1.1), 2)}"
-        end)
-      else
-        ""
-      end
-
     %{
-      width: @chart_width,
-      height: @chart_height,
-      left: @chart_left,
-      right: @chart_right,
-      ticks:
-        Enum.map([0, 0.5, 1], fn share ->
-          value = round(max_views * share)
-          %{y: Float.round(y.(value, max_views), 2), label: format_number(value)}
-        end),
       bars: bars,
-      line: line,
-      labels: axis_labels(series, bucket, slot),
+      ceiling: ceiling,
       empty?: Enum.all?(series, &(&1.views == 0))
     }
   end
 
-  defp axis_labels(series, bucket, slot) do
-    every = max(1, div(length(series), 6))
-    last_index = length(series) - 1
+  defp axis_tick?(_start, _bucket, _index, count) when count <= 12, do: true
+  defp axis_tick?(_start, _bucket, index, count) when index == 0 or index == count - 1, do: true
+  defp axis_tick?(_start, _bucket, index, count) when index < 3 or index > count - 4, do: false
+  defp axis_tick?(start, :day, _index, _count), do: Date.day_of_week(DateTime.to_date(start)) == 1
+  defp axis_tick?(start, :hour, _index, _count), do: rem(start.hour, 6) == 0
 
-    series
-    |> Enum.with_index()
-    |> Enum.filter(fn {_point, index} -> rem(last_index - index, every) == 0 end)
-    |> Enum.map(fn {point, index} ->
-      %{
-        x: Float.round(@chart_left + index * slot + slot / 2, 2),
-        text: bucket_label(point.start, bucket, :short)
-      }
-    end)
+  defp axis_number(value) when value >= 1000 do
+    number = Float.round(value / 1000, 1)
+    format_number(if number == trunc(number), do: trunc(number), else: number) <> "k"
   end
 
-  defp bucket_label(start, :hour, _style), do: Calendar.strftime(start, "%H:00")
+  defp axis_number(value),
+    do: format_number(if value == trunc(value), do: trunc(value), else: value)
+
+  defp bucket_label(start, :hour, :short), do: Calendar.strftime(start, "%H:00")
+  defp bucket_label(start, :hour, :long), do: Calendar.strftime(start, "%-d %b · %H:00")
   defp bucket_label(start, :day, :short), do: Calendar.strftime(start, "%-d %b")
   defp bucket_label(start, :day, :long), do: Calendar.strftime(start, "%a %-d %b")
   defp bucket_label(start, :month, :short), do: Calendar.strftime(start, "%b")
   defp bucket_label(start, :month, :long), do: Calendar.strftime(start, "%B %Y")
-
-  # Rounds the axis maximum up to 1, 2 or 5 times a power of ten.
-  defp nice_max(value) when value <= 4, do: 4
-
-  defp nice_max(value) do
-    magnitude = :math.pow(10, floor(:math.log10(value)))
-    step = Enum.find([1, 2, 5, 10], &(&1 * magnitude >= value))
-    round(step * magnitude)
-  end
 
   defp kpi_value(false, _key), do: "0"
   defp kpi_value(%{current: current}, :views), do: format_number(current.views)
@@ -298,6 +288,8 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
 
   defp kpi_value(%{current: current}, :avg_completion),
     do: "#{round(current.avg_completion * 100)}%"
+
+  defp watch_time_unit(false), do: gettext("hours")
 
   defp watch_time_unit(%{current: %{watch_ms: watch_ms}}) when watch_ms >= 3_600_000,
     do: gettext("hours")
@@ -308,6 +300,9 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
     do: format_number(round(watch_ms / 3_600_000))
 
   defp watch_time_number(watch_ms), do: format_number(round(watch_ms / 60_000))
+
+  defp format_watch_time(watch_ms) when watch_ms >= 36_000_000,
+    do: "#{format_number(round(watch_ms / 3_600_000))} h"
 
   defp format_watch_time(watch_ms) when watch_ms >= 3_600_000,
     do: "#{format_number(Float.round(watch_ms / 3_600_000, 1))} h"
@@ -325,27 +320,31 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
       else: "#{minutes}:#{padded.(seconds)}"
   end
 
-  defp kpi_delta(false, _key, _period), do: nil
+  defp kpi_delta(false, _key), do: nil
+  defp kpi_delta(%{current: %{views: 0}}, _key), do: nil
 
-  defp kpi_delta(%{current: current, previous: previous}, :avg_completion, period) do
+  defp kpi_delta(%{current: current, previous: previous}, :avg_completion) do
     if previous.views == 0 do
       nil
     else
       points = Float.round((current.avg_completion - previous.avg_completion) * 100, 1)
-      "#{arrow(points)} #{format_number(abs(points))} pt #{versus(period)}"
+      format_delta(points)
     end
   end
 
-  defp kpi_delta(%{current: current, previous: previous}, key, period) do
+  defp kpi_delta(%{current: current, previous: previous}, key) do
     case Map.fetch!(previous, key) do
       0 ->
         nil
 
       before ->
         change = Float.round((Map.fetch!(current, key) - before) / before * 100, 1)
-        "#{arrow(change)} #{format_number(abs(change))}% #{versus(period)}"
+        format_delta(change)
     end
   end
+
+  defp format_delta(change) when change == -100, do: nil
+  defp format_delta(change), do: "#{arrow(change)} #{format_number(abs(change))}%"
 
   defp kpi_tone(false, _key), do: :flat
 
@@ -362,15 +361,15 @@ defmodule MaveCoreWeb.Dashboard.Data.OverviewComponents do
   defp arrow(change) when change < 0, do: "▼"
   defp arrow(_change), do: "±"
 
-  defp versus("24h"), do: gettext("vs previous 24 hours")
-  defp versus("7d"), do: gettext("vs previous 7 days")
-  defp versus("30d"), do: gettext("vs previous 30 days")
-  defp versus("12m"), do: gettext("vs previous 12 months")
+  defp versus("today"), do: gettext("vs yesterday at the same time")
+  defp versus("week"), do: gettext("vs the same part of last week")
+  defp versus("month"), do: gettext("vs the same part of last month")
+  defp versus("year"), do: gettext("vs same period last year")
 
-  defp period_label("24 hours"), do: gettext("24 hours")
-  defp period_label("7 days"), do: gettext("7 days")
-  defp period_label("30 days"), do: gettext("30 days")
-  defp period_label("12 months"), do: gettext("12 months")
+  defp period_label("Today"), do: gettext("Today")
+  defp period_label("This week"), do: gettext("This week")
+  defp period_label("This month"), do: gettext("This month")
+  defp period_label("This year"), do: gettext("This year")
 
   defp format_number(number), do: Formatter.format_number(number)
 end

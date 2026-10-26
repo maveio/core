@@ -4,15 +4,18 @@ defmodule MaveCore.Analytics.Overview do
 
   A view is one playback session of one video with at least one second
   watched. Statistics cover a selectable period and are compared with the
-  period of equal length right before it. Times are in UTC.
+  same elapsed portion of the previous calendar period. Weeks start on Monday.
+  Calendar boundaries and times are in UTC.
   """
 
   alias Ecto.Adapters.SQL
+  alias MaveCore.Analytics.OverviewPrepared
+  alias MaveCore.Analytics.Sessions
   alias MaveCore.ClickHouseRepo
   alias MaveCore.SharedStorageSpace
 
-  @periods ~w(24h 7d 30d 12m)
-  @default_period "30d"
+  @periods ~w(today week month year)
+  @default_period "month"
   @min_watch_ms 1_000
   @clickhouse_identifier ~r/^[A-Za-z_][A-Za-z0-9_]*$/
 
@@ -24,7 +27,7 @@ defmodule MaveCore.Analytics.Overview do
 
       {:ok,
        %{
-         period: "30d",
+         period: "month",
          bucket: :day,
          current: %{views: 120, watch_ms: 3_600_000, avg_watch_ms: 30_000, avg_completion: 0.58},
          previous: %{views: 100, ...},
@@ -53,56 +56,108 @@ defmodule MaveCore.Analytics.Overview do
   def window(period, %DateTime{} = now) do
     now = DateTime.truncate(now, :second)
 
-    {bucket, from} =
-      case period do
-        "24h" -> {:hour, now |> start_of(:hour) |> DateTime.add(-23, :hour)}
-        "7d" -> {:day, now |> start_of(:day) |> DateTime.add(-6, :day)}
-        "30d" -> {:day, now |> start_of(:day) |> DateTime.add(-29, :day)}
-        "12m" -> {:month, now |> start_of(:month) |> shift_months(-11)}
-      end
-
-    length = DateTime.diff(now, from)
+    {bucket, from, until, previous_from} = calendar_period(period, now)
+    previous_to = comparison_end(period, now, from, previous_from)
 
     %{
       bucket: bucket,
       from: from,
       to: now,
-      previous_from: DateTime.add(from, -length),
-      buckets: buckets(bucket, from, now)
+      previous_from: previous_from,
+      previous_to: previous_to,
+      buckets: buckets(bucket, from, DateTime.add(until, -1, :second))
     }
   end
 
+  defp calendar_period("today", now) do
+    from = start_of(now, :day)
+    {:hour, from, DateTime.add(from, 1, :day), DateTime.add(from, -1, :day)}
+  end
+
+  defp calendar_period("week", now) do
+    weekday = Date.day_of_week(DateTime.to_date(now))
+    from = DateTime.add(start_of(now, :day), 1 - weekday, :day)
+    {:day, from, DateTime.add(from, 7, :day), DateTime.add(from, -7, :day)}
+  end
+
+  defp calendar_period("month", now) do
+    from = start_of(now, :month)
+    {:day, from, shift_months(from, 1), shift_months(from, -1)}
+  end
+
+  defp calendar_period("year", now) do
+    from = %{start_of(now, :month) | month: 1}
+    {:month, from, shift_months(from, 12), shift_months(from, -12)}
+  end
+
+  defp comparison_end("year", now, _from, _previous_from), do: previous_year(now)
+
+  defp comparison_end(_period, now, from, previous_from) do
+    previous_to = DateTime.add(previous_from, DateTime.diff(now, from))
+    if DateTime.compare(previous_to, from) == :gt, do: from, else: previous_to
+  end
+
   defp query_overview(space_hash, period, window) do
+    if Sessions.enabled?(space_hash) do
+      case Sessions.overview_generations(space_hash) do
+        {:ok, generations} ->
+          run_overview(OverviewPrepared.views_cte(), period, window, [
+            space_hash,
+            generations,
+            window.previous_from,
+            window.to
+          ])
+
+        {:empty, _} ->
+          {:ok, empty(period, window.to)}
+
+        error ->
+          error
+      end
+    else
+      run_overview(views_cte(space_hash, window), period, window, [])
+    end
+  end
+
+  defp run_overview(cte, period, window, params) do
     sql = """
     /* mave_perf:spaces.overview */
-    #{views_cte(space_hash, window)}
-    SELECT
-      'total' AS kind,
-      if(started_at >= #{datetime_literal(window.from)}, 'current', 'previous') AS key,
+    #{cte}
+    SELECT kind,
+      multiIf(kind = 'total', if(started_at >= #{datetime_literal(window.from)}, 'current', 'previous'),
+        kind = 'series', formatDateTime(toDateTime(#{bucket_sql(window.bucket)}(started_at, 'UTC'), 'UTC'), '%Y-%m-%d %H:%i:%S', 'UTC'),
+        kind = 'device', ifNull(device, ''), ifNull(browser, '')) AS key,
       toUInt64(count()) AS views,
-      toInt64(sum(watch_ms)) AS watch_ms,
-      toFloat64(ifNotFinite(avgIf(completion, video_duration > 0), 0)) AS value
+      toInt64(if(kind IN ('total', 'series'), sum(watch_ms), 0)) AS watch_ms,
+      toFloat64(if(kind = 'total', ifNotFinite(avgIf(completion, video_duration > 0), 0), 0)) AS value
     FROM views
-    GROUP BY key
-    UNION ALL
-    SELECT
-      'series' AS kind,
-      formatDateTime(toDateTime(#{bucket_sql(window.bucket)}(started_at, 'UTC'), 'UTC'), '%Y-%m-%d %H:%i:%S', 'UTC') AS key,
-      toUInt64(count()) AS views,
-      toInt64(sum(watch_ms)) AS watch_ms,
-      toFloat64(0) AS value
-    FROM views
-    WHERE started_at >= #{datetime_literal(window.from)}
-    GROUP BY key
-    UNION ALL
-    #{dimension_sql("device", "device", window)}
-    UNION ALL
-    #{dimension_sql("browser", "browser", window)}
+    ARRAY JOIN if(started_at >= #{datetime_literal(window.from)},
+      ['total', 'series', 'device', 'browser'], ['total']) AS kind
+    WHERE started_at >= #{datetime_literal(window.from)} OR started_at < #{datetime_literal(window.previous_to)}
+    GROUP BY kind, key
+    ORDER BY kind, views DESC, key
+    LIMIT 50 BY kind
+    SETTINGS max_threads = 1, max_memory_usage = #{query_limit(:read_memory_bytes, 536_870_912)},
+      max_block_size = 512, preferred_block_size_bytes = 524288,
+      aggregation_memory_efficient_merge_threads = 1,
+      max_bytes_before_external_group_by = 134217728, max_execution_time = 15
     """
 
-    query_clickhouse(sql, {:error, :analytics_unavailable}, fn rows ->
-      {:ok, build_overview(rows, period, window)}
-    end)
+    query_clickhouse(
+      sql,
+      {:error, :analytics_unavailable},
+      fn rows ->
+        {:ok, build_overview(rows, period, window)}
+      end,
+      params
+    )
+  end
+
+  defp query_limit(key, default) do
+    case Keyword.get(Application.get_env(:mave_core, :analytics_sessions, []), key, default) do
+      value when is_integer(value) and value > 0 -> value
+      _ -> default
+    end
   end
 
   # One row per (video, session) with at least one second watched.
@@ -152,22 +207,6 @@ defmodule MaveCore.Analytics.Overview do
       GROUP BY embed_hash, session_id
       HAVING watch_ms >= #{@min_watch_ms}
     )
-    """
-  end
-
-  defp dimension_sql(kind, column, window) do
-    """
-    SELECT
-      #{string_literal(kind)} AS kind,
-      ifNull(#{column}, '') AS key,
-      toUInt64(count()) AS views,
-      toInt64(0) AS watch_ms,
-      toFloat64(0) AS value
-    FROM views
-    WHERE started_at >= #{datetime_literal(window.from)}
-    GROUP BY key
-    ORDER BY views DESC
-    LIMIT 50
     """
   end
 
@@ -247,6 +286,11 @@ defmodule MaveCore.Analytics.Overview do
   defp start_of(%DateTime{} = dt, :day), do: %{start_of(dt, :hour) | hour: 0}
   defp start_of(%DateTime{} = dt, :month), do: %{start_of(dt, :day) | day: 1}
 
+  defp previous_year(%DateTime{} = at) do
+    year = at.year - 1
+    %{at | year: year, day: min(at.day, Calendar.ISO.days_in_month(year, at.month))}
+  end
+
   defp shift_months(%DateTime{year: year, month: month} = dt, months) do
     index = year * 12 + month - 1 + months
     %{dt | year: div(index, 12), month: rem(index, 12) + 1}
@@ -297,8 +341,8 @@ defmodule MaveCore.Analytics.Overview do
   end
 
   # sobelow_skip ["SQL.Query"]
-  defp query_clickhouse(sql, default, mapper) do
-    case SQL.query(ClickHouseRepo, sql, []) do
+  defp query_clickhouse(sql, default, mapper, params) do
+    case SQL.query(ClickHouseRepo, sql, params, timeout: 20_000) do
       {:ok, %{rows: rows}} -> mapper.(rows)
       _ -> default
     end
