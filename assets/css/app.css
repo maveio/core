@@ -236,3 +236,7 @@ input[type=number] {
     radial-gradient(circle at top, rgb(59 130 246 / 0.12), transparent 56%),
     rgb(28 25 23 / 0.96);
 }
+
+#data-trend-plot:has(button:hover) button:not(:hover) .data-history-tooltip {
+  opacity: 0;
+}

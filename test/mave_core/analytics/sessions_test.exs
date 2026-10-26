@@ -14,6 +14,8 @@ defmodule MaveCore.Analytics.SessionsTest do
     ClickHouseRepo.query!("TRUNCATE TABLE analytics_sessions")
     ClickHouseRepo.query!("TRUNCATE TABLE analytics_session_years")
     ClickHouseRepo.query!("TRUNCATE TABLE analytics_session_reports")
+    ClickHouseRepo.query!("TRUNCATE TABLE analytics_overview_days")
+    ClickHouseRepo.query!("TRUNCATE TABLE analytics_overview_views")
     on_exit(fn -> Application.put_env(:mave_core, :analytics_sessions, old || []) end)
     :ok
   end

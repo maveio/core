@@ -50,16 +50,20 @@ Resource limits do not increase the server's available CPU, memory or disk.
 
 Events are divided into sixteen session buckets per space. Each refresh builds
 an immutable generation and publishes its PostgreSQL pointer only after all
-three ClickHouse representations are complete:
+ClickHouse representations are complete:
 
 - `analytics_sessions`: ordered events and paired playback segments.
 - `analytics_session_years`: compact year totals, source dimensions and unique-watch intervals.
 - `analytics_session_reports`: per-video daily watch totals and completion data.
+- `analytics_overview_days`: daily engagement summaries with exact boundary data.
+- `analytics_overview_views`: per-video session totals for reads within a complete interval.
 
 Initial readers require all sixteen current-format pointers, including empty
 buckets. Until then they return `:preparing`; database failures return
 `:analytics_unavailable`. Existing complete generations remain readable during
-refreshes. Failures do not publish partially built data.
+refreshes. Failures do not publish partially built data. The engagement overview
+also waits for its readiness marker; existing prepared reads remain available
+while an older installation builds those additional summaries.
 
 The processor detects new, changed and late events. Future-dated events become
 visible when their time arrives. Cleanup reclaims retired generations after the

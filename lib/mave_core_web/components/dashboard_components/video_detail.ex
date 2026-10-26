@@ -10,14 +10,14 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
   import MaveCoreWeb.DashboardComponents.AnimatedIcon
   alias Phoenix.LiveView.JS
 
-  attr :player_dom_id, :string, required: true
-  attr :tabs, :list, required: true
-  attr :snippet, :string, required: true
-  attr :line_numbers, :list, required: true
-  attr :audio_only, :boolean, default: false
-  attr :change_event, :string, default: "change_code_preview"
-  slot :player, required: true
-  slot :guidance
+  attr(:player_dom_id, :string, required: true)
+  attr(:tabs, :list, required: true)
+  attr(:snippet, :string, required: true)
+  attr(:line_numbers, :list, required: true)
+  attr(:audio_only, :boolean, default: false)
+  attr(:change_event, :string, default: "change_code_preview")
+  slot(:player, required: true)
+  slot(:guidance)
 
   def video_embed_panel(assigns) do
     ~H"""
@@ -45,8 +45,8 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
     """
   end
 
-  attr :tab, :map, required: true
-  attr :change_event, :string, default: "change_code_preview"
+  attr(:tab, :map, required: true)
+  attr(:change_event, :string, default: "change_code_preview")
 
   def video_embed_tab(assigns) do
     ~H"""
@@ -67,7 +67,7 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
     """
   end
 
-  attr :name, :atom, required: true
+  attr(:name, :atom, required: true)
 
   def video_embed_tab_icon(%{name: :script} = assigns) do
     ~H"""
@@ -156,8 +156,8 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
     """
   end
 
-  attr :snippet, :string, required: true
-  attr :line_numbers, :list, required: true
+  attr(:snippet, :string, required: true)
+  attr(:line_numbers, :list, required: true)
 
   def video_snippet(assigns) do
     ~H"""
@@ -308,13 +308,14 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
     |> Phoenix.HTML.safe_to_string()
   end
 
-  attr :token, :string, required: true
-  attr :hook, :string, default: "upload_bridge"
-  attr :dom_id, :string, default: "video-upload-bridge"
+  attr(:token, :string, required: true)
+  attr(:hook, :string, default: "upload_bridge")
+  attr(:dom_id, :string, default: "video-upload-bridge")
 
-  attr :font, :string,
+  attr(:font, :string,
     default:
       "var(--font-sans, Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif)"
+  )
 
   def video_upload_panel(assigns) do
     ~H"""
@@ -508,7 +509,7 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
     """
   end
 
-  attr :audio_only, :boolean, default: false
+  attr(:audio_only, :boolean, default: false)
 
   def video_processing_panel(assigns) do
     ~H"""
@@ -538,12 +539,13 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
     """
   end
 
-  attr :label, :string, required: true
-  attr :value, :string, required: true
-  attr :loading, :boolean, default: false
-  attr :unit, :string, default: nil, doc: "text above the value; defaults to \"views\""
-  attr :delta, :string, default: nil, doc: "optional comparison shown below the value"
-  attr :delta_tone, :atom, values: [:up, :down, :flat], default: :flat
+  attr(:label, :string, required: true)
+  attr(:value, :string, required: true)
+  attr(:loading, :boolean, default: false)
+  attr(:unit, :string, default: nil, doc: "text above the value; defaults to \"views\"")
+  attr(:delta, :string, default: nil, doc: "optional comparison shown below the value")
+  attr(:delta_title, :string, default: nil, doc: "optional explanation for the comparison")
+  attr(:delta_tone, :atom, values: [:up, :down, :flat], default: :flat)
 
   def video_metric_card(assigns) do
     ~H"""
@@ -569,6 +571,7 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
       <div
         :if={@delta && !@loading}
         data-metric-delta={@delta_tone}
+        title={@delta_title}
         class={[
           "px-6 pb-5 text-xs tabular-nums",
           @delta_tone == :up && "text-green-600",
@@ -582,8 +585,8 @@ defmodule MaveCoreWeb.DashboardComponents.VideoDetail do
     """
   end
 
-  attr :label, :string, default: nil
-  slot :inner_block, required: true
+  attr(:label, :string, default: nil)
+  slot(:inner_block, required: true)
 
   def video_data_section(assigns) do
     ~H"""

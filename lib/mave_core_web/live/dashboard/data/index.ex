@@ -82,11 +82,18 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   end
 
   def handle_async(:fetch_overview, {:ok, {:ok, overview}}, socket) do
+    socket = assign(socket, :analytics_preparing, false)
+
     {:noreply,
      socket
      |> assign(:overview, AsyncResult.ok(socket.assigns.overview, overview))
      |> assign(:show_all_devices, false)
      |> assign(:show_all_browsers, false)}
+  end
+
+  def handle_async(:fetch_overview, {:ok, {:error, :preparing}}, socket) do
+    Process.send_after(self(), {:refresh_analytics, socket.assigns.current_space.hash}, 5_000)
+    {:noreply, assign(socket, :analytics_preparing, true)}
   end
 
   def handle_async(:fetch_overview, _result, socket) do
@@ -213,7 +220,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
                 <.subtitle label={gettext("History")} icon="hero-chart-bar" />
               </div>
 
-              <OverviewComponents.trend overview={@overview} />
+              <OverviewComponents.trend overview={@overview} period={@period} />
 
               <.divider />
 
@@ -432,6 +439,13 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   defp route_scope(_params), do: :unscoped
 
   defp period(%{"period" => period}) do
+    period =
+      Map.get(
+        %{"24h" => "today", "7d" => "week", "30d" => "month", "12m" => "year"},
+        period,
+        period
+      )
+
     if period in Overview.periods(), do: period, else: Overview.default_period()
   end
 
