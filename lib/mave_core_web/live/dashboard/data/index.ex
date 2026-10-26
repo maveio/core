@@ -28,7 +28,6 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
      |> assign(:sort, TopListComponents.default_sort())
      |> assign(:direction, "desc")
      |> assign(:top_list_key, nil)
-     |> assign(:expanded_sources, MapSet.new())
      |> assign(:data_access_notice, nil)
      |> assign(:data_access_help, nil)
      |> assign_async_defaults()}
@@ -107,8 +106,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
     {:noreply,
      socket
-     |> assign(:overview, AsyncResult.ok(socket.assigns.overview, overview))
-     |> assign(:expanded_sources, MapSet.new())}
+     |> assign(:overview, AsyncResult.ok(socket.assigns.overview, overview))}
   end
 
   def handle_async(:fetch_overview, {:ok, {:error, :preparing}}, socket) do
@@ -156,18 +154,6 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
-
-  def handle_event("toggle_source", %{"source" => source}, socket)
-      when source in ["device", "browser", "os", "website"] do
-    expanded = socket.assigns.expanded_sources
-
-    expanded =
-      if MapSet.member?(expanded, source),
-        do: MapSet.delete(expanded, source),
-        else: MapSet.put(expanded, source)
-
-    {:noreply, assign(socket, :expanded_sources, expanded)}
-  end
 
   def render(assigns) do
     ~H"""
@@ -266,7 +252,6 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
                 <.source_panel
                   title={gettext("Device")}
                   assign={overview_field(@overview, :devices)}
-                  expanded={MapSet.member?(@expanded_sources, "device")}
                   key_name={:device}
                   empty_icon="device"
                 />
@@ -274,7 +259,6 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
                 <.source_panel
                   title={gettext("Browser")}
                   assign={overview_field(@overview, :browsers)}
-                  expanded={MapSet.member?(@expanded_sources, "browser")}
                   key_name={:browser}
                   empty_icon="browser"
                 />
@@ -282,7 +266,6 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
                 <.source_panel
                   title={gettext("Operating system")}
                   assign={overview_field(@overview, :operating_systems)}
-                  expanded={MapSet.member?(@expanded_sources, "os")}
                   key_name={:os}
                   empty_icon="os"
                   capitalize={false}
@@ -291,7 +274,6 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
                 <.source_panel
                   title={gettext("Websites")}
                   assign={overview_field(@overview, :websites)}
-                  expanded={MapSet.member?(@expanded_sources, "website")}
                   key_name={:website}
                   empty_icon="website"
                   capitalize={false}
@@ -309,7 +291,6 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
   attr :title, :string, required: true
   attr :assign, :any, required: true
-  attr :expanded, :boolean, required: true
   attr :key_name, :atom, required: true
   attr :empty_icon, :string, required: true
   attr :capitalize, :boolean, default: true
@@ -388,25 +369,13 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
             <div class="text-sm font-medium">{gettext("No data yet")}</div>
           </div>
         <% else %>
-          <%= for row <- visible_rows(rows, @key_name, @expanded) do %>
+          <%= for row <- visible_rows(rows, @key_name) do %>
             <div class="flex gap-3 px-3 py-2.5 border-b border-stone-100 last:border-none hover:bg-stone-50 active:bg-blue-50">
               <div class="flex-grow min-w-0 truncate text-sm text-stone-400">
                 {source_label(Map.fetch!(row, @key_name), @capitalize)}
               </div>
               <div class="text-sm text-stone-400 tabular-nums">{format_number(row.views)}</div>
             </div>
-          <% end %>
-          <%= if length(visible_rows(rows, @key_name, false)) < length(visible_rows(rows, @key_name, true)) do %>
-            <button
-              type="button"
-              class="w-full px-3 py-2.5 bg-stone-50 border-t border-stone-100 flex justify-center cursor-pointer hover:bg-stone-100"
-              phx-click="toggle_source"
-              phx-value-source={@empty_icon}
-            >
-              <span class="text-sm text-stone-500 text-opacity-60">
-                {if @expanded, do: gettext("Show less"), else: gettext("Show more")}
-              </span>
-            </button>
           <% end %>
         <% end %>
       </.video_data_section>
@@ -472,14 +441,13 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
   defp format_number(number), do: Formatter.format_number(number)
 
-  defp visible_rows(rows, :browser, expanded?) do
+  defp visible_rows(rows, :browser) do
     rows
     |> Enum.reject(&(&1.browser in ["ie", "firefox", "brave", "opera"] and &1.views == 0))
-    |> visible_rows(nil, expanded?)
+    |> visible_rows(nil)
   end
 
-  defp visible_rows(rows, _key, true), do: rows
-  defp visible_rows(rows, _key, false), do: Enum.take(rows, 5)
+  defp visible_rows(rows, _key), do: Enum.take(rows, 5)
 
   defp source_label(value, true), do: value |> to_string() |> String.capitalize()
   defp source_label(value, false), do: to_string(value)
@@ -498,7 +466,6 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
       AsyncResult.ok(AsyncResult.loading(), Overview.empty(socket.assigns.period))
     )
     |> assign(:top_videos, AsyncResult.ok(AsyncResult.loading(), []))
-    |> assign(:expanded_sources, MapSet.new())
   end
 
   defp data_access_notice(reason) do

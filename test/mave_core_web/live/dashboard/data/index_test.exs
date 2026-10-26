@@ -106,8 +106,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
             | current: %{views: 123_456, watch_ms: 0, avg_watch_ms: 0, avg_completion: 0.0},
               devices: [%{device: "desktop", views: 12_345}],
               browsers: [%{browser: "chrome", views: 67_890}]
-          }),
-        expanded_sources: MapSet.new()
+          })
       }
       |> Index.render()
       |> rendered_to_string()
@@ -214,8 +213,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
         data_access_notice: nil,
         analytics_preparing: false,
         data_access_help: nil,
-        overview: loading,
-        expanded_sources: MapSet.new()
+        overview: loading
       }
       |> Index.render()
       |> rendered_to_string()
@@ -229,13 +227,13 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
     refute html =~ "..."
   end
 
-  test "/data shows engagement and lets long breakdowns expand", %{conn: conn, db_name: db_name} do
+  test "/data shows engagement and only the top five sources", %{conn: conn, db_name: db_name} do
     {conn, space} = authenticated_conn(conn)
 
     values =
-      Enum.map_join(1..7, ",\n", fn n ->
-        session = "00000000-0000-0000-0000-00000000300#{n}"
-        site = "https://site#{n}.example.com/page"
+      Enum.map_join(1..12, ",\n", fn n ->
+        session = "00000000-0000-0000-0000-#{String.pad_leading(to_string(3000 + n), 12, "0")}"
+        site = "https://site#{String.pad_leading(to_string(n), 2, "0")}.example.com/page"
 
         """
         (addSeconds(now64(6), -#{n * 60}), 'play', '#{session}', '#{space.hash}', 'CCCCCCCCCC', 0.0, 10, '#{site}', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple'),
@@ -258,11 +256,11 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
     assert has_element?(view, "#data-hours")
     assert render(view) =~ "Operating system"
 
-    # Seven websites: five are shown until the panel expands.
-    assert render(view) =~ "site1.example.com"
-    refute render(view) =~ "site7.example.com"
-    view |> element(~s(button[phx-value-source="website"])) |> render_click()
-    assert render(view) =~ "site7.example.com"
+    assert render(view) =~ "site01.example.com"
+    refute render(view) =~ "site06.example.com"
+    assert length(Regex.scan(~r/site\d+\.example\.com/, render(view))) == 5
+    refute has_element?(view, ~s(button[phx-click="toggle_source"]))
+    refute render(view) =~ "Show more"
   end
 
   test "/data shows overview and top list tabs", %{conn: conn} do
