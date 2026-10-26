@@ -795,6 +795,26 @@ defmodule MaveCore.Embeds do
 
   defp maybe_broadcast_embed_updated(result, _payload), do: result
 
+  @doc """
+  Maps embed hashes of the space's video embeds to their dashboard id and
+  display name. Deleted embeds and unknown hashes are left out.
+  """
+  @spec dashboard_videos_by_hash(Space.t(), [String.t()]) :: %{
+          String.t() => %{id: String.t(), name: String.t()}
+        }
+  def dashboard_videos_by_hash(%Space{}, []), do: %{}
+
+  def dashboard_videos_by_hash(%Space{id: space_id}, hashes) when is_list(hashes) do
+    Embed
+    |> where([embed], embed.space_id == ^space_id and embed.hash in ^hashes)
+    |> where([embed], embed.type == :video and is_nil(embed.deleted_at))
+    |> preload(asset: [:current_video])
+    |> Repo.all()
+    |> Map.new(fn embed ->
+      {embed.hash, %{id: dashboard_embed_id(embed), name: embed_name(embed)}}
+    end)
+  end
+
   @spec dashboard_embed_id(Embed.t()) :: String.t()
   def dashboard_embed_id(%Embed{id: id}) when is_binary(id), do: id
 

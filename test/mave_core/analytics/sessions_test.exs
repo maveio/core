@@ -32,6 +32,25 @@ defmodule MaveCore.Analytics.SessionsTest do
     assert {:ok, 0} = Sessions.refresh_changed(limit: 32)
   end
 
+  test "top videos use prepared sessions, preserve ordering and exclude short watches" do
+    pair(1, "AAAAA", "popular", 20, 25, 0, 5)
+    pair(2, "AAAAA", "popular", 20, 22, 0, 2)
+    pair(3, "AAAAA", "second", 20, 22, 0, 2)
+    pair(4, "AAAAA", "short", 20, 20, 0, 0)
+    pair(5, "BBBBB", "other", 20, 25, 0, 5)
+
+    assert {:ok, expected} = Analytics.space_top_videos("AAAAA")
+    Application.put_env(:mave_core, :analytics_sessions, enabled: true)
+    assert {:error, :preparing} = Analytics.space_top_videos("AAAAA")
+    assert {:ok, _} = Sessions.refresh_changed(limit: 32)
+
+    # Reads must continue to work without rescanning the raw events.
+    ClickHouseRepo.query!("TRUNCATE TABLE events")
+    assert {:ok, ^expected} = Analytics.space_top_videos("AAAAA")
+    assert {:ok, [%{embed_hash: "popular", views: 2}]} = Analytics.space_top_videos("AAAAA", 1)
+    assert {:ok, []} = Analytics.space_top_videos("trial")
+  end
+
   test "bounded rounds eventually prepare all spaces without starving later buckets" do
     pair(1, "AAAAA", "first", 20, 25, 0, 5)
     pair(2, "BBBBB", "second", 20, 25, 0, 5)

@@ -23,6 +23,10 @@ defmodule MaveCoreWeb.DashboardRoutes do
     path_for(space_or_user, "/data", [], opts)
   end
 
+  def data_top_list_path(space_or_user, opts \\ []) do
+    path_for(space_or_user, "/data/top", [], opts)
+  end
+
   def settings_path(space_or_user, tab \\ nil, opts \\ []) do
     suffix =
       case tab do

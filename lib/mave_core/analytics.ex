@@ -118,6 +118,95 @@ defmodule MaveCore.Analytics do
       else: space_data(space_hash)
   end
 
+  @doc "Returns the space's most viewed videos this year, ordered by views."
+  def space_top_videos(space_hash, limit \\ 25)
+
+  def space_top_videos(space_hash, limit)
+      when is_binary(space_hash) and is_integer(limit) and limit > 0 do
+    now = DateTime.utc_now()
+    from = DateTime.new!(Date.new!(now.year, 1, 1), ~T[00:00:00], "Etc/UTC")
+    space_top_videos(space_hash, from, now, limit)
+  end
+
+  def space_top_videos(_space_hash, _limit), do: {:error, :invalid_space_hash}
+
+  @doc "Returns ranked per-video views for an explicit UTC interval `[from, to)`."
+  def space_top_videos(space_hash, from, to, limit \\ 25)
+
+  def space_top_videos(space_hash, %DateTime{} = from, %DateTime{} = to, limit)
+      when is_integer(limit) and limit in 1..250 do
+    with {:ok, space_hash} <- parse_space_hash(space_hash),
+         true <- DateTime.diff(to, from) in 1..(732 * 86_400) do
+      cond do
+        SharedStorageSpace.hash?(space_hash) -> {:ok, []}
+        Sessions.enabled?(space_hash) -> Sessions.top_videos(space_hash, from, to, limit)
+        true -> do_space_top_videos(space_hash, from, to, limit)
+      end
+    else
+      false -> {:error, :invalid_range}
+      error -> error
+    end
+  end
+
+  def space_top_videos(_space_hash, _from, _to, _limit), do: {:error, :invalid_range}
+
+  defp do_space_top_videos(space_hash, from, to, limit) do
+    db_name = clickhouse_database_name()
+    threshold = @min_watch_seconds * 1_000_000
+
+    sql = """
+    /* mave_perf:spaces.top_videos */
+    WITH ordered AS (
+      SELECT
+        embed_hash,
+        session_id,
+        timestamp,
+        name,
+        leadInFrame(timestamp) OVER (
+          PARTITION BY embed_hash, session_id
+          ORDER BY timestamp
+          ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        ) AS next_ts,
+        leadInFrame(name) OVER (
+          PARTITION BY embed_hash, session_id
+          ORDER BY timestamp
+          ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        ) AS next_name
+      FROM #{db_name}.events
+      PREWHERE space_hash = #{string_literal(space_hash)}
+      WHERE name IN ('play', 'pause')
+    ),
+    session_aggregates AS (
+      SELECT
+        embed_hash,
+        session_id,
+        sumIf(
+          greatest(toInt64(0), dateDiff('microsecond',
+            greatest(timestamp, #{datetime_literal(from)}),
+            least(next_ts, #{datetime_literal(to)}))),
+          name = 'play' AND next_name = 'pause'
+        ) AS watch_us
+      FROM ordered
+      GROUP BY embed_hash, session_id
+    )
+    SELECT
+      embed_hash,
+      countIf(watch_us >= #{threshold}) AS views
+    FROM session_aggregates
+    GROUP BY embed_hash
+    HAVING views > 0
+    ORDER BY views DESC, embed_hash ASC
+    LIMIT #{limit}
+    """
+
+    query_clickhouse(sql, {:error, :analytics_unavailable}, fn rows ->
+      {:ok,
+       Enum.map(rows, fn [embed_hash, views] ->
+         %{embed_hash: embed_hash, views: to_int(views)}
+       end)}
+    end)
+  end
+
   def space_monthly_watch_time(space_hash) when is_binary(space_hash) do
     with {:ok, space_hash} <- parse_space_hash(space_hash) do
       if SharedStorageSpace.hash?(space_hash) do

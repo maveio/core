@@ -111,6 +111,58 @@ defmodule MaveCore.Analytics.Sessions.Query do
     "SELECT countIf(complete = 0) FROM analytics_session_reports PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}"
   end
 
+  def top_videos do
+    # Route whole sessions to detail when necessary: splitting a session between
+    # compact and detail results could apply the one-second threshold twice.
+    detail_condition = """
+    complete = 0 OR session_id IN future_sessions OR arrayExists(d ->
+      (d.2 = toDate({$2:DateTime64(6)}, 'UTC')
+        AND {$2:DateTime64(6)} != toDateTime64(toDate({$2:DateTime64(6)}, 'UTC'), 6, 'UTC'))
+      OR (d.2 = toDate({$3:DateTime64(6)}, 'UTC')
+        AND {$3:DateTime64(6)} != toDateTime64(toDate({$3:DateTime64(6)}, 'UTC'), 6, 'UTC')), days)
+    """
+
+    """
+    /* mave_perf:sessions.top_videos */
+    WITH future_sessions AS (
+      SELECT session_id FROM analytics_sessions
+      PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}
+      WHERE isNotNull(future_at)
+    ), detail_sessions AS (
+      SELECT session_id FROM analytics_session_reports
+      PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}
+      WHERE #{detail_condition}
+    ), compact AS (
+      SELECT arrayFilter(d -> d.2 >= toDate({$2:DateTime64(6)}, 'UTC')
+        AND d.2 < toDate({$3:DateTime64(6)}, 'UTC'), days) AS selected,
+        arrayReduce('sumMap', arrayMap(d -> [d.1], selected),
+          arrayMap(d -> [d.3], selected)) AS watched
+      FROM analytics_session_reports
+      PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}
+      WHERE NOT (#{detail_condition})
+    ), detail AS (
+      SELECT arrayFilter(s -> s.3 > s.2 AND s.3 > {$2:DateTime64(6)}
+        AND s.2 < {$3:DateTime64(6)}, segments) AS selected,
+        arrayReduce('sumMap', arrayMap(s -> [s.1], selected),
+          arrayMap(s -> [dateDiff('microsecond', greatest(s.2, {$2:DateTime64(6)}),
+            least(s.3, {$3:DateTime64(6)}))], selected)) AS watched
+      FROM analytics_sessions
+      PREWHERE space_hash = {$0:String} AND generation IN {$1:Array(UUID)}
+        AND session_id IN detail_sessions
+    ), session_views AS (
+      SELECT arrayZip(watched.1, watched.2) AS videos FROM compact
+      UNION ALL
+      SELECT arrayZip(watched.1, watched.2) AS videos FROM detail
+    )
+    SELECT video.1, countIf(video.2 >= 1000000) AS views
+    FROM session_views ARRAY JOIN videos AS video
+    GROUP BY video.1 HAVING views > 0
+    ORDER BY views DESC, video.1 ASC LIMIT {$4:UInt32}
+    SETTINGS max_threads = #{limit(:query_threads, 2)},
+      max_memory_usage = #{limit(:read_memory_bytes, 536_870_912)}, max_execution_time = 15
+    """
+  end
+
   def report_range(granularity) when granularity in [:day, :week, :month] do
     range_query(report_pieces(granularity), :series, "analytics_session_reports")
   end
