@@ -25,9 +25,11 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
      |> assign(:settings_open, false)
      |> assign(:route_scope, :unscoped)
      |> assign(:period, Overview.default_period())
+     |> assign(:sort, TopListComponents.default_sort())
+     |> assign(:direction, "desc")
+     |> assign(:top_list_key, nil)
      |> assign(:show_all_devices, false)
      |> assign(:show_all_browsers, false)
-     |> assign(:sort, TopListComponents.default_sort())
      |> assign(:data_access_notice, nil)
      |> assign(:data_access_help, nil)
      |> assign_async_defaults()}
@@ -35,7 +37,16 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
   def handle_params(params, _url, socket) do
     space = socket.assigns.current_space
-    socket = assign(socket, period: period(params), sort: sort(params))
+    period = period(params)
+    sort = sort(params)
+    direction = direction(params)
+
+    sort_only? =
+      socket.assigns.live_action == :top_list and
+        (sort != socket.assigns.sort or direction != socket.assigns.direction) and
+        socket.assigns[:top_list_key] == {space.hash, period}
+
+    socket = assign(socket, period: period, sort: sort, direction: direction)
 
     socket =
       case UsageLimits.can_view_space_data?(space) do
@@ -43,7 +54,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
           socket
           |> assign(:data_access_notice, nil)
           |> assign(:data_access_help, nil)
-          |> start_tab_fetch(socket.assigns.live_action, space)
+          |> maybe_start_tab_fetch(space, sort_only?)
 
         {:error, reason} ->
           socket
@@ -55,24 +66,32 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
     {:noreply, assign(socket, :route_scope, route_scope(params))}
   end
 
+  defp maybe_start_tab_fetch(socket, _space, true), do: socket
+
+  defp maybe_start_tab_fetch(socket, space, false),
+    do: start_tab_fetch(socket, socket.assigns.live_action, space)
+
   defp start_tab_fetch(socket, :top_list, space) do
-    %{period: period, sort: sort} = socket.assigns
+    period = socket.assigns.period
 
     socket
     |> assign(:top_videos, AsyncResult.loading())
-    |> start_async(:fetch_top_videos, fn -> fetch_top_videos(space, period, sort) end)
+    |> assign(:top_list_key, {space.hash, period})
+    |> start_async(:fetch_top_videos, fn -> fetch_top_videos(space, period) end)
   end
 
   defp start_tab_fetch(socket, _overview, space) do
     period = socket.assigns.period
 
     socket
+    |> assign(:top_list_key, nil)
     |> assign_async_defaults()
     |> start_async(:fetch_overview, fn -> Overview.space_overview(space.hash, period) end)
   end
 
-  defp fetch_top_videos(space, period, sort) do
-    with {:ok, rows} <- Overview.top_videos(space.hash, period, @top_list_query_size) do
+  defp fetch_top_videos(space, period) do
+    with {:ok, rows} <-
+           Overview.top_videos(space.hash, period, @top_list_query_size) do
       videos = Embeds.dashboard_videos_by_hash(space, Enum.map(rows, & &1.embed_hash))
 
       top_videos =
@@ -80,7 +99,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
             Map.has_key?(videos, hash),
             do: Map.merge(row, videos[hash])
 
-      {:ok, top_videos |> Enum.take(@top_list_size) |> TopListComponents.sort(sort)}
+      {:ok, Enum.take(top_videos, @top_list_size)}
     end
   end
 
@@ -210,7 +229,8 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
                 current_space={@current_space}
                 route_scope={@route_scope}
                 sort={@sort}
-                sort_path={&top_list_path(assigns, @period, &1)}
+                direction={@direction}
+                sort_path={&top_list_path(assigns, @period, &1, &2)}
               />
             <% else %>
               <OverviewComponents.kpis overview={@overview} period={@period} />
@@ -385,7 +405,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   defp period(_params), do: Overview.default_period()
 
   defp period_path(%{live_action: :top_list} = assigns, period),
-    do: top_list_path(assigns, period, assigns.sort)
+    do: top_list_path(assigns, period, assigns.sort, assigns.direction)
 
   defp period_path(assigns, period) do
     DashboardRoutes.data_path(assigns.current_space,
@@ -394,11 +414,12 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
     )
   end
 
-  defp top_list_path(assigns, period, sort) do
+  defp top_list_path(assigns, period, sort, direction) do
     DashboardRoutes.data_top_list_path(assigns.current_space,
       scope: assigns.route_scope,
       period: period_param(period),
-      sort: if(sort != TopListComponents.default_sort(), do: sort)
+      sort: if(sort != TopListComponents.default_sort(), do: sort),
+      direction: if(direction == "asc", do: direction)
     )
   end
 
@@ -407,6 +428,9 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   end
 
   defp sort(_params), do: TopListComponents.default_sort()
+
+  defp direction(%{"direction" => "asc"}), do: "asc"
+  defp direction(_params), do: "desc"
 
   # Keeps URLs for the default period free of a query string.
   defp period_param(period) do
@@ -443,6 +467,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
   defp assign_empty_stats(socket) do
     socket
+    |> assign(:top_list_key, nil)
     |> assign(
       :overview,
       AsyncResult.ok(AsyncResult.loading(), Overview.empty(socket.assigns.period))

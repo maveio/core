@@ -71,7 +71,7 @@ defmodule MaveCore.Analytics.OverviewPrepared do
   def views_cte do
     """
     WITH compact AS (
-      SELECT first_at AS started_at,device,browser,duration AS video_duration,furthest,watch_ms
+      SELECT embed_hash,first_at AS started_at,device,browser,duration AS video_duration,furthest,watch_ms
       FROM analytics_overview_views
       PREWHERE space_hash={$0:String} AND generation IN {$1:Array(UUID)}
         AND first_at>={$2:DateTime64(6)} AND first_at<{$3:DateTime64(6)}
@@ -99,9 +99,9 @@ defmodule MaveCore.Analytics.OverviewPrepared do
     ), eligible AS (
       SELECT * FROM compact
       UNION ALL
-      SELECT started_at,device,browser,video_duration,furthest,watch_ms FROM per_video
+      SELECT embed_hash,started_at,device,browser,video_duration,furthest,watch_ms FROM per_video
     ), views AS (
-      SELECT started_at,nullIf(device,'') AS device,nullIf(browser,'') AS browser,
+      SELECT embed_hash,started_at,nullIf(device,'') AS device,nullIf(browser,'') AS browser,
         video_duration,watch_ms,if(video_duration>0,least(1,furthest/video_duration),0) AS completion
       FROM eligible WHERE watch_ms>=1000
     )

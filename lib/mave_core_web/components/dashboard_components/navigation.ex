@@ -644,7 +644,7 @@ defmodule MaveCoreWeb.DashboardComponents.Navigation do
   # Fallback for hero-* icons
   defp subtitle_icon(%{name: "hero-" <> _rest} = assigns) do
     ~H"""
-    <div class="mr-2.5 pb-0.5 text-blue-400">
+    <div class="mr-2.5 flex items-center pb-0.5 text-blue-400">
       <.icon name={@name} class="w-5 h-5" />
     </div>
     """
