@@ -158,9 +158,7 @@ services:
     restart: unless-stopped
 
   upload:
-    image: mave-tusd:local
-    build:
-      context: ../tusd
+    image: tusproject/tusd:v2.5.0
     command:
       - -port=1080
       - -behind-proxy=true

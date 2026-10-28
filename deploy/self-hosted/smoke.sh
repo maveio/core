@@ -13,8 +13,8 @@ usage() {
     '' \
     'Builds Core, then tests a fresh, isolated self-hosted installation.' \
     'Use --image to test an already-built local image without rebuilding.' \
-    'Requires Docker Compose v2 with !reset support, openssl and Git.' \
-    'No host ports, existing .env, development data or SaaS services are used.'
+    'Requires Docker Compose v2 with !reset support, Python 3, openssl and Git.' \
+    'Uses a temporary localhost upload port; no existing .env, development data or SaaS services.'
 }
 
 while [ "$#" -gt 0 ]; do
@@ -25,7 +25,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-for command in docker openssl git; do
+for command in docker openssl git python3; do
   command -v "$command" >/dev/null 2>&1 || {
     printf 'Required command not found: %s\n' "$command" >&2
     exit 1
@@ -53,7 +53,6 @@ network_created=false
 stack_started=false
 cp "$script_dir/compose.yml" "$script_dir/compose.smoke.yml" "$script_dir/Caddyfile" "$smoke_dir/"
 cp -R "$script_dir/../minio" "$smoke_dir/minio"
-cp -R "$script_dir/../tusd" "$smoke_dir/tusd"
 cp -R "$script_dir/../trust" "$smoke_dir/trust"
 # The private umask must not hide public trust files from non-root containers.
 chmod 755 "$smoke_dir/trust"
@@ -139,6 +138,7 @@ caddy_ip=$(printf '%s\n' "$gateway" | awk -F. 'NF == 4 && $4 + 10 < 255 {print $
 } >"$smoke_dir/.env"
 
 compose config --quiet
+python3 "$script_dir/upload_smoke.py"
 # Refuse even an extremely unlikely project-name collision before touching data.
 [ -z "$(compose ps --all --quiet)" ] || {
   printf 'Refusing to reuse existing project %s.\n' "$run_id" >&2

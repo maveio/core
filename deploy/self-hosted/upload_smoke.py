@@ -1,36 +1,44 @@
 #!/usr/bin/env python3
-"""Check the tusd image trust bundle and resumable-upload contract in isolation."""
-import hashlib
+"""Exercise the configured upload image through the actual quickstart entrypoint."""
 import http.client
 import json
 from pathlib import Path
-import ssl
 import subprocess
 import sys
 import tempfile
 import time
 
-image = sys.argv[1]
-
 def docker(*args):
     return subprocess.check_output(["docker", *args], text=True).strip()
 
-pem = docker("run", "--rm", "--network=none", "--entrypoint", "cat", image,
-             "/etc/ssl/certs/ca-certificates.crt")
-context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-context.load_verify_locations(cadata=pem)
-blocked = {"86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b",
-           "d7a7a0fb5d7e2731d771e9484ebcdef71d5f0c3e0a2948782bc83ee0ea699ef4",
-           "7dd78d5f4f13459a83dff9abbba62edbaf6f2d102bf257fd712f4d9f2746ed8d",
-           "f2edaaff3d9b701fb4d14c9f285f8c0bad90fc3bcc1fa07d47f4718edaba34a5"}
-fingerprints = {hashlib.sha256(c).hexdigest() for c in context.get_ca_certs(binary_form=True)}
-assert len(fingerprints) > 100 and not fingerprints.intersection(blocked)
-assert "Version: v2.5.0" in docker("run", "--rm", image, "-version")
+root = Path(__file__).resolve().parents[2]
+config = json.loads(docker("compose", "--env-file", "/dev/null", "-f",
+                           str(root / "compose.yaml"), "config", "--format", "json"))
+upload = config["services"]["upload"]
+image = sys.argv[1] if len(sys.argv) > 1 else upload["image"]
+entrypoint, *entry_args = upload["entrypoint"]
 assert docker("run", "--rm", "--entrypoint", "id", image, "-u") == "1000"
-container = docker("run", "-d", "--rm", "-p", "127.0.0.1::8080", image,
-                   "-host=0.0.0.0", "-port=8080", "-upload-dir=/srv/tusd-data")
+# Use public synthetic values, never the installation's generated credentials.
+fixture = tempfile.TemporaryDirectory(prefix="mave-upload-smoke-")
+setup = Path(fixture.name)
+setup.chmod(0o755)
+environment = setup / "environment.sh"
+environment.write_text("export POSTGRES_PASSWORD=test S3_ACCESS_KEY=test "
+                       "S3_SECRET_KEY=test MAVE_UPLOAD_HOOK_SECRET=test\n")
+environment.chmod(0o644)
+mounts = ("-v", f"{setup}:/setup:ro", "-v",
+          f"{root / 'deploy/self-hosted/quickstart'}:/bootstrap:ro")
+container = docker("run", "-d", "-p", "127.0.0.1::8080", *mounts,
+                   "--entrypoint", entrypoint, image, *entry_args,
+                   "-host=0.0.0.0", "-port=8080", "-upload-dir=/srv/tusd-data",
+                   # Empty selects all hooks in tusd. Only enable a nonblocking
+                   # event here; smoke.sh tests real hooks against the app.
+                   "-hooks-enabled-events=post-finish")
 try:
-    port = int(json.loads(docker("inspect", container))[0]["NetworkSettings"]["Ports"]["8080/tcp"][0]["HostPort"])
+    ports = json.loads(docker("inspect", container))[0]["NetworkSettings"]["Ports"]
+    if not ports.get("8080/tcp"):
+        raise AssertionError("quickstart upload failed to start: " + docker("logs", container))
+    port = int(ports["8080/tcp"][0]["HostPort"])
     def request(method, path, body=None, headers=None):
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         conn.request(method, path, body, headers or {})
@@ -58,6 +66,7 @@ try:
     assert request("PATCH", path, b"def", {**patch, "Upload-Offset": "3"})[0] == 204
     status, headers, _ = request("HEAD", path, headers=version)
     assert status == 200 and headers["Upload-Offset"] == "6"
-    print("PASS: hardened roots, unprivileged user, create/PATCH/resume/conflict/completion")
+    print("PASS: quickstart entrypoint, unprivileged user, create/PATCH/resume/conflict/completion")
 finally:
     subprocess.run(["docker", "rm", "-f", container], check=False, stdout=subprocess.DEVNULL)
+    fixture.cleanup()

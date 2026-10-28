@@ -7,9 +7,6 @@ services:
   storage-init:
     build:
       context: ./minio
-  upload:
-    build:
-      context: ./tusd
   clickhouse:
     volumes:
       - ./trust:/etc/mave-ca:ro
