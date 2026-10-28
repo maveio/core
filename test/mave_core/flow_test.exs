@@ -4342,7 +4342,7 @@ defmodule MaveCore.FlowTest do
 
     assert template_count == 1
     assert version_count == 1
-    assert definition["encoding_booster_contract"] == "mave-production-v2"
+    assert definition["encoding_booster_contract"] == "mave-production-v3"
     assert "clip_h264_sd_keyframes" in step_ids
     assert "clip_h264_hd_keyframes" in step_ids
     assert "clip_h264_fhd_keyframes" in step_ids

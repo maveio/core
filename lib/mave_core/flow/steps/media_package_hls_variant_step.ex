@@ -12,7 +12,7 @@ defmodule MaveCore.Flow.Steps.MediaPackageHlsVariantStep do
   alias MaveCore.EncodingBooster
   alias MaveCore.EncodingBooster.HLSUpload
   alias MaveCore.Flow.Steps.Support, as: StepSupport
-  alias MaveCore.Media.Storage
+  alias MaveCore.Media.{HlsBandwidth, Storage}
 
   @variant_profiles %{
     "sd" => %{bandwidth: 3_000_000, resolution: "842x480"},
@@ -223,7 +223,8 @@ defmodule MaveCore.Flow.Steps.MediaPackageHlsVariantStep do
           prefix <> "playlist.m3u8",
           package_context.bucket,
           variant_dir,
-          map_get(package_context.video_output, "resolution")
+          map_get(package_context.video_output, "resolution"),
+          booster_bandwidth(package_context, files)
         )
 
       output =
@@ -237,6 +238,23 @@ defmodule MaveCore.Flow.Steps.MediaPackageHlsVariantStep do
     else
       false -> {:error, :hls_direct_upload_unsupported}
       {:error, _reason} = error -> error
+    end
+  end
+
+  defp booster_bandwidth(package_context, files) do
+    playlist = Enum.find(files, &(&1["name"] == "playlist.m3u8"))
+
+    with %{"file_size" => size, "key" => key} when size > 0 and size <= 1024 * 1024 <- playlist,
+         {:ok, body} <-
+           package_context.storage_adapter.get_prefix(
+             package_context.bucket,
+             key,
+             package_context.region,
+             size
+           ) do
+      HlsBandwidth.measure(body, files)
+    else
+      _ -> %{}
     end
   end
 
@@ -499,12 +517,13 @@ defmodule MaveCore.Flow.Steps.MediaPackageHlsVariantStep do
          playlist_key,
          package_context.bucket,
          package_context.variant_dir,
-         Map.get(package_context, :resolution) || probe_video_resolution(input_path)
+         Map.get(package_context, :resolution) || probe_video_resolution(input_path),
+         HlsBandwidth.measure(File.read!(Path.join(hls_dir, "playlist.m3u8")), files)
        )}
     end
   end
 
-  defp packaged_variant(files, playlist_key, bucket, variant_dir, resolution) do
+  defp packaged_variant(files, playlist_key, bucket, variant_dir, resolution, bandwidth) do
     total_size = Enum.reduce(files, 0, fn file, acc -> acc + file["file_size"] end)
     segment_count = Enum.count(files, &String.ends_with?(&1["name"], ".m4s"))
 
@@ -518,6 +537,7 @@ defmodule MaveCore.Flow.Steps.MediaPackageHlsVariantStep do
       variant_dir: variant_dir,
       resolution: resolution
     }
+    |> Map.merge(bandwidth)
   end
 
   defp probe_video_resolution(input_path) do
@@ -741,7 +761,8 @@ defmodule MaveCore.Flow.Steps.MediaPackageHlsVariantStep do
       "container" => "hls",
       "bucket" => packaged.bucket,
       "variant_dir" => variant_dir,
-      "bandwidth" => profile.bandwidth,
+      "bandwidth" => Map.get(packaged, :bandwidth, profile.bandwidth),
+      "average_bandwidth" => Map.get(packaged, :average_bandwidth),
       "resolution" => packaged.resolution || profile.resolution,
       "playlist_key" => packaged.playlist_key,
       "playlist_uri" => packaged.playlist_uri,

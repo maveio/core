@@ -104,7 +104,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStepTest do
 
     assert_receive {:video_booster_request, input_url, options}
     assert input_url =~ "mave-upload/qingb/source.mp4"
-    assert options[:encoding_profile] == "mave-production-v2"
+    assert options[:encoding_profile] == "mave-production-v3"
     assert options[:codec] == "h264"
     assert options[:width] == 640
     assert options[:video_bitrate] == "2M"
@@ -209,7 +209,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStepTest do
     assert_receive {:video_booster_request, input_url, options}
     assert input_url =~ "mave-upload/qingb/source.mp4"
     refute input_url =~ "space-qingb/video12345/v1/h264_hd.mp4"
-    assert options[:encoding_profile] == "mave-production-v2"
+    assert options[:encoding_profile] == "mave-production-v3"
     assert options[:video_bitrate] == "4M"
     assert options[:video_crf] == 23
     assert options[:preset] == "medium"
@@ -337,7 +337,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStepTest do
       assert_receive {:video_booster_request, input_url, options}
       assert input_url =~ "mave-upload/qingb/source.mp4"
       refute input_url =~ "space-qingb/video12345/v1/h264_hd.mp4"
-      assert options[:encoding_profile] == "mave-production-v2"
+      assert options[:encoding_profile] == "mave-production-v3"
       assert options[:include_audio] == false
       refute Keyword.has_key?(options, :video_bitrate)
 

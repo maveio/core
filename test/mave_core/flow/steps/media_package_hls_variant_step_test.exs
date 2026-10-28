@@ -20,7 +20,8 @@ defmodule MaveCore.Flow.Steps.MediaPackageHlsVariantStepTest do
 
       files = [
         {"init.mp4", "init", "video/mp4"},
-        {"playlist.m3u8", "#EXTM3U\n", "application/vnd.apple.mpegurl"},
+        {"playlist.m3u8", "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6.000,\nsegment_000.m4s\n",
+         "application/vnd.apple.mpegurl"},
         {"segment_000.m4s", "segment", "video/mp4"}
       ]
 
@@ -112,6 +113,8 @@ defmodule MaveCore.Flow.Steps.MediaPackageHlsVariantStepTest do
     assert output["status"] == "ok"
     assert output["mode"] == "encoding_booster"
     assert output["encoding_booster_elapsed_ms"] == 12
+    assert output["bandwidth"] == 10
+    assert output["average_bandwidth"] == 10
     assert output["encoding_booster_instance"] == "cpu-hls-a"
     assert output["playlist_key"] == "LeDE9v86ye/h264_hd_hls/playlist.m3u8"
     assert [%{name: "h264_hd_hls_playlist"}] = artifacts

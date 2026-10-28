@@ -18,6 +18,44 @@ defmodule MaveCore.Flow.Steps.MediaBuildHlsMasterStepTest do
     :ok
   end
 
+  test "advertises measured video rates including the largest selectable audio track" do
+    variants = %{
+      "hls_hd" => %{
+        "step_type" => "media.package_hls_variant",
+        "status" => "ok",
+        "codec" => "h264",
+        "size" => "hd",
+        "playlist_path" => "h264_hd_hls/playlist.m3u8",
+        "bandwidth" => 2_000_000,
+        "average_bandwidth" => 1_000_000
+      }
+    }
+
+    audio =
+      for {id, rate} <- [{"original", 128_000}, {"translation", 192_000}], into: %{} do
+        {id,
+         %{
+           "step_type" => "media.package_hls_audio",
+           "status" => "ok",
+           "track_id" => id,
+           "bandwidth" => rate,
+           "playlist_path" => "#{id}/playlist.m3u8"
+         }}
+      end
+
+    context = %{
+      run_input: %{"space_hash" => "testspace", "embed_hash" => "testvideo", "version" => 0},
+      dependency_outputs: Map.merge(variants, audio)
+    }
+
+    assert {:ok, _output, _artifacts} = MediaBuildHlsMasterStep.run(%{"id" => "master"}, context)
+
+    assert {:ok, body} =
+             FlowStorageAdapterStub.get("space-testspace", "testvideo/playlist.m3u8", nil)
+
+    assert body =~ "BANDWIDTH=2192000,AVERAGE-BANDWIDTH=1192000"
+  end
+
   test "builds root hls playlist from packaged variants" do
     step_definition = %{
       "id" => "hls_master",

@@ -6,11 +6,14 @@ defmodule MaveCore.Media.ProductionEncodingProfileTest do
   test "uses the long edge for portrait-safe H264 ladder requests" do
     assert {:ok, profile} = ProductionEncodingProfile.h264_ladder("fhd", true, 250)
 
-    assert profile.name == "mave-production-v2"
-    assert profile.request_options[:encoding_profile] == "mave-production-v2"
+    assert profile.name == "mave-production-v3"
+    assert profile.request_options[:encoding_profile] == "mave-production-v3"
     assert profile.request_options[:width] == 1920
-    assert profile.request_options[:video_bitrate] == "8M"
-    assert profile.request_options[:preset] == "veryfast"
+    assert profile.request_options[:video_maxrate] == "8M"
+    assert profile.request_options[:video_bufsize] == "16M"
+    assert profile.request_options[:video_crf] == 20
+    refute Keyword.has_key?(profile.request_options, :video_bitrate)
+    assert profile.request_options[:preset] == "faster"
     assert profile.request_options[:include_audio] == true
     assert profile.request_options[:keyframe_interval_seconds] == 2
     assert profile.request_options[:gop_frames] == 250
@@ -20,7 +23,26 @@ defmodule MaveCore.Media.ProductionEncodingProfileTest do
     assert {:ok, profile} = ProductionEncodingProfile.h264_ladder("uhd", true, 250, 3396)
 
     assert profile.request_options[:width] == 3396
-    assert profile.request_options[:video_bitrate] == "16M"
+    assert profile.request_options[:video_maxrate] == "16M"
+  end
+
+  test "keeps all five ladder rungs with bounded quality-based encoding" do
+    for {size, rate, buffer} <- [
+          {"sd", "2M", "4M"},
+          {"hd", "4M", "8M"},
+          {"fhd", "8M", "16M"},
+          {"qhd", "12M", "24M"},
+          {"uhd", "16M", "32M"}
+        ] do
+      assert {:ok, profile} = ProductionEncodingProfile.h264_ladder(size, false, 250)
+      assert profile.capacity_video_bitrate == rate
+      assert profile.request_options[:video_maxrate] == rate
+      assert profile.request_options[:video_bufsize] == buffer
+      assert profile.request_options[:video_crf] == 20
+      assert profile.request_options[:include_audio] == false
+      assert profile.encoder["rate_control"] == "capped_crf"
+      refute Keyword.has_key?(profile.request_options, :video_bitrate)
+    end
   end
 
   test "restores the production H264 keyframe clip profile" do
