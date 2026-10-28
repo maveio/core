@@ -908,6 +908,35 @@ func TestFFmpegBuildsProductionCodecProfiles(t *testing.T) {
 	}
 }
 
+func TestHEVCThreadPoolPreservesQualityOptions(t *testing.T) {
+	for budget, want := range map[int]string{
+		0: "pools=1:wpp=1",
+		1: "pools=1:wpp=1",
+		4: "pools=4:wpp=1",
+		6: "pools=6:wpp=1",
+	} {
+		if got := x265ThreadPoolParams(budget); got != want {
+			t.Fatalf("CPU budget %d: got %q, want %q", budget, got, want)
+		}
+	}
+	request := encodeRequest{InputURL: "https://example.com/input.mp4", Codec: "hevc", Width: 1280, VideoCRF: 24, Preset: "medium", Tune: "grain"}
+	cpu := strings.Join(ffmpegArgs(request, "cpu"), " ")
+	for _, option := range []string{"-x265-params pools=", ":wpp=1", "-crf 24", "-tune grain", "-preset medium"} {
+		if !strings.Contains(cpu, option) {
+			t.Fatalf("missing %q: %s", option, cpu)
+		}
+	}
+	if strings.Contains(strings.Join(ffmpegArgs(request, "nvenc"), " "), "-x265-params") {
+		t.Fatal("NVENC must not receive CPU x265 options")
+	}
+	for _, codec := range []string{"h264", "av1"} {
+		request.Codec = codec
+		if strings.Contains(strings.Join(ffmpegArgs(request, "cpu"), " "), "-x265-params") {
+			t.Fatalf("%s must not receive x265 options", codec)
+		}
+	}
+}
+
 func TestFFmpegBuildsPipedAudioAndFrameCommands(t *testing.T) {
 	audio := encodeRequest{
 		InputURL: "https://example.com/input.webm", Operation: "audio",

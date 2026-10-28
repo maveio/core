@@ -115,6 +115,14 @@ transition. Older boosters reject v3 requests. The flow contract version changes
 when presets synchronize; existing published media is not re-encoded by that
 sync. Validate new uploads on the target hardware before rolling out broadly.
 
+## HEVC CPU parallelism
+
+The CPU booster supplies x265 with an explicit thread pool based on Go's current
+CPU budget (`GOMAXPROCS`). This keeps wavefront processing available when the
+media sandbox prevents automatic NUMA discovery. The sandbox permissions stay
+unchanged, and HEVC previews retain CRF 24, the `medium` preset and `tune=grain`.
+Actual throughput depends on the input and available CPU capacity.
+
 ## Audio waveform peaks
 
 `media.generate_audio_peaks` uses the CPU booster when enabled and shares the
