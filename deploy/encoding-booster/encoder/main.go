@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1503,6 +1504,11 @@ func videoFFmpegArgs(request encodeRequest, backend string) []string {
 	if backend == "cpu" && request.SVTAV1Params != "" {
 		args = append(args, "-svtav1-params", request.SVTAV1Params)
 	}
+	if backend == "cpu" && request.Codec == "hevc" {
+		// x265 cannot discover NUMA topology inside the parser sandbox. Supply
+		// the coordinator's CPU budget so its normal wavefront workers stay active.
+		args = append(args, "-x265-params", x265ThreadPoolParams(runtime.GOMAXPROCS(0)))
+	}
 	args = append(args, "-pix_fmt", "yuv420p", "-threads", "0")
 	if request.KeyframeIntervalSeconds > 0 {
 		args = append(args, "-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", request.KeyframeIntervalSeconds))
@@ -1529,6 +1535,10 @@ func videoFFmpegArgs(request encodeRequest, backend string) []string {
 		"-movflags", "frag_keyframe+empty_moov+default_base_moof",
 		"-f", "mp4", "pipe:1",
 	)
+}
+
+func x265ThreadPoolParams(cpuBudget int) string {
+	return fmt.Sprintf("pools=%d:wpp=1", max(cpuBudget, 1))
 }
 
 func audioFFmpegArgs(request encodeRequest) []string {
