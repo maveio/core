@@ -89,6 +89,32 @@ non-blocking `post-receive` hook refreshes CPU capacity while bytes continue to
 arrive. This overlaps serverless cold start with the user's upload without
 delaying or rejecting the upload when warmup fails.
 
+## H.264 quality and bitrate
+
+The H.264 ladder uses capped CRF 20 with the `faster` x264 preset. Simple scenes
+can use fewer bits, while complex scenes can use more up to the rate-control
+limits below. CRF is a quality target, not a promise of a particular file size
+or an identical perceptual score across different videos.
+
+| Long edge | Maximum video rate | Buffer |
+| --- | --- | --- |
+| 640 | 2 Mbit/s | 4 Mbit |
+| 1280 | 4 Mbit/s | 8 Mbit |
+| 1920 | 8 Mbit/s | 16 Mbit |
+| 2560 | 12 Mbit/s | 24 Mbit |
+| 3840 | 16 Mbit/s | 32 Mbit |
+
+These are VBV limits, not strict per-segment size limits. The ladder still avoids
+upscaling, keeps two-second keyframes, and publishes the same MP4 and HLS paths.
+HLS copies the encoded video and advertises measured segment bandwidth when
+available. Existing specialized preview codecs keep their own settings.
+
+This changes the booster contract to `mave-production-v3`. Deploy the updated
+booster before the application; it also accepts v1 and v2 requests during the
+transition. Older boosters reject v3 requests. The flow contract version changes
+when presets synchronize; existing published media is not re-encoded by that
+sync. Validate new uploads on the target hardware before rolling out broadly.
+
 ## Audio waveform peaks
 
 `media.generate_audio_peaks` uses the CPU booster when enabled and shares the

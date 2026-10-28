@@ -43,7 +43,8 @@ const ffmpegExecutable = "ffmpeg"
 const maxWarmupHold = 30 * time.Second
 const multipartHeartbeatInterval = 10 * time.Second
 const maxSeekableFrameBytes = 64 * 1024 * 1024
-const productionEncodingProfile = "mave-production-v2"
+const productionEncodingProfile = "mave-production-v3"
+const previousProductionEncodingProfile = "mave-production-v2"
 const legacyProductionEncodingProfile = "mave-production-v1"
 const productionSVTAV1Params = "pin-threads=0:set-thread-priority=0:no-set-thread-priority=1:hierarchical-levels=4:tile-threads=0:log-level=1:tune=0"
 const legacyProductionSVTAV1Params = "pin-threads=0:set-thread-priority=0:no-set-thread-priority=1:hierarchical-levels=4:tile-threads=0:log-level=1"
@@ -128,6 +129,8 @@ type encodeRequest struct {
 	Width                   int              `json:"width,omitempty"`
 	VideoBitrate            string           `json:"video_bitrate,omitempty"`
 	VideoCRF                int              `json:"video_crf,omitempty"`
+	VideoMaxrate            string           `json:"video_maxrate,omitempty"`
+	VideoBufsize            string           `json:"video_bufsize,omitempty"`
 	SVTAV1Params            string           `json:"svt_av1_params,omitempty"`
 	AudioBitrate            string           `json:"audio_bitrate,omitempty"`
 	Preset                  string           `json:"preset,omitempty"`
@@ -476,7 +479,7 @@ func (request *encodeRequest) validateVideo() error {
 	if request.Width < 2 || request.Width > 3840 || request.Width%2 != 0 {
 		return errors.New("width must be an even number between 2 and 3840")
 	}
-	if request.EncodingProfile != "" && request.EncodingProfile != productionEncodingProfile && request.EncodingProfile != legacyProductionEncodingProfile {
+	if request.EncodingProfile != "" && request.EncodingProfile != productionEncodingProfile && request.EncodingProfile != previousProductionEncodingProfile && request.EncodingProfile != legacyProductionEncodingProfile {
 		return errors.New("encoding_profile is not supported")
 	}
 	if request.EncodingProfile == "" {
@@ -488,6 +491,20 @@ func (request *encodeRequest) validateVideo() error {
 	if request.VideoBitrate != "" {
 		if err := validateBitrate(request.VideoBitrate, 80_000_000); err != nil {
 			return fmt.Errorf("video_bitrate: %w", err)
+		}
+	}
+	if (request.VideoMaxrate == "") != (request.VideoBufsize == "") {
+		return errors.New("video_maxrate and video_bufsize must be supplied together")
+	}
+	if request.VideoMaxrate != "" {
+		if request.VideoCRF <= 0 || request.VideoBitrate != "" || request.Codec != "h264" {
+			return errors.New("capped CRF requires h264, a positive video_crf, and no video_bitrate")
+		}
+		if err := validateBitrate(request.VideoMaxrate, 80_000_000); err != nil {
+			return fmt.Errorf("video_maxrate: %w", err)
+		}
+		if err := validateBitrate(request.VideoBufsize, 160_000_000); err != nil {
+			return fmt.Errorf("video_bufsize: %w", err)
 		}
 	}
 	maxCRF := 51
@@ -543,7 +560,7 @@ func (request *encodeRequest) validateVideo() error {
 
 func validSVTAV1Params(profile string, params string) bool {
 	switch profile {
-	case productionEncodingProfile:
+	case productionEncodingProfile, previousProductionEncodingProfile:
 		return params == productionSVTAV1Params
 	case legacyProductionEncodingProfile:
 		return params == legacyProductionSVTAV1Params
@@ -1472,6 +1489,9 @@ func videoFFmpegArgs(request encodeRequest, backend string) []string {
 	}
 	if request.VideoBitrate != "" {
 		args = append(args, "-b:v", request.VideoBitrate)
+	}
+	if request.VideoMaxrate != "" {
+		args = append(args, "-maxrate", request.VideoMaxrate, "-bufsize", request.VideoBufsize)
 	}
 	if request.VideoCRF > 0 {
 		qualityOption := "-crf"

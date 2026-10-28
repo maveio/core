@@ -228,6 +228,8 @@ defmodule MaveCore.EncodingBooster do
     :width,
     :video_bitrate,
     :video_crf,
+    :video_maxrate,
+    :video_bufsize,
     :svt_av1_params,
     :audio_bitrate,
     :preset,

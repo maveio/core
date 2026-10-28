@@ -125,6 +125,59 @@ func TestRequestAcceptsLegacyProductionEncodingProfileDuringRollout(t *testing.T
 	}
 }
 
+func TestRequestAcceptsPreviousProductionProfile(t *testing.T) {
+	request := encodeRequest{InputURL: "https://example.com/input.mp4", EncodingProfile: previousProductionEncodingProfile, Codec: "av1", VideoCRF: 26, SVTAV1Params: productionSVTAV1Params}
+	if err := request.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if request.EncodingProfile != previousProductionEncodingProfile {
+		t.Fatal("previous contract was changed")
+	}
+}
+
+func TestCappedCRFArguments(t *testing.T) {
+	request := encodeRequest{InputURL: "https://example.com/input.mp4", EncodingProfile: productionEncodingProfile, Codec: "h264", Width: 1920, VideoCRF: 20, VideoMaxrate: "8M", VideoBufsize: "16M", Preset: "faster", KeyframeIntervalSeconds: 2, GOPFrames: 250}
+	if err := request.validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, backend := range []string{"cpu", "nvenc"} {
+		args := strings.Join(ffmpegArgs(request, backend), " ")
+		quality := "-crf 20"
+		if backend == "nvenc" {
+			quality = "-cq 20"
+		}
+		for _, expected := range []string{quality, "-maxrate 8M", "-bufsize 16M", "-force_key_frames expr:gte(t,n_forced*2)", "-g 250"} {
+			if !strings.Contains(args, expected) {
+				t.Fatalf("missing %q: %s", expected, args)
+			}
+		}
+		if strings.Contains(args, "-b:v") {
+			t.Fatalf("capped CRF must not set an average target: %s", args)
+		}
+	}
+}
+
+func TestCappedCRFRejectsInvalidLimits(t *testing.T) {
+	cases := []encodeRequest{
+		{VideoCRF: 20, VideoMaxrate: "8M"},
+		{VideoCRF: 20, VideoBufsize: "16M"},
+		{VideoCRF: 20, VideoMaxrate: "81M", VideoBufsize: "16M"},
+		{VideoCRF: 20, VideoMaxrate: "8M", VideoBufsize: "161M"},
+		{VideoCRF: 20, VideoMaxrate: "0", VideoBufsize: "16M"},
+		{VideoCRF: 20, VideoMaxrate: "8M", VideoBufsize: "-1M"},
+		{VideoCRF: 20, VideoMaxrate: "8M -y", VideoBufsize: "16M"},
+		{VideoCRF: 20, VideoMaxrate: "8M", VideoBufsize: "16M", VideoBitrate: "8M"},
+		{VideoMaxrate: "8M", VideoBufsize: "16M"},
+		{Codec: "av1", VideoCRF: 20, VideoMaxrate: "8M", VideoBufsize: "16M"},
+	}
+	for _, request := range cases {
+		request.InputURL = "https://example.com/input.mp4"
+		if err := request.validate(); err == nil {
+			t.Fatalf("invalid capped CRF accepted: %+v", request)
+		}
+	}
+}
+
 func TestRequestAcceptsAudioAndFrameOperations(t *testing.T) {
 	audio := encodeRequest{
 		InputURL: "https://example.com/input.webm", Operation: "audio",

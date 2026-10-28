@@ -13,7 +13,7 @@ defmodule MaveCore.Media.ProductionEncodingProfile do
 
   alias MaveCore.Media.RenditionSizing
 
-  @name "mave-production-v2"
+  @name "mave-production-v3"
   @audio_bitrate "128k"
   @h264_bitrates %{
     "sd" => "2M",
@@ -21,6 +21,13 @@ defmodule MaveCore.Media.ProductionEncodingProfile do
     "fhd" => "8M",
     "qhd" => "12M",
     "uhd" => "16M"
+  }
+  @h264_buffers %{
+    "sd" => "4M",
+    "hd" => "8M",
+    "fhd" => "16M",
+    "qhd" => "24M",
+    "uhd" => "32M"
   }
   @hevc_bitrates %{
     "sd" => "1M",
@@ -50,15 +57,17 @@ defmodule MaveCore.Media.ProductionEncodingProfile do
          [
            codec: "h264",
            width: width,
-           video_bitrate: bitrate,
+           video_crf: 20,
+           video_maxrate: bitrate,
+           video_bufsize: Map.fetch!(@h264_buffers, size),
            audio_bitrate: @audio_bitrate,
-           preset: "veryfast",
+           preset: "faster",
            include_audio: include_audio?,
            keyframe_interval_seconds: 2,
            gop_frames: max(gop_frames, 1)
          ],
          bitrate,
-         %{"codec" => "h264", "preset" => "veryfast", "rate_control" => "abr"}
+         %{"codec" => "h264", "preset" => "faster", "rate_control" => "capped_crf", "crf" => 20}
        )}
     end
   end

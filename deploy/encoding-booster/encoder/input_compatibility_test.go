@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,7 +38,12 @@ func TestSmallVideoAndWindowsMediaEncoding(t *testing.T) {
 			if output, err := exec.Command(ffmpeg, args...).CombinedOutput(); err != nil {
 				t.Fatalf("generate source: %v: %s", err, output)
 			}
-			request := encodeRequest{InputURL: "https://example.com/source", Operation: fixture.operation, Width: fixture.width}
+			request := encodeRequest{VideoCRF: 20, VideoMaxrate: "2M", VideoBufsize: "4M", Preset: "faster", KeyframeIntervalSeconds: 2, GOPFrames: 250, InputURL: "https://example.com/source", Operation: fixture.operation, Width: fixture.width}
+			if fixture.operation == "audio" {
+				request.VideoCRF = 0
+				request.VideoMaxrate = ""
+				request.VideoBufsize = ""
+			}
 			if err := request.validate(); err != nil {
 				t.Fatal(err)
 			}
@@ -72,6 +78,23 @@ func TestSmallVideoAndWindowsMediaEncoding(t *testing.T) {
 			}
 			if fixture.width > 0 && (stream.Width > fixture.width || stream.Width%2 != 0 || stream.Height%2 != 0) {
 				t.Fatalf("source was upscaled or produced odd dimensions: %+v", stream)
+			}
+			if fixture.operation == "video" {
+				playlist := filepath.Join(dir, "playlist.m3u8")
+				if output, err := exec.Command(ffmpeg, hlsArgs(path, dir)...).CombinedOutput(); err != nil {
+					t.Fatalf("package capped CRF output: %v: %s", err, output)
+				}
+				var hashes []string
+				for _, input := range []string{path, playlist} {
+					output, err := exec.Command(ffmpeg, "-v", "error", "-i", input, "-map", "0:v:0", "-c", "copy", "-f", "hash", "-hash", "sha256", "-").CombinedOutput()
+					if err != nil {
+						t.Fatalf("hash packaged video: %v: %s", err, output)
+					}
+					hashes = append(hashes, strings.TrimSpace(string(output)))
+				}
+				if hashes[0] != hashes[1] {
+					t.Fatalf("HLS changed compressed video packets: %v", hashes)
+				}
 			}
 		})
 	}

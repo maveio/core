@@ -2208,8 +2208,9 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStep do
   defp production_encoder_metadata do
     %{
       "codec" => "h264",
-      "preset" => "veryfast",
-      "rate_control" => "abr",
+      "preset" => "faster",
+      "rate_control" => "capped_crf",
+      "crf" => 20,
       "profile" => ProductionEncodingProfile.name()
     }
   end

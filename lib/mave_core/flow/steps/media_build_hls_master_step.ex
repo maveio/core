@@ -277,6 +277,7 @@ defmodule MaveCore.Flow.Steps.MediaBuildHlsMasterStep do
       "playlist_path" => map_get(output, "playlist_path"),
       "playlist_uri" => map_get(output, "playlist_uri"),
       "bandwidth" => map_get(output, "bandwidth") || profile[:bandwidth],
+      "average_bandwidth" => map_get(output, "average_bandwidth"),
       "resolution" => map_get(output, "resolution") || profile[:resolution]
     }
   end
@@ -291,6 +292,7 @@ defmodule MaveCore.Flow.Steps.MediaBuildHlsMasterStep do
       "playlist_path" => map_get(variant, "playlist_path"),
       "playlist_uri" => map_get(variant, "playlist_uri"),
       "bandwidth" => map_get(variant, "bandwidth") || profile[:bandwidth],
+      "average_bandwidth" => map_get(variant, "average_bandwidth"),
       "resolution" => map_get(variant, "resolution") || profile[:resolution]
     }
   end
@@ -484,7 +486,11 @@ defmodule MaveCore.Flow.Steps.MediaBuildHlsMasterStep do
     variant_lines =
       variants
       |> Enum.flat_map(fn variant ->
-        stream_info = stream_info_line(variant, audio_group_id, subtitle_group_id)
+        stream_info =
+          variant
+          |> add_audio_bandwidth(audio_tracks)
+          |> stream_info_line(audio_group_id, subtitle_group_id)
+
         [stream_info, variant["playlist_path"]]
       end)
 
@@ -511,10 +517,25 @@ defmodule MaveCore.Flow.Steps.MediaBuildHlsMasterStep do
     Enum.map(subtitles, &subtitle_media_line(&1, group_id))
   end
 
+  defp add_audio_bandwidth(%{"average_bandwidth" => average} = variant, audio_tracks)
+       when is_integer(average) do
+    audio_bandwidth =
+      audio_tracks
+      |> Enum.map(&(normalize_integer(&1["bandwidth"]) || 0))
+      |> Enum.max(fn -> 0 end)
+
+    variant
+    |> Map.update!("bandwidth", &(&1 + audio_bandwidth))
+    |> Map.update!("average_bandwidth", &(&1 + audio_bandwidth))
+  end
+
+  defp add_audio_bandwidth(variant, _audio_tracks), do: variant
+
   defp stream_info_line(variant, audio_group_id, subtitle_group_id) do
     attrs =
       []
       |> append_attr("BANDWIDTH", variant["bandwidth"])
+      |> append_attr("AVERAGE-BANDWIDTH", variant["average_bandwidth"])
       |> append_attr("RESOLUTION", variant["resolution"])
       |> append_attr("CLOSED-CAPTIONS", "NONE")
       |> append_quoted_attr("AUDIO", audio_group_id)

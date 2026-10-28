@@ -781,11 +781,14 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStepTest do
                round((2_000_000 + 128_000) / 8 * 2.0) + 8 * 1024 * 1024
 
       assert_receive {:encoding_booster_request, "https://source.example/video.mp4", options}
-      assert options[:encoding_profile] == "mave-production-v2"
+      assert options[:encoding_profile] == "mave-production-v3"
       assert options[:width] == 640
-      assert options[:video_bitrate] == "2M"
+      assert options[:video_maxrate] == "2M"
+      assert options[:video_bufsize] == "4M"
+      assert options[:video_crf] == 20
+      refute Keyword.has_key?(options, :video_bitrate)
       assert options[:audio_bitrate] == "128k"
-      assert options[:preset] == "veryfast"
+      assert options[:preset] == "faster"
       assert options[:include_audio] == true
       assert options[:keyframe_interval_seconds] == 2
       assert options[:gop_frames] == 250
