@@ -10,6 +10,11 @@ Public, self-hostable Phoenix/OTP application (`:mave_core`). Read
   local work. Do not create or amend commits unless the user requests it.
 - Deliver changes on a task branch through a pull request; never push directly
   to the default branch. Merging and releasing require separate authorization.
+- Before updating a pull request, fetch `origin` and rebase the task branch onto
+  `origin/main` instead of merging `main` into it. Rebase only task-owned commits;
+  preserve unrelated work and use a separate worktree if the checkout is dirty.
+  Update a published task branch with `--force-with-lease`, never plain `--force`,
+  after verifying that its remote head has not changed unexpectedly.
 - Use English for code comments, documentation, branches and pull requests.
 - Keep changes independently useful, buildable, and configurable for
   contributors and self-hosters. Examples and documentation should stand on
