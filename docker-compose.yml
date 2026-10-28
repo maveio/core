@@ -92,10 +92,7 @@ services:
         condition: service_started
 
   upload:
-    image: mave-tusd:local
-    build:
-      context: .
-      dockerfile: deploy/tusd/Dockerfile
+    image: tusproject/tusd:v2.5.0
     command:
       - "-port=1080"
       - "-behind-proxy=true"
