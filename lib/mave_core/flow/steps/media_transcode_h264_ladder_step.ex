@@ -187,19 +187,14 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStep do
     end
   end
 
-  defp maybe_copy_source_variants(%{mode: mode} = context, variants)
-       when mode in ["auto", "copy"] do
-    if Map.has_key?(context.run_input, "source_body") or mode == "copy" do
-      case StepSupport.resolve_source_body(
-             context.run_input,
-             context.source_url,
-             context.dependency_outputs
-           ) do
-        {:ok, source_body} -> put_variant_bodies(context, variants, source_body)
-        {:error, reason} -> {:error, reason}
-      end
-    else
-      :skip
+  defp maybe_copy_source_variants(%{mode: "copy"} = context, variants) do
+    case StepSupport.resolve_source_body(
+           context.run_input,
+           context.source_url,
+           context.dependency_outputs
+         ) do
+      {:ok, source_body} -> put_variant_bodies(context, variants, source_body)
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -1335,6 +1330,8 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStep do
          [
            "-c:v",
            "libx264",
+           "-pix_fmt",
+           "yuv420p",
            "-preset",
            encoder_settings.preset
          ] ++
@@ -2002,7 +1999,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStep do
     output_paths
     |> Map.values()
     |> Enum.reduce_while(:ok, fn output_path, :ok ->
-      case StepSupport.validate_media_file(output_path, :video) do
+      case StepSupport.validate_media_file(output_path, :h264) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end

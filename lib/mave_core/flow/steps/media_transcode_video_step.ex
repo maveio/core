@@ -3,7 +3,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStep do
   Produces a video rendition artifact for a configured codec/size step.
 
   Default behavior:
-  - `auto`: uses FFmpeg for normal sources; copy-mode only for inline `source_body`.
+  - `auto`: transcodes sources, including inline `source_body`.
   - `copy`: compatibility mode for inline `source_body`.
   - `ffmpeg`: always attempts FFmpeg transcode.
   """
@@ -321,11 +321,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStep do
   end
 
   defp build_rendition_body("auto", context) do
-    if Map.has_key?(context.run_input, "source_body") do
-      build_rendition_body("copy", context)
-    else
-      transcode_with_ffmpeg(context)
-    end
+    transcode_with_ffmpeg(context)
   end
 
   defp run_booster_or_delegate(context, profile) do
@@ -727,9 +723,11 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStep do
     end
   end
 
-  defp ffmpeg_input_opts(_context, output_path, progress) do
+  defp ffmpeg_input_opts(context, output_path, progress) do
+    kind = if context.codec == "h264", do: :h264, else: :video
+
     [
-      validate_output: fn -> StepSupport.validate_media_file(output_path, :video) end,
+      validate_output: fn -> StepSupport.validate_media_file(output_path, kind) end,
       command_timeout_ms: video_command_timeout_ms(),
       progress: progress
     ]
@@ -851,6 +849,11 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStep do
     cond do
       normalize_codec(map_get(inspect_output, "video_codec")) != "h264" ->
         {:error, :source_video_codec_not_h264}
+
+      not StepSupport.browser_h264_stream?(
+        StepSupport.video_stream(map_get(inspect_output, "streams", []))
+      ) ->
+        {:error, :source_video_format_not_browser_compatible}
 
       not source_audio_copy_compatible?(inspect_output) ->
         {:error, :source_audio_codec_not_copy_compatible}
@@ -1110,6 +1113,8 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStep do
      [
        "-c:v",
        ffmpeg_codec,
+       "-pix_fmt",
+       "yuv420p",
        "-crf",
        "23",
        "-g",
@@ -1139,6 +1144,8 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStep do
      [
        "-c:v",
        ffmpeg_codec,
+       "-pix_fmt",
+       "yuv420p",
        "-preset",
        "faster",
        "-tune",

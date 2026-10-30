@@ -359,6 +359,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStepTest do
         "space_hash" => "ubg50",
         "embed_hash" => "LeDE9v86ye",
         "source_body" => "stub-media-body",
+        "media_transcode_video_mode" => "copy",
         "version" => 0
       },
       dependency_outputs: %{
@@ -492,6 +493,14 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStepTest do
           "filetype" => "mp4",
           "video_codec" => "h264",
           "audio_codec" => "aac",
+          "streams" => [
+            %{
+              "codec_type" => "video",
+              "codec_name" => "h264",
+              "profile" => "High",
+              "pix_fmt" => "yuv420p"
+            }
+          ],
           "width" => 1280,
           "height" => 720,
           "size_bytes" => byte_size(original_body)
@@ -509,6 +518,37 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStepTest do
              FlowStorageAdapterStub.get("space-ubg50", "LeDE9v86ye/h264_hd.mp4", "us-east-1")
 
     assert FlowStorageAdapterStub.public?("space-ubg50", "LeDE9v86ye/h264_hd.mp4", "us-east-1")
+
+    for stream <- [
+          %{
+            "codec_type" => "video",
+            "codec_name" => "h264",
+            "profile" => "High 10",
+            "pix_fmt" => "yuv420p10le"
+          },
+          %{
+            "codec_type" => "video",
+            "codec_name" => "h264",
+            "profile" => "High 4:2:2",
+            "pix_fmt" => "yuv422p10le"
+          },
+          %{
+            "codec_type" => "video",
+            "codec_name" => "h264",
+            "profile" => "High 4:4:4 Predictive",
+            "pix_fmt" => "yuv444p"
+          },
+          %{"codec_type" => "video", "codec_name" => "h264"}
+        ] do
+      incompatible_context =
+        context
+        |> put_in([:dependency_outputs, "inspect_media", "streams"], [stream])
+        |> Map.put(:encoding_booster_dispatch, :direct)
+
+      assert {:ok, output, _} = MediaTranscodeVideoStep.run(step_definition, incompatible_context)
+      assert output["mode"] == "encoding_booster"
+      refute output["source_copy"]
+    end
   end
 
   test "returns unavailable output in non-strict mode on missing source" do
@@ -560,6 +600,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStepTest do
         "space_hash" => "ubg50",
         "embed_hash" => "LeDE9v86ye",
         "source_body" => "stub-media-body",
+        "media_transcode_video_mode" => "copy",
         "version" => 0
       },
       dependency_outputs: %{
@@ -589,6 +630,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStepTest do
         "space_hash" => "ubg50",
         "embed_hash" => "LeDE9v86ye",
         "source_body" => "stub-media-body",
+        "media_transcode_video_mode" => "copy",
         "version" => 0
       },
       dependency_outputs: %{
@@ -786,6 +828,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeVideoStepTest do
         "space_hash" => "ubg50",
         "embed_hash" => "LeDE9v86ye",
         "source_body" => "stub-media-body",
+        "media_transcode_video_mode" => "copy",
         "version" => 0
       },
       dependency_outputs: %{

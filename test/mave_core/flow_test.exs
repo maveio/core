@@ -5006,6 +5006,8 @@ defmodule MaveCore.FlowTest do
           "input_url" => "https://example.com/projected.mp4",
           "source_url" => "https://example.com/projected.mp4",
           "source_body" => "stub-media-body",
+          "media_transcode_video_mode" => "copy",
+          "media_transcode_h264_ladder_mode" => "copy",
           "source_content_type" => "video/mp4",
           "media_package_hls_variant_strict" => false,
           "media_package_hls_audio_strict" => false,
@@ -6233,6 +6235,8 @@ defmodule MaveCore.FlowTest do
           "input_url" => "https://example.com/ready-renditions.mp4",
           "source_url" => "https://example.com/ready-renditions.mp4",
           "source_body" => "stub-media-body",
+          "media_transcode_video_mode" => "copy",
+          "media_transcode_h264_ladder_mode" => "copy",
           "source_content_type" => "video/mp4",
           "upload_id" => upload_id,
           "media_probe" => %{
