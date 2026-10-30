@@ -320,8 +320,8 @@ defmodule MaveCore.Flow.Steps.Support do
 
   def report_progress(_progress_reporter, _event), do: :ok
 
-  @spec validate_media_file(String.t(), :audio | :video) :: :ok | {:error, term()}
-  def validate_media_file(path, kind) when kind in [:audio, :video] do
+  @spec validate_media_file(String.t(), :audio | :video | :h264) :: :ok | {:error, term()}
+  def validate_media_file(path, kind) when kind in [:audio, :video, :h264] do
     case do_validate_media_file(path, kind) do
       :ok -> :ok
       {:error, reason} -> {:error, {:invalid_media_output, kind, reason}}
@@ -330,6 +330,15 @@ defmodule MaveCore.Flow.Steps.Support do
 
   def validate_media_file(_path, kind),
     do: {:error, {:invalid_media_output, kind, :unsupported_media_kind}}
+
+  @doc "Checks the codec, profile and pixel format required by browser H.264 renditions."
+  def browser_h264_stream?(%{} = stream) do
+    map_value(stream, "codec_name") == "h264" and
+      map_value(stream, "pix_fmt") in ["yuv420p", "yuvj420p"] and
+      map_value(stream, "profile") in ["Baseline", "Constrained Baseline", "Main", "High"]
+  end
+
+  def browser_h264_stream?(_), do: false
 
   @doc false
   def decode_probe_output(output) when is_binary(output) do
@@ -386,7 +395,10 @@ defmodule MaveCore.Flow.Steps.Support do
       "-select_streams",
       "#{media_stream_selector(kind)}:0",
       "-show_entries",
-      "stream=codec_type,codec_name",
+      if(kind == :h264,
+        do: "stream=codec_type,codec_name,profile,pix_fmt",
+        else: "stream=codec_type,codec_name"
+      ),
       "-of",
       "json",
       path
@@ -420,6 +432,12 @@ defmodule MaveCore.Flow.Steps.Support do
   defp probe_decode_error(%_{} = error), do: Exception.message(error)
   defp probe_decode_error(error), do: inspect(error)
 
+  defp validate_media_stream(%{"streams" => streams}, :h264) when is_list(streams) do
+    if browser_h264_stream?(video_stream(streams)),
+      do: :ok,
+      else: {:error, :incompatible_h264_stream}
+  end
+
   defp validate_media_stream(%{"streams" => streams}, kind) when is_list(streams) do
     expected_type = Atom.to_string(kind)
 
@@ -435,6 +453,7 @@ defmodule MaveCore.Flow.Steps.Support do
 
   defp media_stream_selector(:audio), do: "a"
   defp media_stream_selector(:video), do: "v"
+  defp media_stream_selector(:h264), do: "v"
 
   @spec prepare_ffmpeg_input(String.t(), map(), term(), map(), keyword()) ::
           {:ok, String.t()} | {:error, term()}

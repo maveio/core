@@ -45,6 +45,15 @@ jobs:
             -pthread -o "$artifacts/mave-media-network.so"
           sudo install -m 755 "$artifacts/mave-media-broker" "$artifacts/mave-media-sandbox" /usr/local/bin/
           sudo install -m 644 "$artifacts/mave-media-network.so" /usr/local/lib/
+      - name: Test browser-compatible CPU encoder output
+        run: |
+          artifacts=$(mktemp -d)
+          trap 'sudo rm -rf "$artifacts"' EXIT
+          docker run --rm \
+            -v "$PWD/deploy/encoding-booster/encoder:/src:ro" \
+            -v "$artifacts:/out" -w /src golang:1.27.3-alpine3.23 \
+            sh -c 'CGO_ENABLED=0 go test -c -o /out/encoder.test'
+          "$artifacts/encoder.test" -test.run '^TestH264BrowserPixelFormats$' -test.v
       - name: Exercise confinement and real codecs without root or capabilities
         run: |
           # GitHub's checkout parents are not traversable by nobody.

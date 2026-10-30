@@ -218,7 +218,9 @@ For deterministic local tests, provide `source_body` with
 `source_content_type`, `media_probe`, or `transcription_text` /
 `transcription_vtt` / `transcription_segments` as appropriate.
 
-Media step `*_mode` inputs select `auto`, `ffmpeg` or `copy`. Step-level
+Media step `*_mode` inputs select `auto`, `ffmpeg` or `copy`. H.264 steps
+transcode inline sources in `auto` mode; use explicit `copy` for opaque test
+fixtures. Copy mode does not normalize media for browser playback. Step-level
 `params.strict` makes errors fail the run; the corresponding run-input
 `*_strict` override takes precedence. These overrides are for debugging and
 custom flows. Discover current step options through `/v1/flow/step-types` and

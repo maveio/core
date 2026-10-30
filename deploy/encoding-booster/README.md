@@ -91,6 +91,14 @@ delaying or rejecting the upload when warmup fails.
 
 ## H.264 quality and bitrate
 
+Browser-facing H.264 is encoded as 8-bit 4:2:0 (`yuv420p`), including
+10-bit and 4:2:2/4:4:4 sources. HLS packages these compatible renditions.
+Uploaded H.264 can only bypass transcoding when inspection confirms a
+Baseline, Main or High profile with 8-bit 4:2:0 pixels; missing or unsupported
+format information requires transcoding. Inline sources also transcode in `auto`
+mode. Local FFmpeg outputs are checked before publication. Explicit `copy` mode
+is a fixture/compatibility shortcut and does not normalize input.
+
 The H.264 ladder uses capped CRF 20 with the `faster` x264 preset. Simple scenes
 can use fewer bits, while complex scenes can use more up to the rate-control
 limits below. CRF is a quality target, not a promise of a particular file size
