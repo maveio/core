@@ -38,7 +38,10 @@ RUN apk add --no-cache \
       xz \
       zlib-dev
 WORKDIR /src/ffmpeg
-RUN curl -fsSLo /tmp/ffmpeg.tar.xz \
+# The release host can reset Alpine curl connections; keep downloads retryable.
+RUN curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 \
+      --retry-max-time 180 --connect-timeout 20 --max-time 120 \
+      -fsSLo /tmp/ffmpeg.tar.xz \
       "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
     && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
     && tar -xJf /tmp/ffmpeg.tar.xz --strip-components=1 \
