@@ -64,9 +64,15 @@ WORKDIR /tmp/ffmpeg
 
 # Bind verification to the pinned release key, even if the downloaded key bundle contains others.
 # bsdtar also supports extracting this archive under Docker's amd64 emulation.
-RUN curl -fsSLo /tmp/ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
-  && curl -fsSLo /tmp/ffmpeg.tar.xz.asc "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz.asc" \
-  && curl -fsSLo /tmp/ffmpeg-devel.asc "https://ffmpeg.org/ffmpeg-devel.asc" \
+RUN curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 \
+    --retry-max-time 180 --connect-timeout 20 --max-time 120 \
+    -fsSLo /tmp/ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
+  && curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 \
+    --retry-max-time 180 --connect-timeout 20 --max-time 120 \
+    -fsSLo /tmp/ffmpeg.tar.xz.asc "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz.asc" \
+  && curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 \
+    --retry-max-time 180 --connect-timeout 20 --max-time 120 \
+    -fsSLo /tmp/ffmpeg-devel.asc "https://ffmpeg.org/ffmpeg-devel.asc" \
   && gpg --batch --import /tmp/ffmpeg-devel.asc \
   && gpg --batch --assert-signer FCF986EA15E6E293A5644F10B4322F04D67658D8 \
     --verify /tmp/ffmpeg.tar.xz.asc /tmp/ffmpeg.tar.xz \
