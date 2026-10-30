@@ -138,6 +138,8 @@ defmodule MaveCoreWeb.Api.Flow.RunsControllerTest do
           "embed_hash" => "LeDE9v86ye",
           "input_url" => "https://example.com/video.mp4",
           "source_body" => "stub-media-body",
+          "media_transcode_video_mode" => "copy",
+          "media_transcode_h264_ladder_mode" => "copy",
           "source_content_type" => "video/mp4",
           "media_probe" => %{
             "format" => %{
