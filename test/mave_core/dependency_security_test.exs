@@ -75,4 +75,3 @@ defmodule MaveCore.DependencySecurityTest do
     )
   end
 end
-
