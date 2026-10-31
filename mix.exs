@@ -55,7 +55,7 @@ defmodule MaveCore.MixProject do
       {:ecto_sql, "~> 3.14.0"},
       {:postgrex, "~> 0.22.3"},
       {:decimal, "~> 3.1", override: true},
-      {:phoenix_html, "~> 4.1"},
+      {:phoenix_html, "~> 4.4"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
       {:phoenix_live_view, "~> 1.2.13"},
       {:lazy_html, ">= 0.1.13", only: :test},
@@ -96,6 +96,8 @@ defmodule MaveCore.MixProject do
       {:cors_plug, "~> 3.0"},
       {:phoenix_storybook, "~> 1.3", only: [:dev, :test]},
       {:hackney, "~> 4.9.1", override: true},
+      # Enforce the hostname verification fix for downstream dependency resolution.
+      {:ssl_verify_fun, "~> 1.1.9"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:sobelow, "~> 0.14", only: [:dev, :test], runtime: false},
