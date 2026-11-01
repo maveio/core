@@ -10,9 +10,13 @@ defmodule MaveCore.UsageLimits do
   @callback can_add_space_member?(Space.t(), String.t() | atom()) :: :ok | {:error, term()}
   @callback can_view_space_data?(Space.t()) :: :ok | {:error, term()}
   @callback can_upload_file?(Space.t(), non_neg_integer() | nil) :: :ok | {:error, term()}
+  @callback can_use_audio_description?(Space.t()) :: :ok | {:error, term()}
   @callback restriction_copy(atom(), term()) :: %{optional(atom()) => String.t()}
 
-  @optional_callbacks can_view_space_data?: 1, can_upload_file?: 2, restriction_copy: 2
+  @optional_callbacks can_view_space_data?: 1,
+                      can_upload_file?: 2,
+                      can_use_audio_description?: 1,
+                      restriction_copy: 2
 
   def can_create_video_embed?(%Space{} = space) do
     dispatch(:can_create_video_embed?, [space])
@@ -24,6 +28,14 @@ defmodule MaveCore.UsageLimits do
 
   def can_view_space_data?(%Space{} = space) do
     dispatch(:can_view_space_data?, [space])
+  end
+
+  @doc """
+  Whether a space may generate audio descriptions. Allowed when the host has no
+  policy for it.
+  """
+  def can_use_audio_description?(%Space{} = space) do
+    dispatch(:can_use_audio_description?, [space])
   end
 
   def can_upload_file?(%Space{} = space, size) when is_integer(size) or is_nil(size) do

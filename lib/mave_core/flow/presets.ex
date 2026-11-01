@@ -3,6 +3,7 @@ defmodule MaveCore.Flow.Presets do
   Built-in flow templates used as migration starting points.
   """
 
+  alias MaveCore.AudioDescription
   alias MaveCore.Media.ProductionEncodingProfile
 
   @spec all() :: [map()]
@@ -31,7 +32,8 @@ defmodule MaveCore.Flow.Presets do
        "name" => "Publish Default",
        "description" =>
          "Encoder-compatible default publish flow with upload, transcode, manifest, and webhook steps.",
-       "definition" => publish_default_definition() |> with_audio_peaks()
+       "definition" =>
+         publish_default_definition() |> with_audio_peaks() |> with_audio_description()
      }
      |> maybe_override_preset("publish_default")}
   end
@@ -43,7 +45,8 @@ defmodule MaveCore.Flow.Presets do
        "name" => "Publish Local",
        "description" =>
          "Lighter local-development publish flow that skips heavy codec variants while still producing a manifest.",
-       "definition" => publish_local_definition() |> with_audio_peaks()
+       "definition" =>
+         publish_local_definition() |> with_audio_peaks() |> with_audio_description()
      }
      |> maybe_override_preset("publish_local")}
   end
@@ -83,7 +86,10 @@ defmodule MaveCore.Flow.Presets do
         step -> step
       end)
 
-    definition |> Map.put("steps", durable_steps) |> with_audio_peaks()
+    definition
+    |> Map.put("steps", durable_steps)
+    |> with_audio_peaks()
+    |> with_audio_description()
   end
 
   defp with_audio_peaks(definition) do
@@ -102,6 +108,71 @@ defmodule MaveCore.Flow.Presets do
             }
           ])
     )
+  end
+
+  # Audio description (English + translations). The steps skip themselves unless the
+  # run asks for it, and nothing waits for them: the mix steps republish the HLS master
+  # and manifest when they finish.
+  defp with_audio_description(definition) do
+    source = AudioDescription.source_language()
+    translations = AudioDescription.languages() -- [source]
+
+    steps =
+      [
+        background_step("detect_scenes", "media.detect_scenes", "Detect Scenes", ["inspect_media"]),
+        background_step(
+          "describe_video",
+          "ai.describe_video",
+          "Describe Video",
+          ["detect_scenes", "transcribe_audio", "transcode_audio"]
+        )
+      ] ++
+        Enum.map(translations, fn language ->
+          background_step(
+            "translate_descriptions_#{language}",
+            "ai.translate_descriptions",
+            "Translate Descriptions (#{language})",
+            ["describe_video"],
+            %{"language" => language, "source_step_id" => "describe_video"}
+          )
+        end) ++
+        Enum.flat_map([source | translations], &speak_and_mix_steps(&1, source))
+
+    Map.update!(definition, "steps", &(&1 ++ steps))
+  end
+
+  defp speak_and_mix_steps(language, source) do
+    cues_step =
+      if language == source, do: "describe_video", else: "translate_descriptions_#{language}"
+
+    [
+      background_step(
+        "speak_descriptions_#{language}",
+        "ai.speak_descriptions",
+        "Speak Descriptions (#{language})",
+        [cues_step],
+        %{"language" => language, "source_step_id" => cues_step}
+      ),
+      background_step(
+        "mix_audio_description_#{language}",
+        "media.mix_audio_description",
+        "Mix Audio Description (#{language})",
+        ["speak_descriptions_#{language}", "transcode_audio"],
+        %{"language" => language, "source_step_id" => "speak_descriptions_#{language}"}
+      )
+    ]
+  end
+
+  defp background_step(id, type, name, depends_on, params \\ nil) do
+    %{
+      "id" => id,
+      "type" => type,
+      "name" => name,
+      "depends_on" => depends_on,
+      "lane" => "background",
+      "required" => false
+    }
+    |> then(fn step -> if params, do: Map.put(step, "params", params), else: step end)
   end
 
   defp maybe_override_preset(preset, slug) do

@@ -6,6 +6,7 @@ defmodule MaveCore.Uploads do
   require Logger
 
   alias MaveCore.Assets
+  alias MaveCore.AudioDescription
   alias MaveCore.EmbedId
   alias MaveCore.Embeds
   alias MaveCore.Embeds.Embed
@@ -714,7 +715,8 @@ defmodule MaveCore.Uploads do
         "callback_url" =>
           present(metadata, "callback_url") ||
             present(metadata, "webhook_url") ||
-            present(metadata, "notify_webhook_url")
+            present(metadata, "notify_webhook_url"),
+        "audio_description" => AudioDescription.run_input(space)
       }
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
       |> Map.new()

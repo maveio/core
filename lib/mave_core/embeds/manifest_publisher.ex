@@ -3,9 +3,11 @@ defmodule MaveCore.Embeds.ManifestPublisher do
 
   import Ecto.Query
 
-  alias MaveCore.Assets.{AudioTrack, Video}
+  alias MaveCore.Assets
+  alias MaveCore.Assets.{AudioDescription, AudioTrack, Video}
   alias MaveCore.Embeds
   alias MaveCore.Embeds.{Embed, SettingsSerializer}
+  alias MaveCore.Flow.Steps.MediaMixAudioDescriptionStep
   alias MaveCore.Languages
   alias MaveCore.LegacyShortUUID
   alias MaveCore.Media.CdnCache
@@ -110,6 +112,7 @@ defmodule MaveCore.Embeds.ManifestPublisher do
           hls_ready?
         )
     }
+    |> maybe_put("audio_descriptions", manifest_audio_descriptions(embed, version))
   end
 
   defp manifest_waveform(opts, manifest, version) do
@@ -586,6 +589,50 @@ defmodule MaveCore.Embeds.ManifestPublisher do
 
   defp audio_track_key(embed_hash, _version, filename) do
     "#{embed_hash}/#{filename}"
+  end
+
+  # Omitted when there are none, so manifests without audio description don't change.
+  defp manifest_audio_descriptions(%Embed{} = embed, version) do
+    case current_video(embed) do
+      %Video{id: video_id} ->
+        bucket = Storage.bucket_for_space(embed.space.hash, embed.space.region)
+
+        video_id
+        |> Assets.list_audio_descriptions()
+        |> Enum.map(&serialize_audio_description(&1, bucket, embed.hash, version))
+        |> case do
+          [] -> nil
+          descriptions -> descriptions
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc false
+  def serialize_audio_description(%AudioDescription{} = description, bucket, embed_hash, version) do
+    %{
+      "language" => description.language,
+      "label" => MediaMixAudioDescriptionStep.label(description.language),
+      "audio" => %{
+        "path" =>
+          SettingsSerializer.storage_object_url(
+            bucket,
+            audio_track_key(embed_hash, version, description.audio_filename)
+          ),
+        "hls_playlist" => AudioDescription.hls_playlist(description),
+        "file_size" => description.audio_file_size
+      },
+      "vtt" => %{
+        "path" =>
+          SettingsSerializer.storage_object_url(
+            bucket,
+            audio_track_key(embed_hash, version, description.vtt_filename)
+          ),
+        "file_size" => description.vtt_file_size
+      }
+    }
   end
 
   defp manifest_subtitles(%Embed{} = embed, version) do
