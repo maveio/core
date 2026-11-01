@@ -611,6 +611,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         subtitles={@video.subtitles}
       />
 
+      <.audio_descriptions_section descriptions={Map.get(@video, :audio_descriptions, [])} />
+
       <.settings_header
         :if={@show_flow_info && @video.flow}
         title="flow"
@@ -2296,6 +2298,47 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             </div>
           </div>
         <% end %>
+      </div>
+    </div>
+    """
+  end
+
+  attr :descriptions, :list, default: []
+
+  defp audio_descriptions_section(assigns) do
+    ~H"""
+    <div :if={@descriptions != []} id="audio-descriptions">
+      <.settings_header title="audio description" />
+      <div class="py-1.5">
+        <div
+          :for={description <- @descriptions}
+          id={"audio-description-#{description.language}"}
+          class="flex items-center pl-3.5 pr-2 py-1.5"
+        >
+          <.rendition_led progress={100} />
+          <div class="w-full text-sm text-stone-500 mb-0.5 h-[1.225rem]">
+            {description.label}
+          </div>
+          <div class="flex-grow"></div>
+          <a
+            :if={description.mp3_url}
+            href={description.mp3_url}
+            target="_blank"
+            rel="noopener"
+            class="hover:text-stone-300"
+          >
+            <.format_badge>MP3</.format_badge>
+          </a>
+          <a
+            :if={description.vtt_url}
+            href={description.vtt_url}
+            target="_blank"
+            rel="noopener"
+            class="hover:text-stone-300"
+          >
+            <.format_badge>VTT</.format_badge>
+          </a>
+        </div>
       </div>
     </div>
     """

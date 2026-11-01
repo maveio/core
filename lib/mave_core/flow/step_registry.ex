@@ -4,18 +4,23 @@ defmodule MaveCore.Flow.StepRegistry do
   """
 
   alias MaveCore.Flow.Steps.{
+    AiDescribeVideoStep,
+    AiSpeakDescriptionsStep,
     AiTranscribeAudioStep,
+    AiTranslateDescriptionsStep,
     AiTranslateSubtitlesStep,
     AssetUploadOriginalStep,
     CdnPurgeStep,
     EventNotifyWebhookStep,
     ManifestBuildStep,
     MediaBuildHlsMasterStep,
+    MediaDetectScenesStep,
     MediaExtractFrameStep,
     MediaGenerateAudioPeaksStep,
     MediaGenerateSegmentsStep,
     MediaGenerateStoryboardStep,
     MediaInspectStep,
+    MediaMixAudioDescriptionStep,
     MediaPackageHlsAudioStep,
     MediaPackageHlsVariantStep,
     MediaTranscodeAudioStep,
@@ -166,6 +171,49 @@ defmodule MaveCore.Flow.StepRegistry do
       handler: AiTranslateSubtitlesStep,
       options: [@strict_option],
       executor: :inline
+    },
+    "media.detect_scenes" => %{
+      name: "Detect Scenes",
+      category: "media",
+      description:
+        "Detects camera cuts, groups them into scenes and extracts labelled stills for audio description.",
+      handler: MediaDetectScenesStep,
+      options: [@strict_option],
+      executor: :flame
+    },
+    "ai.describe_video" => %{
+      name: "Describe Video",
+      category: "ai",
+      description:
+        "Writes English audio description cues for the scenes, placed in the pauses of the speech.",
+      handler: AiDescribeVideoStep,
+      options: [@strict_option],
+      executor: :inline
+    },
+    "ai.translate_descriptions" => %{
+      name: "Translate Descriptions",
+      category: "ai",
+      description: "Translates the English audio description cues into another language.",
+      handler: AiTranslateDescriptionsStep,
+      options: [@strict_option],
+      executor: :inline
+    },
+    "ai.speak_descriptions" => %{
+      name: "Speak Descriptions",
+      category: "ai",
+      description: "Speaks the audio description cues of one language with text-to-speech.",
+      handler: AiSpeakDescriptionsStep,
+      options: [@strict_option],
+      executor: :inline
+    },
+    "media.mix_audio_description" => %{
+      name: "Mix Audio Description",
+      category: "media",
+      description:
+        "Mixes the spoken descriptions into the video's audio (ducked under speech) and writes the descriptions VTT.",
+      handler: MediaMixAudioDescriptionStep,
+      options: [@strict_option],
+      executor: :flame
     },
     "subtitle.upload" => %{
       name: "Upload Subtitle",

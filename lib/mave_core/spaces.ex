@@ -627,24 +627,36 @@ defmodule MaveCore.Spaces do
     attrs =
       attrs
       |> stringify_keys()
-      |> Map.take(["hotlink_protection_enabled"])
+      |> Map.take(["hotlink_protection_enabled", "audio_description_enabled"])
 
-    space
-    |> Space.features_changeset(attrs)
-    |> Repo.update()
-    |> case do
-      {:ok, updated_space} ->
-        if Map.has_key?(attrs, "hotlink_protection_enabled") do
-          sync_domain_cors(updated_space.id)
-        end
+    with :ok <- authorize_feature_change(space, attrs),
+         {:ok, updated_space} <- space |> Space.features_changeset(attrs) |> Repo.update() do
+      if Map.has_key?(attrs, "hotlink_protection_enabled") do
+        sync_domain_cors(updated_space.id)
+      end
 
-        Events.broadcast_updated(updated_space.id)
-        {:ok, updated_space}
-
-      {:error, changeset} ->
-        {:error, changeset}
+      Events.broadcast_updated(updated_space.id)
+      {:ok, updated_space}
     end
   end
+
+  @doc """
+  Whether new uploads in the space get audio descriptions: the space opted in and
+  the host still allows it (a downgraded space stops getting them).
+  """
+  def audio_description_active?(%Space{audio_description_enabled: true} = space) do
+    UsageLimits.can_use_audio_description?(space) == :ok
+  end
+
+  def audio_description_active?(_space), do: false
+
+  # Turning audio descriptions off is always allowed; turning them on needs the host's consent.
+  defp authorize_feature_change(%Space{} = space, %{"audio_description_enabled" => value})
+       when value in [true, "true"] do
+    UsageLimits.can_use_audio_description?(space)
+  end
+
+  defp authorize_feature_change(_space, _attrs), do: :ok
 
   def update_space_processing(%Space{} = space, attrs) when is_map(attrs) do
     attrs =

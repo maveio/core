@@ -3,10 +3,12 @@ defmodule MaveCore.PublicApi do
 
   import Ecto.Query, warn: false
 
+  alias MaveCore.Assets
   alias MaveCore.Assets.{AudioTrack, Subtitle, Video}
+  alias MaveCore.AudioDescription
   alias MaveCore.Collections.CollectionEmbed
   alias MaveCore.Embeds
-  alias MaveCore.Embeds.{Embed, Events, SettingsSerializer}
+  alias MaveCore.Embeds.{Embed, Events, ManifestPublisher, SettingsSerializer}
   alias MaveCore.Flow
   alias MaveCore.Languages
   alias MaveCore.Playback.URLs
@@ -579,8 +581,29 @@ defmodule MaveCore.PublicApi do
         video_src: nil
       },
       subtitles: detailed_subtitles(space, embed, version),
-      audio_tracks: detailed_audio_tracks(space, embed, version)
+      audio_tracks: detailed_audio_tracks(space, embed, version),
+      audio_descriptions: detailed_audio_descriptions(space, current_video, embed, version)
     }
+  end
+
+  defp detailed_audio_descriptions(_space, nil, _embed, _version), do: []
+
+  defp detailed_audio_descriptions(
+         %Space{} = space,
+         %Video{id: video_id},
+         %Embed{} = embed,
+         version
+       ) do
+    video_id
+    |> Assets.list_audio_descriptions()
+    |> Enum.map(
+      &ManifestPublisher.serialize_audio_description(
+        &1,
+        "space-#{space.hash}",
+        embed.hash,
+        version
+      )
+    )
   end
 
   defp detailed_video_renditions(nil), do: nil
@@ -861,6 +884,12 @@ defmodule MaveCore.PublicApi do
       "durable_source_required" => true,
       "version" => current_video_version(embed)
     }
+    |> then(fn input ->
+      case AudioDescription.run_input(space) do
+        nil -> input
+        audio_description -> Map.put(input, "audio_description", audio_description)
+      end
+    end)
   end
 
   defp input_url_priority(%Space{} = space, params) do

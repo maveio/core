@@ -117,6 +117,14 @@ New runs select the current built-in preset version. Existing runs and pinned
 custom versions do not gain steps automatically; reprocess with an updated flow
 when peaks are needed for older media.
 
+## Audio description
+
+The publishing presets include optional background steps that generate an audio
+description (a full-mix MP3 and a descriptions VTT, in English and Dutch) for
+spaces that opted in. They skip themselves unless the run input has
+`audio_description`, and nothing in the publish path waits for them. See
+[audio description](audio_description.md).
+
 ## Execution and recovery
 
 By default:

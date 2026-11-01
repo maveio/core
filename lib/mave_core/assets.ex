@@ -5,7 +5,7 @@ defmodule MaveCore.Assets do
 
   import Ecto.Query, warn: false
 
-  alias MaveCore.Assets.{AudioTrack, Subtitle, Video}
+  alias MaveCore.Assets.{AudioDescription, AudioTrack, Subtitle, Video}
   alias MaveCore.Embeds
   alias MaveCore.Embeds.{Embed, ManifestPublisher, SettingsSerializer}
   alias MaveCore.EncodingBooster
@@ -13,6 +13,7 @@ defmodule MaveCore.Assets do
   alias MaveCore.Flow.Steps.{
     MediaBuildHlsMasterStep,
     MediaExtractFrameStep,
+    MediaMixAudioDescriptionStep,
     MediaPackageHlsAudioStep
   }
 
@@ -1036,6 +1037,12 @@ defmodule MaveCore.Assets do
               "status" => "ok",
               "audio_tracks" => audio_tracks
             }},
+           {"hls_audio_descriptions",
+            %{
+              "step_type" => "media.mix_audio_description",
+              "status" => "ok",
+              "audio_tracks" => hls_audio_descriptions(embed)
+            }},
            {"hls_subtitles",
             %{
               "step_type" => "subtitle.collect",
@@ -1222,6 +1229,33 @@ defmodule MaveCore.Assets do
       }
     end)
   end
+
+  defp hls_audio_descriptions(%Embed{} = embed) do
+    embed.asset.current_video.id
+    |> list_audio_descriptions()
+    |> Enum.map(fn description ->
+      %{
+        "id" => "audio_description_#{description.language}",
+        "label" => MediaMixAudioDescriptionStep.label(description.language),
+        "language" => description.language,
+        "default" => false,
+        "hls_playlist" => AudioDescription.hls_playlist(description),
+        "hls_bandwidth" => @audio_hls_bandwidth,
+        "hls_channels" => @audio_hls_channels,
+        "characteristics" => MediaMixAudioDescriptionStep.characteristics()
+      }
+    end)
+  end
+
+  @doc "Audio descriptions of a video version, by language."
+  def list_audio_descriptions(video_id) when is_binary(video_id) do
+    AudioDescription
+    |> where([description], description.video_id == ^video_id)
+    |> order_by([description], asc: description.language)
+    |> Repo.all()
+  end
+
+  def list_audio_descriptions(_video_id), do: []
 
   defp hls_subtitles(%Embed{} = embed) do
     version = Embeds.current_video_version(embed)

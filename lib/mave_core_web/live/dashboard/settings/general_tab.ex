@@ -9,6 +9,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
   alias MaveCore.Spaces
   alias MaveCore.Spaces.Domain
   alias MaveCore.Spaces.Space
+  alias MaveCore.UsageLimits
   alias Phoenix.LiveView.JS
 
   @show_flow_settings false
@@ -177,6 +178,34 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
                   enabled={@features.hotlink_protection}
                   disabled={@features.hotlink_protection_disabled}
                   phx-click="toggle_hotlink_protection"
+                  phx-target={@myself}
+                />
+              </div>
+            </:actions>
+          </.data_table_row>
+          <.data_table_row id="audio-description-feature">
+            <div>
+              <div>{gettext("Audio description")}</div>
+              <div
+                :if={@features.audio_description_notice}
+                id="audio-description-notice"
+                class="text-xs text-stone-400 mt-1"
+              >
+                {@features.audio_description_notice}
+              </div>
+            </div>
+            <.info_hover>
+              {gettext(
+                "New videos get spoken descriptions of what happens on screen, in English and Dutch: an audio track with the descriptions mixed in, and a descriptions VTT."
+              )}
+            </.info_hover>
+            <:actions>
+              <div class="p-4">
+                <.toggle
+                  id="audio-description-toggle"
+                  enabled={@features.audio_description}
+                  disabled={@features.audio_description_disabled}
+                  phx-click="toggle_audio_description"
                   phx-target={@myself}
                 />
               </div>
@@ -519,6 +548,34 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
     end
   end
 
+  def handle_event("toggle_audio_description", _params, socket) do
+    attrs = %{
+      audio_description_enabled: !socket.assigns.current_space.audio_description_enabled
+    }
+
+    case Spaces.update_space_features(socket.assigns.current_space, attrs) do
+      {:ok, updated_space} ->
+        {:noreply,
+         socket
+         |> notify_parent(updated_space)
+         |> assign(:current_space, updated_space)
+         |> reload_state()}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply, put_flash(socket, :error, gettext("Could not update audio description."))}
+
+      {:error, reason} ->
+        copy = UsageLimits.restriction_copy(:audio_description, reason)
+
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           Map.get(copy, :error, gettext("Audio description isn't available for this space."))
+         )}
+    end
+  end
+
   def handle_event("change_default_flow_template", %{"processing" => params}, socket) do
     case Spaces.update_space_processing(socket.assigns.current_space, %{
            default_flow_template: Map.get(params, "default_flow_template")
@@ -634,12 +691,42 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
     |> assign(:region_help, dashboard_region_help(current_space))
     |> assign(:account_deletion_requirements, AccountDeletion.requirements())
     |> assign(:google_oauth_enabled, GoogleOAuth.enabled?())
-    |> assign(:features, %{
-      public_sharing: current_space.public_sharing_enabled,
-      create_spaces: false,
-      hotlink_protection: hotlink_protection_enabled?(current_space),
-      hotlink_protection_disabled: SharedStorageSpace.shared?(current_space)
-    })
+    |> assign(
+      :features,
+      Map.merge(
+        %{
+          public_sharing: current_space.public_sharing_enabled,
+          create_spaces: false,
+          hotlink_protection: hotlink_protection_enabled?(current_space),
+          hotlink_protection_disabled: SharedStorageSpace.shared?(current_space)
+        },
+        audio_description_features(current_space)
+      )
+    )
+  end
+
+  # A space that lost access can still switch the feature off, but not back on.
+  defp audio_description_features(%Space{} = space) do
+    enabled? = space.audio_description_enabled == true
+
+    case UsageLimits.can_use_audio_description?(space) do
+      :ok ->
+        %{
+          audio_description: enabled?,
+          audio_description_disabled: false,
+          audio_description_notice: nil
+        }
+
+      {:error, reason} ->
+        copy = UsageLimits.restriction_copy(:audio_description, reason)
+
+        %{
+          audio_description: enabled?,
+          audio_description_disabled: not enabled?,
+          audio_description_notice:
+            Map.get(copy, :notice, gettext("Audio description isn't available for this space."))
+        }
+    end
   end
 
   defp notify_parent(socket, updated_space) do

@@ -3,7 +3,7 @@ defmodule MaveCore.Assets.Video do
   use MaveCore.Schema
   import Ecto.Changeset
 
-  alias MaveCore.Assets.{Asset, AudioTrack, Rendition, Subtitle}
+  alias MaveCore.Assets.{Asset, AudioDescription, AudioTrack, Rendition, Subtitle}
 
   schema "videos" do
     field :status, :string
@@ -19,6 +19,7 @@ defmodule MaveCore.Assets.Video do
     field :language, :string
 
     belongs_to :asset, Asset
+    has_many :audio_descriptions, AudioDescription
     has_many :audio_tracks, AudioTrack
     has_many :renditions, Rendition
     has_many :subtitles, Subtitle

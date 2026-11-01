@@ -20,8 +20,8 @@ and publish videos — with your media in S3-compatible storage that you control
 
 - **Manage:** organize videos into folders, invite your team, and replace a
   video without changing its public embed.
-- **Publish:** resumable uploads, adaptive HLS, posters, subtitles, and
-  customizable player settings.
+- **Publish:** resumable uploads, adaptive HLS, posters, subtitles,
+  [audio description](docs/audio_description.md), and customizable player settings.
 - **Integrate:** embed with web components, iframe, React, or Vue; automate
   with the video API and signed webhooks.
 - **Understand:** see views, drop-off, and viewing sources in your dashboard,

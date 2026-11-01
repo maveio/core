@@ -220,6 +220,21 @@ defmodule MaveCore.Flow.Steps.MediaBuildHlsMasterStep do
           |> Enum.filter(&is_map/1)
           |> Enum.map(&normalize_audio_track_map/1)
 
+        # Audio descriptions: full mixes marked for assistive technology, never the default.
+        %{
+          "step_type" => "media.mix_audio_description",
+          "status" => "ok",
+          "audio_tracks" => tracks
+        }
+        when is_list(tracks) ->
+          tracks
+          |> Enum.filter(&is_map/1)
+          |> Enum.map(&normalize_audio_track_map/1)
+
+        %{"step_type" => "media.mix_audio_description", "status" => "ok", "audio_track" => track}
+        when is_map(track) ->
+          [normalize_audio_track_map(track)]
+
         _ ->
           []
       end
@@ -324,7 +339,8 @@ defmodule MaveCore.Flow.Steps.MediaBuildHlsMasterStep do
       "channels" => normalize_string(first_map_value(track, ["hls_channels", "channels"], "2")),
       "bandwidth" => normalize_integer(first_map_value(track, ["hls_bandwidth", "bandwidth"])),
       "playlist_path" => first_map_value(track, ["hls_playlist", "playlist_path"]),
-      "playlist_uri" => first_map_value(track, ["hls_src", "playlist_uri"])
+      "playlist_uri" => first_map_value(track, ["hls_src", "playlist_uri"]),
+      "characteristics" => first_map_value(track, ["characteristics"])
     }
   end
 
@@ -546,8 +562,11 @@ defmodule MaveCore.Flow.Steps.MediaBuildHlsMasterStep do
 
   defp audio_media_line(track, group_id) do
     default? = track["default"] in [true, "true", 1, "1"]
+    characteristics = track["characteristics"]
     default_flag = if default?, do: "YES", else: "NO"
-    autoselect_flag = if default?, do: "YES", else: "NO"
+    # Players select an accessibility track by its characteristics when the viewer asks
+    # for audio description, which requires AUTOSELECT=YES.
+    autoselect_flag = if default? or is_binary(characteristics), do: "YES", else: "NO"
 
     attrs =
       [
@@ -556,10 +575,13 @@ defmodule MaveCore.Flow.Steps.MediaBuildHlsMasterStep do
         ~s(NAME="#{escape_attr(track["name"] || "Audio")}"),
         ~s(LANGUAGE="#{escape_attr(track["language"] || "und")}"),
         "DEFAULT=#{default_flag}",
-        "AUTOSELECT=#{autoselect_flag}",
+        "AUTOSELECT=#{autoselect_flag}"
+      ]
+      |> append_quoted_attr("CHARACTERISTICS", characteristics)
+      |> Kernel.++([
         ~s(CHANNELS="#{escape_attr(track["channels"] || "2")}"),
         ~s(URI="#{escape_attr(track["playlist_path"] || "")}")
-      ]
+      ])
       |> append_attr("BANDWIDTH", track["bandwidth"])
 
     "#EXT-X-MEDIA:#{Enum.join(attrs, ",")}"
