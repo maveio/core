@@ -219,19 +219,73 @@ defmodule MaveCore.Analytics.SessionsTest do
     assert {:ok, 0} = Sessions.refresh_changed(limit: 32)
   end
 
-  test "failed physical invalidation hides pointers and reports an error for retry" do
+  test "invalidation hides pointers and records cleanup without requiring ClickHouse deletion" do
     pair(1, "AAAAA", "video", 20, 25, 0, 5)
     assert {:ok, _} = Sessions.refresh_changed(limit: 32)
+    assert {:ok, generations} = Sessions.generations("AAAAA")
     ClickHouseRepo.query!("RENAME TABLE analytics_session_years TO temporarily_unavailable_years")
 
     try do
-      assert {:error, :analytics_unavailable} = Sessions.invalidate("AAAAA")
+      assert {:ok, :ok} = Sessions.invalidate("AAAAA")
+      assert {:ok, :ok} = Sessions.invalidate("AAAAA")
       assert {:error, :preparing} = Sessions.generations("AAAAA")
+
+      retired =
+        Repo.query!(
+          "SELECT generation::text FROM analytics_session_retirements WHERE space_hash='AAAAA'"
+        ).rows
+        |> List.flatten()
+
+      assert Enum.sort(retired) == Enum.sort(generations)
+
+      assert [[1]] =
+               ClickHouseRepo.query!(
+                 "SELECT count() FROM analytics_sessions WHERE space_hash='AAAAA'"
+               ).rows
     after
       ClickHouseRepo.query!(
         "RENAME TABLE temporarily_unavailable_years TO analytics_session_years"
       )
     end
+  end
+
+  test "invalidation preserves the grace period and cleanup cannot remove rebuilt or unrelated data" do
+    pair(1, "AAAAA", "video", 20, 25, 0, 5)
+    pair(2, "BBBBB", "other", 20, 25, 0, 5)
+    assert {:ok, _} = Sessions.refresh_changed(limit: 32)
+    assert {:ok, old_generations} = Sessions.generations("AAAAA")
+    assert {:ok, other_generations} = Sessions.generations("BBBBB")
+
+    assert {:ok, :ok} = Sessions.invalidate("AAAAA")
+    assert {:error, :preparing} = Sessions.data("AAAAA")
+    assert {:ok, ^other_generations} = Sessions.generations("BBBBB")
+    assert :ok = Sessions.cleanup()
+
+    assert [[1]] =
+             ClickHouseRepo.query!(
+               "SELECT count() FROM analytics_sessions WHERE space_hash='AAAAA'"
+             ).rows
+
+    pair(3, "AAAAA", "new-video", 10, 15, 0, 5)
+    assert {:ok, _} = Sessions.refresh_changed(limit: 32)
+    assert {:ok, new_generations} = Sessions.generations("AAAAA")
+    assert MapSet.disjoint?(MapSet.new(old_generations), MapSet.new(new_generations))
+
+    Repo.query!(
+      "UPDATE analytics_session_retirements SET retired_at=now()-interval '2 hours' WHERE space_hash='AAAAA'"
+    )
+
+    assert :ok = Sessions.cleanup()
+    assert {:ok, ^new_generations} = Sessions.generations("AAAAA")
+    assert {:ok, ^other_generations} = Sessions.generations("BBBBB")
+    assert {:ok, %{views: %{year: 2}}} = Sessions.data("AAAAA")
+    assert {:ok, %{views: %{year: 1}}} = Sessions.data("BBBBB")
+
+    assert [[0]] =
+             ClickHouseRepo.query!(
+               "SELECT count() FROM analytics_sessions WHERE space_hash='AAAAA' AND generation IN {$0:Array(UUID)}",
+               [old_generations]
+             ).rows
   end
 
   test "source deletion invalidates the inventory and cannot retain old totals" do
