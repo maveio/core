@@ -22,24 +22,38 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
 
   test "/data renders space analytics from clickhouse", %{conn: conn, db_name: db_name} do
     {conn, space} = authenticated_conn(conn)
+    now = DateTime.utc_now()
+
+    timestamps = [
+      DateTime.add(now, -172_800, :second),
+      DateTime.add(now, -172_797, :second),
+      DateTime.add(now, -30, :second),
+      DateTime.add(now, -28, :second)
+    ]
 
     sql = """
     INSERT INTO #{db_name}.events
     (timestamp, name, session_id, space_hash, embed_hash, video_time, duration, source_url, browser, browser_version, os, os_version, device, device_brand)
     VALUES
-    (addSeconds(now64(6), -172800), 'play',  '00000000-0000-0000-0000-000000001002', '#{space.hash}', 'BBBBBBBBBB', 0.0, 10, 'https://example.com/2daysago', 'Safari', '17', 'Mac', '14', 'Mobile', 'Apple'),
-    (addSeconds(now64(6), -172797), 'pause', '00000000-0000-0000-0000-000000001002', '#{space.hash}', 'BBBBBBBBBB', 3.0, 10, 'https://example.com/2daysago', 'Safari', '17', 'Mac', '14', 'Mobile', 'Apple'),
-    (addSeconds(now64(6), -30), 'play',  '00000000-0000-0000-0000-000000001003', '#{space.hash}', 'CCCCCCCCCC', 0.0, 10, 'https://example.com/today', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple'),
-    (addSeconds(now64(6), -28), 'pause', '00000000-0000-0000-0000-000000001003', '#{space.hash}', 'CCCCCCCCCC', 2.0, 10, 'https://example.com/today', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple')
+    ({$0:DateTime64(6)}, 'play',  '00000000-0000-0000-0000-000000001002', '#{space.hash}', 'BBBBBBBBBB', 0.0, 10, 'https://example.com/2daysago', 'Safari', '17', 'Mac', '14', 'Mobile', 'Apple'),
+    ({$1:DateTime64(6)}, 'pause', '00000000-0000-0000-0000-000000001002', '#{space.hash}', 'BBBBBBBBBB', 3.0, 10, 'https://example.com/2daysago', 'Safari', '17', 'Mac', '14', 'Mobile', 'Apple'),
+    ({$2:DateTime64(6)}, 'play',  '00000000-0000-0000-0000-000000001003', '#{space.hash}', 'CCCCCCCCCC', 0.0, 10, 'https://example.com/today', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple'),
+    ({$3:DateTime64(6)}, 'pause', '00000000-0000-0000-0000-000000001003', '#{space.hash}', 'CCCCCCCCCC', 2.0, 10, 'https://example.com/today', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple')
     """
 
-    {:ok, _} = ClickHouseRepo.query(sql)
+    {:ok, _} = ClickHouseRepo.query(sql, timestamps)
     ClickHouseRepo.query("OPTIMIZE TABLE #{db_name}.events FINAL")
 
     {:ok, view, _html} = live(conn, "/data")
     # Real ClickHouse queries can exceed the default 100 ms on a cold test stack.
     _ = render_async(view, 5_000)
     html = render(view)
+    month_start = Date.beginning_of_month(Date.utc_today())
+
+    expected_views =
+      timestamps
+      |> Enum.take_every(2)
+      |> Enum.count(&(Date.compare(DateTime.to_date(&1), month_start) != :lt))
 
     assert html =~ "Views"
     assert html =~ "Watch time"
@@ -50,10 +64,12 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
     assert html =~ "Device"
     assert html =~ "Browser"
     assert has_element?(view, "#data-trend .w-1")
-    assert has_element?(view, "#data-trend .bg-blue-500")
+    if expected_views > 0, do: assert(has_element?(view, "#data-trend .bg-blue-500"))
     refute has_element?(view, "#data-trend svg")
-    # The default calendar month includes both views.
-    assert view |> element("#data-kpis") |> render() =~ ~r/>\s*2\s*</
+    # Two days ago may belong to the previous calendar month.
+    assert view |> element("#data-kpis > div:first-child") |> render() =~
+             ~r/>\s*#{expected_views}\s*</
+
     refute html =~ "font-family: 'Sofia'"
   end
 
