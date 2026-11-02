@@ -223,6 +223,45 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStepTest do
     assert output["error"] =~ "missing_transcription_output"
   end
 
+  test "long translated segments use matching readable VTT and JSON cues" do
+    Application.put_env(:mave_core, :subtitle_translation_provider, __MODULE__.LongTranslatorStub)
+
+    context = %{
+      run_input: %{"space_hash" => "abcde", "embed_hash" => "SubtitleTest"},
+      dependency_outputs: %{
+        "transcribe_audio" => %{
+          "status" => "ok",
+          "language" => "nl",
+          "transcription_text" => "Een voorbeeld."
+        }
+      }
+    }
+
+    assert {:ok, output, _} = AiTranslateSubtitlesStep.run(%{}, context)
+    assert {:ok, vtt} = FlowStorageAdapterStub.get("space-abcde", output["subtitle_key"], nil)
+
+    assert {:ok, json} =
+             FlowStorageAdapterStub.get("space-abcde", output["subtitle_json_key"], nil)
+
+    decoded = Jason.decode!(json)
+    assert length(decoded["segments"]) > 1
+
+    assert Enum.map_join(decoded["segments"], " ", & &1["text"]) |> String.replace("\n", " ") ==
+             decoded["text"]
+
+    for segment <- decoded["segments"] do
+      assert vtt =~ "\n#{segment["text"]}\n\n"
+      assert length(String.split(segment["text"], "\n")) <= 2
+    end
+  end
+
+  defmodule LongTranslatorStub do
+    def translate(_transcription, _opts) do
+      text = String.duplicate("A readable sentence with several words. ", 6) |> String.trim()
+      {:ok, %{text: text, language: "en", segments: [%{start: 0.0, end: 18.0, text: text}]}}
+    end
+  end
+
   defp restore_env(key, nil), do: Application.delete_env(:mave_core, key)
   defp restore_env(key, value), do: Application.put_env(:mave_core, key, value)
 
