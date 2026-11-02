@@ -93,7 +93,12 @@ mix analytics.sessions.backfill --materialize-inventory --materialize-session-re
 Source deletion, copying or restoration must invalidate affected prepared data
 with `Sessions.invalidate/1` under the caller's existing authorization, then
 rebuild it. Do not reuse a retired space identifier before invalidation succeeds.
-Normal event arrival needs no explicit invalidation.
+Invalidation atomically hides the published generations in PostgreSQL and records
+them for cleanup; it does not wait for ClickHouse deletion. New readers cannot
+select the old generations, while reads already in progress retain the reader
+grace period. The background processor rebuilds from current source events, and
+cleanup reclaims retired generations independently. Normal event arrival needs
+no explicit invalidation.
 
 ## Query semantics
 
