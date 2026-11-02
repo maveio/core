@@ -468,6 +468,85 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
              AiTranscribeAudioStep.run(step_definition, context)
   end
 
+  test "generated long segments use matching readable VTT and JSON cues" do
+    text = String.duplicate("A readable sentence with several words. ", 6) |> String.trim()
+    context = language_context("en", text)
+
+    Process.put(:language_test_response, %{
+      text: text,
+      language: "en",
+      segments: [%{start: 0.0, end: 18.0, text: text}]
+    })
+
+    assert {:ok, output, _} = AiTranscribeAudioStep.run(%{}, context)
+    assert {:ok, vtt} = FlowStorageAdapterStub.get("space-abcde", output["subtitle_key"], nil)
+
+    assert {:ok, json} =
+             FlowStorageAdapterStub.get("space-abcde", output["subtitle_json_key"], nil)
+
+    segments = Jason.decode!(json)["segments"]
+    assert length(segments) > 1
+    assert Enum.map_join(segments, " ", & &1["text"]) |> String.replace("\n", " ") == text
+
+    for segment <- segments do
+      assert vtt =~ "\n#{segment["text"]}\n\n"
+      assert length(String.split(segment["text"], "\n")) <= 2
+    end
+  end
+
+  test "provider word timings survive grouping and JSON serialization" do
+    text = "Hello there. After a pause."
+
+    words = [
+      %{word: "Hello", start: 0.125, end: 0.4},
+      %{word: "there.", start: 0.5, end: 1.1},
+      %{word: "After", start: 2.7, end: 3.0},
+      %{word: "a", start: 3.05, end: 3.1},
+      %{word: "pause.", start: 3.15, end: 4.2}
+    ]
+
+    context = language_context("en", text)
+
+    Process.put(:language_test_response, %{
+      text: text,
+      language: "en",
+      words: words,
+      segments: [%{start: 0.0, end: 8.0, text: text}]
+    })
+
+    assert {:ok, output, _} = AiTranscribeAudioStep.run(%{}, context)
+
+    assert {:ok, json} =
+             FlowStorageAdapterStub.get("space-abcde", output["subtitle_json_key"], nil)
+
+    assert {:ok, vtt} = FlowStorageAdapterStub.get("space-abcde", output["subtitle_key"], nil)
+    segments = Jason.decode!(json)["segments"]
+
+    assert Enum.flat_map(segments, & &1["words"]) ==
+             Enum.map(words, fn word ->
+               %{"word" => word.word, "start" => word.start, "end" => word.end}
+             end)
+
+    assert vtt =~ "00:00:00.125 --> 00:00:01.100"
+    assert vtt =~ "00:00:02.700 --> 00:00:04.200"
+  end
+
+  test "supplied VTT is preserved verbatim" do
+    vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:10.000\nFirst\nSecond\nThird\n"
+
+    context = %{
+      run_input: %{
+        "space_hash" => "abcde",
+        "embed_hash" => "SubtitleTest",
+        "transcription_language" => "en",
+        "transcription_vtt" => vtt
+      }
+    }
+
+    assert {:ok, output, _} = AiTranscribeAudioStep.run(%{}, context)
+    assert {:ok, ^vtt} = FlowStorageAdapterStub.get("space-abcde", output["subtitle_key"], nil)
+  end
+
   defp restore_env(key, nil), do: Application.delete_env(:mave_core, key)
   defp restore_env(key, value), do: Application.put_env(:mave_core, key, value)
 

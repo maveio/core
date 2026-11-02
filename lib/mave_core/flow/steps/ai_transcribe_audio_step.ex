@@ -14,6 +14,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
   alias MaveCore.Languages
   alias MaveCore.Media.Storage
   alias MaveCore.Transcription.LanguageDetector
+  alias MaveCore.Transcription.SubtitleCues
 
   @impl true
   def run(step_definition, context) do
@@ -163,20 +164,13 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
             parse_float(inspect_output["duration"]) ||
             5.0
 
-        vtt_body =
-          [
-            "WEBVTT\n\n",
-            format_time(0.0),
-            " --> ",
-            format_time(max(duration, 0.5)),
-            "\n",
-            String.trim(run_input["transcription_text"]),
-            "\n"
-          ]
-          |> IO.iodata_to_binary()
-
-        {:ok, vtt_body, nil, "input_text", %{}, requested_language,
-         run_input["transcription_text"]}
+        with {:ok, vtt_body} <-
+               run_input["transcription_text"]
+               |> SubtitleCues.from_text(duration)
+               |> SubtitleCues.to_vtt() do
+          {:ok, vtt_body, nil, "input_text", %{}, requested_language,
+           run_input["transcription_text"]}
+        end
 
       true ->
         build_provider_subtitle_body(
@@ -211,7 +205,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
              requested_language
            ),
          {:ok, vtt_body} <- transcription_to_vtt(transcription, inspect_output),
-         {:ok, subtitle_json} <- transcription_to_json(transcription) do
+         {:ok, subtitle_json} <- transcription_to_json(transcription, inspect_output) do
       language = normalize_optional_language(transcription[:language])
 
       meta =
@@ -263,92 +257,21 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
     end
   end
 
-  defp transcription_to_vtt(%{segments: [%{} | _] = segments}, _inspect_output) do
-    segments_to_vtt(segments)
+  defp transcription_to_vtt(transcription, inspect_output) do
+    transcription
+    |> SubtitleCues.from_transcription(parse_float(inspect_output["duration"]))
+    |> SubtitleCues.to_vtt()
   end
 
-  defp transcription_to_vtt(%{text: text}, inspect_output) when is_binary(text) and text != "" do
-    duration = parse_float(inspect_output["duration"]) || 5.0
+  defp transcription_to_json(%{text: text} = transcription, inspect_output)
+       when is_binary(text) do
+    cues = SubtitleCues.from_transcription(transcription, parse_float(inspect_output["duration"]))
 
-    vtt_body =
-      [
-        "WEBVTT\n\n",
-        format_time(0.0),
-        " --> ",
-        format_time(max(duration, 0.5)),
-        "\n",
-        String.trim(text),
-        "\n"
-      ]
-      |> IO.iodata_to_binary()
-
-    {:ok, vtt_body}
+    {:ok,
+     Jason.encode!(%{"text" => String.trim(text), "segments" => SubtitleCues.json_segments(cues)})}
   end
 
-  defp transcription_to_vtt(_transcription, _inspect_output) do
-    {:error, :empty_transcription_response}
-  end
-
-  defp transcription_to_json(%{text: text} = transcription) when is_binary(text) do
-    segments =
-      transcription
-      |> Map.get(:segments, [])
-      |> normalize_transcription_segments()
-      |> Enum.with_index(1)
-      |> Enum.map(fn {segment, index} ->
-        %{
-          "id" => index,
-          "start" => segment.start,
-          "end" => segment.end,
-          "text" => segment.text,
-          "words" => segment_words(segment)
-        }
-      end)
-
-    {:ok, Jason.encode!(%{"text" => String.trim(text), "segments" => segments})}
-  end
-
-  defp transcription_to_json(_), do: {:error, :empty_transcription_response}
-
-  defp normalize_transcription_segments(segments) when is_list(segments) do
-    segments
-    |> Enum.filter(&is_map/1)
-    |> Enum.map(fn segment ->
-      start_time = parse_float(segment[:start] || segment["start"]) || 0.0
-      end_time = parse_float(segment[:end] || segment["end"]) || start_time + 0.5
-      text = to_string(segment[:text] || segment["text"] || "") |> String.trim()
-      %{start: start_time, end: max(end_time, start_time + 0.1), text: text}
-    end)
-    |> Enum.filter(&(&1.text != ""))
-  end
-
-  defp normalize_transcription_segments(_), do: []
-
-  defp segment_words(%{text: text, start: start_time, end: end_time}) do
-    words = String.split(text, ~r/\s+/, trim: true)
-    duration = max(end_time - start_time, 0.001)
-
-    case words do
-      [] ->
-        []
-
-      words ->
-        word_duration = duration / length(words)
-
-        words
-        |> Enum.with_index()
-        |> Enum.map(fn {word, index} ->
-          word_start = Float.round(start_time + word_duration * index, 3)
-          word_end = Float.round(min(end_time, word_start + word_duration), 3)
-
-          %{
-            "start" => word_start,
-            "end" => word_end,
-            "word" => word
-          }
-        end)
-    end
-  end
+  defp transcription_to_json(_, _), do: {:error, :empty_transcription_response}
 
   defp provider_mode_meta(%{language: language, text: text, segments: segments}, provider) do
     %{
@@ -401,37 +324,9 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
   end
 
   defp segments_to_vtt(segments) do
-    valid_segments =
-      segments
-      |> Enum.filter(&is_map/1)
-      |> Enum.map(fn segment ->
-        start_time = parse_float(segment["start"]) || parse_float(segment[:start]) || 0.0
-        end_time = parse_float(segment["end"]) || parse_float(segment[:end]) || start_time + 1.0
-        text = to_string(segment["text"] || segment[:text] || "") |> String.trim()
-        %{start: start_time, end: max(end_time, start_time + 0.1), text: text}
-      end)
-      |> Enum.filter(&(is_binary(&1.text) and &1.text != ""))
-
-    if valid_segments == [] do
-      {:error, :empty_transcription_segments}
-    else
-      body =
-        [
-          "WEBVTT\n\n",
-          Enum.map(valid_segments, fn segment ->
-            [
-              format_time(segment.start),
-              " --> ",
-              format_time(segment.end),
-              "\n",
-              segment.text,
-              "\n\n"
-            ]
-          end)
-        ]
-        |> IO.iodata_to_binary()
-
-      {:ok, body}
+    case segments |> SubtitleCues.build() |> SubtitleCues.to_vtt() do
+      {:error, :empty_subtitle_segments} -> {:error, :empty_transcription_segments}
+      result -> result
     end
   end
 
@@ -448,15 +343,6 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
   end
 
   defp transcript_text_from_segments(_), do: nil
-
-  defp format_time(seconds) do
-    total_ms = trunc(max(seconds, 0.0) * 1000)
-    hours = div(total_ms, 3_600_000)
-    minutes = div(rem(total_ms, 3_600_000), 60_000)
-    secs = div(rem(total_ms, 60_000), 1000)
-    millis = rem(total_ms, 1000)
-    :io_lib.format("~2..0B:~2..0B:~2..0B.~3..0B", [hours, minutes, secs, millis]) |> to_string()
-  end
 
   defp build_subtitle_key(embed_hash, version, language) do
     with {:ok, embed_hash} <- StepSupport.require_binary(embed_hash, :embed_hash),
