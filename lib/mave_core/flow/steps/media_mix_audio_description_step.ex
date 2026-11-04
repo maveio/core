@@ -14,7 +14,6 @@ defmodule MaveCore.Flow.Steps.MediaMixAudioDescriptionStep do
   alias MaveCore.Flow.Steps.AudioDescriptionSupport, as: AD
   alias MaveCore.Flow.Steps.MediaPackageHlsAudioStep
   alias MaveCore.Flow.Steps.Support, as: StepSupport
-  alias MaveCore.Languages
 
   @step_type "media.mix_audio_description"
   @characteristics "public.accessibility.describes-video"
@@ -196,10 +195,8 @@ defmodule MaveCore.Flow.Steps.MediaMixAudioDescriptionStep do
     }
   end
 
-  @doc "Name of the audio-description track of `language`, e.g. `English (audio description)`."
-  def label(language) do
-    "#{Languages.spoken_language(language) || String.upcase(language)} (audio description)"
-  end
+  @doc "Default label of an audio-description track, e.g. `English (AD)`."
+  def label(language), do: MaveCore.Assets.AudioDescription.default_label(language)
 
   defp output(ctx, language, timeline, audio_size, vtt_size, hls) do
     audio_filename = AudioDescription.audio_filename(language)

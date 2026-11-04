@@ -83,6 +83,13 @@ defmodule MaveCoreWeb.DashboardComponents.Settings do
   attr :rest, :global, include: ~w(phx-click phx-target phx-value-title phx-value-id)
 
   def settings_header(assigns) do
+    header_attrs =
+      if assigns.addable,
+        do: Map.drop(assigns.rest, [:"phx-click", :"phx-target"]),
+        else: assigns.rest
+
+    assigns = assign(assigns, :header_attrs, header_attrs)
+
     ~H"""
     <div
       class={[
@@ -91,7 +98,7 @@ defmodule MaveCoreWeb.DashboardComponents.Settings do
         !@disclosable && "cursor-default",
         @disabled && "opacity-50"
       ]}
-      {@rest}
+      {@header_attrs}
     >
       <div class="flex-grow pb-0.5">{@title}</div>
 

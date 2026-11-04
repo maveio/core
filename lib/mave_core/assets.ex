@@ -1353,7 +1353,7 @@ defmodule MaveCore.Assets do
 
       %{
         "id" => track.id,
-        "label" => track.label || "Audio track",
+        "label" => AudioTrack.display_label(track),
         "language" => track.language,
         "default" => track.default,
         "codec" => track.codec,
@@ -1447,7 +1447,7 @@ defmodule MaveCore.Assets do
   defp track_payload(%AudioTrack{} = track, copied) do
     %{
       "id" => track.id,
-      "label" => track.label || "Audio track",
+      "label" => AudioTrack.display_label(track),
       "language" => track.language,
       "default" => track.default,
       "codec" => track.codec,

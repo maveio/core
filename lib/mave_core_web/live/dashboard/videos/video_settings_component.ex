@@ -1107,6 +1107,16 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         )
       )
       |> assign(
+        :show_audio_descriptions_section,
+        show_audio_descriptions_section?(
+          assigns.current_space,
+          assigns.video,
+          assigns.audio_description_form,
+          assigns.audio_description_vtt_form,
+          audio_upload_pending(assigns.processing_uploaded_audio_track, :audio_description)
+        )
+      )
+      |> assign(
         :show_subtitles_section,
         show_subtitles_section?(
           assigns.video,
@@ -1144,7 +1154,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         myself={@myself}
       />
       <.audio_tracks_options_section
-        :if={@show_audio_tracks_section}
+        :if={@show_audio_descriptions_section}
         kind={:audio_description}
         current_space={@current_space}
         video_id={@video.id}
@@ -3109,7 +3119,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           progress: 100,
           status: "succeeded",
           size: nil,
-          label: "#{description.label} (AD)",
+          label: audio_description_info_label(description.label),
           badges:
             [
               {Map.get(description, :hls_playlist), "HLS"},
@@ -3120,6 +3130,10 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             |> Enum.map(fn {_url, format} -> format end)
         }
       end)
+  end
+
+  defp audio_description_info_label(label) do
+    if String.ends_with?(label, " (AD)"), do: label, else: "#{label} (AD)"
   end
 
   defp subtitle_group_rows(subtitles, renditions) do
@@ -3235,6 +3249,13 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   defp show_audio_tracks_section?(video, form, processing_upload?) do
     (video && video_status_ready?(Map.get(video, :status))) || not is_nil(form) ||
       processing_upload?
+  end
+
+  defp show_audio_descriptions_section?(space, video, form, vtt_form, pending) do
+    (is_map(video) and (Map.get(video, :audio_descriptions) || []) != []) or
+      not is_nil(form) or not is_nil(vtt_form) or not is_nil(pending) or
+      (is_map(video) and video_status_ready?(Map.get(video, :status)) and
+         Spaces.audio_description_active?(space))
   end
 
   defp show_subtitles_section?(video, form, processing_upload?) do

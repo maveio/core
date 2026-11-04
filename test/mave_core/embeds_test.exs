@@ -1537,7 +1537,7 @@ defmodule MaveCore.EmbedsTest do
 
     payload = Embeds.get_video_dashboard_payload(space, video)
 
-    assert [%{label: "Original", language: "en", codec: "MP3", filename: "audio.mp3"}] =
+    assert [%{label: "English (original)", language: "en", codec: "MP3", filename: "audio.mp3"}] =
              payload.audio_tracks
   end
 

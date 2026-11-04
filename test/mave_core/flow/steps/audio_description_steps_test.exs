@@ -227,7 +227,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
     assert playlist =~
              ~s|#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Dutch (audio description)",LANGUAGE="nl",DEFAULT=NO,AUTOSELECT=YES,CHARACTERISTICS="public.accessibility.describes-video",CHANNELS="2",URI="audio_description_nl_hls/playlist.m3u8"|
 
-    assert playlist =~ ~s(NAME="Original",LANGUAGE="en",DEFAULT=YES,AUTOSELECT=YES,CHANNELS="2")
+    assert playlist =~ ~s|NAME="English (original)",LANGUAGE="en",DEFAULT=YES,AUTOSELECT=YES,CHANNELS="2"|
   end
 
   test "speech retries reuse unchanged cues but regenerate changed text" do

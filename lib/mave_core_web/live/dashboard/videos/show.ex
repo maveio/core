@@ -1446,7 +1446,11 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   end
 
   defp dashboard_player_attributes(video) when is_map(video) do
-    attrs = Map.get(video, :player_attributes, [])
+    attrs =
+      video
+      |> Map.get(:player_attributes, [])
+      |> Enum.reject(fn {key, _value} -> key in ["cache", :cache] end)
+      |> Kernel.++([{"cache", "false"}])
 
     case dashboard_player_poster(video) do
       poster when is_binary(poster) and poster != "" ->

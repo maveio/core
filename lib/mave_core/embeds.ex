@@ -7,7 +7,7 @@ defmodule MaveCore.Embeds do
 
   alias Ecto.Changeset
   alias MaveCore.Analytics.Video, as: VideoAnalytics
-  alias MaveCore.Assets.{Asset, AudioTrack, Video}
+  alias MaveCore.Assets.{Asset, AudioDescription, AudioTrack, Video}
   alias MaveCore.Collections.{Collection, CollectionEmbed}
   alias MaveCore.EmbedId
   alias MaveCore.Embeds.{Embed, EmbedSettings, Events, ManifestPublisher, SettingsSerializer}
@@ -620,9 +620,7 @@ defmodule MaveCore.Embeds do
       %{
         id: description.id,
         language: description.language,
-        label:
-          description.label || Languages.spoken_language(description.language) ||
-            String.upcase(description.language),
+        label: AudioDescription.display_label(description),
         default: false,
         codec: "mp3",
         mp3_url: get_in(serialized, ["audio", "path"]),
@@ -2547,7 +2545,7 @@ defmodule MaveCore.Embeds do
   defp serialize_audio_track(%AudioTrack{} = track) do
     %{
       id: track.id,
-      label: track.label || "Original",
+      label: AudioTrack.display_label(track),
       language: track.language,
       default: track.default,
       codec: track.codec && String.upcase(track.codec),
