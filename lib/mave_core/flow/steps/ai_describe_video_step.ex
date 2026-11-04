@@ -1,15 +1,14 @@
 defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
   @moduledoc """
-  Writes the English audio description cues from the labelled stills of
+  Writes the original-language audio description cues from the labelled stills of
   `media.detect_scenes`, around the speech measured by speech-to-text.
 
   Speech comes from the `ai.transcribe_audio` segments (never from the description
   model); when that step has none, this step transcribes the audio itself. The
-  English cues are the only source for every other language.
+  cues are the source for the spoken description.
   """
   @behaviour MaveCore.Flow.Step
 
-  alias MaveCore.AudioDescription
   alias MaveCore.AudioDescription.{Cues, Prompts, Timeline}
   alias MaveCore.Embeds.SettingsSerializer
   alias MaveCore.Flow.Steps.AudioDescriptionSupport, as: AD
@@ -38,7 +37,7 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
          {:ok, raw_cues} <- describe_batches(ctx, document["stills"], scenes, speech, duration),
          cues = clean_cues(raw_cues, speech, scenes, duration),
          :ok <- require_cues(cues),
-         language = AudioDescription.source_language(),
+         language = AD.language(ctx),
          {:ok, cues_key} <-
            AD.put_json(ctx, AD.work_key(ctx, "#{language}/cues.json"), Cues.to_json(cues)),
          {:ok, speech_key} <-
@@ -56,7 +55,7 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
          "cue_count" => length(cues),
          "scene_count" => length(scenes),
          "speech_seconds" =>
-           speech |> Enum.map(&(&1.end - &1.start)) |> Enum.sum() |> Float.round(1)
+           speech |> Enum.reduce(0.0, &(&2 + &1.end - &1.start)) |> Float.round(1)
        }, []}
     else
       {:error, :no_descriptions} ->
@@ -92,7 +91,9 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
       content =
         images ++ [%{"type" => "text", "text" => Prompts.stills_request(window, previous)}]
 
-      case AD.chat_provider().chat_json(Prompts.describe_instruction(duration, timing), content,
+      case AD.chat_provider().chat_json(
+             Prompts.describe_instruction(duration, timing, AD.language(ctx)),
+             content,
              schema: Prompts.cues_schema(),
              max_tokens: 8_000
            ) do

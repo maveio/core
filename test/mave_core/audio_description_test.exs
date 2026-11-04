@@ -35,7 +35,11 @@ defmodule MaveCore.AudioDescriptionTest do
     assert {:ok, %Space{audio_description_enabled: true} = space} =
              Spaces.update_space_features(space, %{audio_description_enabled: true})
 
-    assert AudioDescription.run_input(space) == %{"languages" => ["en", "nl"]}
+    assert AudioDescription.run_input(space) == %{
+             "languages" => ["original"],
+             "fallback_language" => "en"
+           }
+
     assert Repo.get!(Space, space.id).audio_description_enabled
   end
 
@@ -67,5 +71,30 @@ defmodule MaveCore.AudioDescriptionTest do
     assert AudioDescription.requested_languages(%{
              "audio_description" => %{"languages" => ["nl"]}
            }) == ["en", "nl"]
+  end
+
+  test "original language uses transcription and defaults to English when unknown" do
+    assert AudioDescription.original_language(%{}, %{"transcribe_audio" => %{"language" => "nl"}}) ==
+             "nl"
+
+    assert AudioDescription.original_language(%{"language" => "fr-FR"}, %{}) == "fr"
+    assert AudioDescription.original_language(%{}, %{}) == "en"
+    assert AudioDescription.original_language(%{"language" => "und"}, %{}) == "en"
+
+    assert AudioDescription.requested_languages(%{
+             "audio_description" => %{"languages" => ["original"]}
+           }) == ["original"]
+  end
+
+  test "a flow or step can specify its fallback without overriding detected speech" do
+    input = %{"audio_description" => %{"fallback_language" => "nl"}}
+    assert AudioDescription.original_language(input, %{}) == "nl"
+    assert AudioDescription.original_language(input, %{}, "de") == "de"
+
+    assert AudioDescription.original_language(
+             input,
+             %{"transcribe_audio" => %{"language" => "fr"}},
+             "de"
+           ) == "fr"
   end
 end

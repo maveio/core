@@ -7,7 +7,6 @@ defmodule MaveCore.Embeds.ManifestPublisher do
   alias MaveCore.Assets.{AudioDescription, AudioTrack, Video}
   alias MaveCore.Embeds
   alias MaveCore.Embeds.{Embed, SettingsSerializer}
-  alias MaveCore.Flow.Steps.MediaMixAudioDescriptionStep
   alias MaveCore.Languages
   alias MaveCore.LegacyShortUUID
   alias MaveCore.Media.CdnCache
@@ -614,7 +613,7 @@ defmodule MaveCore.Embeds.ManifestPublisher do
   def serialize_audio_description(%AudioDescription{} = description, bucket, embed_hash, version) do
     %{
       "language" => description.language,
-      "label" => MediaMixAudioDescriptionStep.label(description.language),
+      "label" => AudioDescription.display_label(description),
       "audio" => %{
         "path" =>
           SettingsSerializer.storage_object_url(
@@ -624,14 +623,17 @@ defmodule MaveCore.Embeds.ManifestPublisher do
         "hls_playlist" => AudioDescription.hls_playlist(description),
         "file_size" => description.audio_file_size
       },
-      "vtt" => %{
-        "path" =>
-          SettingsSerializer.storage_object_url(
-            bucket,
-            audio_track_key(embed_hash, version, description.vtt_filename)
-          ),
-        "file_size" => description.vtt_file_size
-      }
+      "vtt" =>
+        if(description.vtt_filename,
+          do: %{
+            "path" =>
+              SettingsSerializer.storage_object_url(
+                bucket,
+                audio_track_key(embed_hash, version, description.vtt_filename)
+              ),
+            "file_size" => description.vtt_file_size
+          }
+        )
     }
   end
 

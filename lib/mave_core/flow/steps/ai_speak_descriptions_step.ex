@@ -67,7 +67,22 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
   end
 
   defp speak_cue(ctx, cue, index, language) do
-    key = AD.work_key(ctx, "#{language}/speech/#{String.pad_leading("#{index}", 5, "0")}.pcm")
+    # Retrying a description run can change its text or voice at the same index.
+    # Reuse a clip only while all inputs to speech generation stay the same.
+    fingerprint =
+      {cue.text, language, AD.speech_provider(),
+       System.get_env("MAVE_AUDIO_DESCRIPTION_TTS_MODEL"),
+       System.get_env("MAVE_AUDIO_DESCRIPTION_VOICES"),
+       System.get_env("MAVE_AUDIO_DESCRIPTION_VOICE")}
+      |> :erlang.term_to_binary()
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+
+    key =
+      AD.work_key(
+        ctx,
+        "#{language}/speech/#{String.pad_leading("#{index}", 5, "0")}-#{fingerprint}.pcm"
+      )
 
     case ctx.storage.get(ctx.bucket, key, ctx.region) do
       {:ok, pcm} ->

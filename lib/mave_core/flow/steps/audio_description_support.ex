@@ -76,7 +76,30 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionSupport do
   @doc "The dependency named by `params[\"source_step_id\"]`."
   def source_step_id(ctx, default), do: Map.get(ctx.params, "source_step_id", default)
 
-  def language(ctx), do: Map.get(ctx.params, "language", AudioDescription.source_language())
+  def language(ctx) do
+    case Map.get(ctx.params, "language") do
+      "original" ->
+        get_in(ctx.outputs, [source_step_id(ctx, "describe_video"), "language"]) ||
+          AudioDescription.original_language(
+            ctx.run_input,
+            ctx.outputs,
+            ctx.params["fallback_language"]
+          )
+
+      nil ->
+        if "original" in ctx.languages,
+          do:
+            AudioDescription.original_language(
+              ctx.run_input,
+              ctx.outputs,
+              ctx.params["fallback_language"]
+            ),
+          else: AudioDescription.source_language()
+
+      language ->
+        language
+    end
+  end
 
   def work_key(ctx, name),
     do: "#{AudioDescription.work_prefix(ctx.embed_hash, ctx.version)}/#{name}"
@@ -96,7 +119,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionSupport do
 
   def get_json(ctx, key) when is_binary(key) do
     with {:ok, body} <- ctx.storage.get(ctx.bucket, key, ctx.region),
-         {:ok, value} <- Jason.decode(body) do
+         {:ok, value} <- decode_json(body) do
       {:ok, value}
     else
       {:error, %Jason.DecodeError{}} -> {:error, {:invalid_json, key}}
@@ -105,6 +128,10 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionSupport do
   end
 
   def get_json(_ctx, key), do: {:error, {:missing_key, key}}
+
+  # HTTP storage adapters may already decode application/json responses.
+  defp decode_json(body) when is_map(body) or is_list(body), do: {:ok, body}
+  defp decode_json(body), do: Jason.decode(body)
 
   def put_private(ctx, key, body, content_type) do
     case ctx.storage.put(ctx.bucket, key, body, content_type, ctx.region) do

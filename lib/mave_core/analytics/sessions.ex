@@ -565,7 +565,7 @@ defmodule MaveCore.Analytics.Sessions do
     :ok
   end
 
-  @doc "Hide retired analytics immediately; obsolete generations are collected separately."
+  @doc "Hide prepared analytics immediately; physical cleanup runs after the reader grace period."
   def invalidate(space_hash) do
     with :ok <- validate_hash(space_hash), do: invalidate_transaction(space_hash)
   end
@@ -579,43 +579,22 @@ defmodule MaveCore.Analytics.Sessions do
 
   defp invalidate_locked(space) do
     lock!(space)
-    Repo.query!("DELETE FROM analytics_session_buckets WHERE space_hash = $1", [space])
 
-    with {:ok, _} <-
-           ch(
-             "ALTER TABLE analytics_sessions DELETE WHERE space_hash = {$0:String} SETTINGS mutations_sync = 1",
-             [space],
-             60_000
-           ),
-         {:ok, _} <-
-           ch(
-             "ALTER TABLE analytics_session_years DELETE WHERE space_hash = {$0:String} SETTINGS mutations_sync = 1",
-             [space],
-             60_000
-           ),
-         {:ok, _} <-
-           ch(
-             "ALTER TABLE analytics_session_reports DELETE WHERE space_hash = {$0:String} SETTINGS mutations_sync = 1",
-             [space],
-             60_000
-           ),
-         {:ok, _} <-
-           ch(
-             "ALTER TABLE analytics_overview_days DELETE WHERE space_hash = {$0:String} SETTINGS mutations_sync = 1",
-             [space],
-             60_000
-           ),
-         {:ok, _} <-
-           ch(
-             "ALTER TABLE analytics_overview_views DELETE WHERE space_hash = {$0:String} SETTINGS mutations_sync = 1",
-             [space],
-             60_000
-           ) do
-      Repo.query!("DELETE FROM analytics_session_retirements WHERE space_hash = $1", [space])
-      :ok
-    else
-      _ -> {:error, :analytics_unavailable}
-    end
+    # Unpublish and retain a durable cleanup record in one transaction. Readers
+    # already using a generation keep it for the grace period; new readers cannot
+    # select it. A ClickHouse outage must not block this visibility change.
+    Repo.query!(
+      """
+      INSERT INTO analytics_session_retirements (space_hash, generation, retired_at)
+      SELECT space_hash, generation, now() FROM analytics_session_buckets
+      WHERE space_hash = $1
+      ON CONFLICT (space_hash, generation) DO NOTHING
+      """,
+      [space]
+    )
+
+    Repo.query!("DELETE FROM analytics_session_buckets WHERE space_hash = $1", [space])
+    :ok
   end
 
   @doc "Delete retired generations after the reader grace period, in batches per space."

@@ -19,6 +19,19 @@ defmodule MaveCoreWeb.DashboardRoutes do
     path_for(space_or_user, "/videos/#{video_id}/subtitles/#{subtitle_id}/download", [], opts)
   end
 
+  def audio_download_path(space, video_id, track_id) do
+    path_for(space, "/videos/#{video_id}/audio-tracks/#{track_id}/download", [], [])
+  end
+
+  def description_download_path(space, video_id, track_id, format) do
+    path_for(
+      space,
+      "/videos/#{video_id}/audio-descriptions/#{track_id}/#{format}/download",
+      [],
+      []
+    )
+  end
+
   def data_path(space_or_user, opts \\ []) do
     path_for(space_or_user, "/data", period_params(opts), opts)
   end

@@ -48,13 +48,13 @@ defmodule MaveCore.AudioDescription.Prompts do
   def translations_schema, do: @translations_schema
 
   @doc "The describer's instructions, followed by the timing context (`Timeline.timing_prompt/4`)."
-  def describe_instruction(duration, timing) do
+  def describe_instruction(duration, timing, language \\ "en") do
     [
       "You are a professional audio describer. You write the audio description track for a video,",
       "so that blind and low-vision viewers can follow what happens on screen.",
       "",
       "Rules:",
-      "- Write every description in English, regardless of the language spoken in the video.",
+      "- Write every description in #{Languages.spoken_language(language) || language} (#{language}).",
       "- Describe what is visible: actions, people (by appearance and role, use names only if shown on screen),",
       "  setting, scene and location changes, facial expressions and on-screen text (read text out; keep brand names,",
       "  logos and URLs exactly as written).",

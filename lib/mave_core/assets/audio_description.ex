@@ -10,6 +10,10 @@ defmodule MaveCore.Assets.AudioDescription do
 
   schema "audio_descriptions" do
     field :language, :string
+    field :label, :string
+    field :generation_language, :string
+    field :user_managed, :boolean, default: false
+    field :deleted_at, :utc_datetime_usec
     field :audio_filename, :string
     field :audio_file_size, :integer
     field :vtt_filename, :string
@@ -27,6 +31,10 @@ defmodule MaveCore.Assets.AudioDescription do
     |> cast(attrs, [
       :video_id,
       :language,
+      :label,
+      :generation_language,
+      :user_managed,
+      :deleted_at,
       :audio_filename,
       :audio_file_size,
       :vtt_filename,
@@ -34,9 +42,18 @@ defmodule MaveCore.Assets.AudioDescription do
       :cue_count,
       :ducked_cue_count
     ])
-    |> validate_required([:video_id, :language, :audio_filename, :vtt_filename])
+    |> validate_required([:video_id, :language, :audio_filename])
+    |> validate_format(:language, ~r/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/)
     |> foreign_key_constraint(:video_id)
-    |> unique_constraint([:video_id, :language])
+    |> unique_constraint([:video_id, :generation_language])
+  end
+
+  def display_label(%__MODULE__{} = description) do
+    name =
+      description.label || MaveCore.Languages.spoken_language(description.language) ||
+        String.upcase(description.language)
+
+    "#{name} (audio description)"
   end
 
   @doc "HLS playlist of the audio track, relative to the video version's prefix."

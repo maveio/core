@@ -4796,20 +4796,29 @@ defmodule MaveCore.Flow do
         output: %{"status" => "ok", "audio_description" => %{} = description}
       } ->
         %AudioDescription{}
-        |> AudioDescription.changeset(Map.put(description, "video_id", video_id))
+        |> AudioDescription.changeset(
+          description
+          |> Map.put("video_id", video_id)
+          |> Map.put("generation_language", description["language"])
+        )
         |> Repo.insert!(
           on_conflict:
-            {:replace,
-             [
-               :audio_filename,
-               :audio_file_size,
-               :vtt_filename,
-               :vtt_file_size,
-               :cue_count,
-               :ducked_cue_count,
-               :updated_at
-             ]},
-          conflict_target: [:video_id, :language]
+            from(existing in AudioDescription,
+              where: not existing.user_managed and is_nil(existing.deleted_at),
+              update: [
+                set: [
+                  audio_filename: fragment("EXCLUDED.audio_filename"),
+                  audio_file_size: fragment("EXCLUDED.audio_file_size"),
+                  vtt_filename: fragment("EXCLUDED.vtt_filename"),
+                  vtt_file_size: fragment("EXCLUDED.vtt_file_size"),
+                  cue_count: fragment("EXCLUDED.cue_count"),
+                  ducked_cue_count: fragment("EXCLUDED.ducked_cue_count"),
+                  updated_at: fragment("EXCLUDED.updated_at")
+                ]
+              ]
+            ),
+          conflict_target: [:video_id, :generation_language],
+          allow_stale: true
         )
 
       _step_run ->

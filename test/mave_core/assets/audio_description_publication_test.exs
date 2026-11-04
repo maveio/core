@@ -4,6 +4,8 @@ defmodule MaveCore.Assets.AudioDescriptionPublicationTest do
   alias MaveCore.Assets
   alias MaveCore.Assets.{Asset, AudioDescription, AudioTrack, Rendition, Video}
   alias MaveCore.Embeds.{Embed, ManifestPublisher}
+  alias MaveCore.Flow
+  alias MaveCore.Flow.StepRun
   alias MaveCore.Spaces.Space
   alias MaveCore.TestSupport.FlowStorageAdapterStub, as: Storage
 
@@ -66,6 +68,68 @@ defmodule MaveCore.Assets.AudioDescriptionPublicationTest do
     assert String.ends_with?(mp3, "/abcdefghij/audio_description_nl.mp3")
     assert String.ends_with?(vtt, "/abcdefghij/descriptions_nl.vtt")
     assert [%{"filename" => "audio.mp3"}] = manifest["audio_tracks"]
+  end
+
+  test "late generation updates untouched descriptions and preserves managed or deleted ones" do
+    embed = embed_fixture()
+    original = description(embed, "en")
+
+    {:ok, template} =
+      Flow.create_template(%{"slug" => "description-publication", "name" => "Descriptions"})
+
+    {:ok, _} =
+      Flow.create_version(template.id, %{
+        "definition" => %{
+          "steps" => [
+            %{"id" => "mix", "type" => "media.mix_audio_description", "name" => "Mix"}
+          ]
+        }
+      })
+
+    complete_generation = fn filename ->
+      {:ok, run} =
+        Flow.start_run(
+          template.slug,
+          %{
+            "space_hash" => embed.space.hash,
+            "embed_hash" => embed.hash
+          }, enqueue: false)
+
+      Repo.get_by!(StepRun, flow_run_id: run.id, step_id: "mix")
+      |> StepRun.changeset(%{
+        status: "succeeded",
+        output: %{
+          "status" => "ok",
+          "audio_description" => %{
+            "language" => "en",
+            "audio_filename" => filename,
+            "vtt_filename" => "descriptions_en.vtt"
+          }
+        }
+      })
+      |> Repo.update!()
+
+      assert {:ok, %{status: "succeeded"}} = Flow.reconcile_run(run.id, enqueue_jobs: false)
+    end
+
+    original |> Ecto.Changeset.change(generation_language: "en") |> Repo.update!()
+    complete_generation.("regenerated.mp3")
+    assert Repo.get!(AudioDescription, original.id).audio_filename == "regenerated.mp3"
+
+    original
+    |> Ecto.Changeset.change(user_managed: true, label: "Custom", language: "nl")
+    |> Repo.update!()
+
+    complete_generation.("late.mp3")
+    managed = Repo.get!(AudioDescription, original.id)
+    assert managed.audio_filename == "regenerated.mp3"
+    assert managed.label == "Custom"
+    assert managed.language == "nl"
+
+    managed |> Ecto.Changeset.change(deleted_at: DateTime.utc_now()) |> Repo.update!()
+    complete_generation.("later.mp3")
+    assert Repo.get!(AudioDescription, original.id).deleted_at
+    assert Assets.list_audio_descriptions(embed.asset.current_video.id) == []
   end
 
   defp embed_fixture do
