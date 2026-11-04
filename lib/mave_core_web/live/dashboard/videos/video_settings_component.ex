@@ -3,6 +3,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
   use MaveCoreWeb, :live_component
 
+  import MaveCoreWeb.DashboardComponents.Modals, only: [dialog: 1]
   import MaveCoreWeb.DashboardComponents.Settings
   import MaveCoreWeb.DashboardComponents.States, only: [progress_bar: 1]
 
@@ -38,6 +39,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       socket
       |> maybe_allow_poster_upload()
       |> maybe_allow_audio_track_upload()
+      |> maybe_allow_audio_description_upload()
+      |> maybe_allow_audio_description_vtt_upload()
       |> maybe_allow_subtitle_upload()
       |> assign(assigns)
       |> MaveCoreWeb.SpaceLiveAuth.attach_component()
@@ -49,7 +52,10 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       |> assign(:show_flow_info, @show_flow_info)
       |> assign_new(:show_flow_details, fn -> false end)
       |> assign_new(:audio_track_form, fn -> nil end)
+      |> assign_new(:audio_description_form, fn -> nil end)
+      |> assign_new(:audio_description_vtt_form, fn -> nil end)
       |> assign_new(:subtitle_form, fn -> nil end)
+      |> assign_new(:pending_media_delete, fn -> nil end)
 
     socket =
       cond do
@@ -61,7 +67,10 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           |> assign(:uploading_poster, false)
           |> assign(:show_flow_details, false)
           |> assign(:audio_track_form, nil)
+          |> assign(:audio_description_form, nil)
+          |> assign(:audio_description_vtt_form, nil)
           |> assign(:subtitle_form, nil)
+          |> assign(:pending_media_delete, nil)
 
         socket.assigns.has_changes ->
           assign(socket, :persisted_settings, incoming_settings)
@@ -72,6 +81,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           |> assign(:persisted_settings, incoming_settings)
           |> assign(:has_changes, false)
           |> assign(:audio_track_form, nil)
+          |> assign(:audio_description_form, nil)
+          |> assign(:audio_description_vtt_form, nil)
           |> assign(:subtitle_form, nil)
       end
 
@@ -252,6 +263,12 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     update_audio_track_if_changed(socket, id, :label, blank_to_nil(Map.get(params, "label")))
   end
 
+  def handle_event(event, %{"_track_id" => id} = params, socket)
+      when event in ["change_audio_track_language", "change_audio_description_language"] do
+    params = params |> Map.delete("_track_id") |> Map.put("id", id)
+    handle_event(event, params, socket)
+  end
+
   def handle_event("change_audio_track_language", %{"id" => id, "value" => language}, socket) do
     handle_event(
       "change_audio_track_language",
@@ -283,6 +300,84 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       nil ->
         {:noreply, socket}
     end
+  end
+
+  def handle_event("add_audio_description", _params, socket) do
+    {:noreply,
+     assign(socket, :audio_description_form, %{
+       mode: :new,
+       audio_track_id: nil,
+       label: gettext("Audio description"),
+       language: ""
+     })}
+  end
+
+  def handle_event("cancel_audio_description", _params, socket) do
+    {:noreply, assign(socket, :audio_description_form, nil)}
+  end
+
+  def handle_event("change_new_audio_description", %{"audio_track" => params}, socket) do
+    form = socket.assigns.audio_description_form || %{mode: :new, audio_track_id: nil}
+
+    {:noreply,
+     assign(
+       socket,
+       :audio_description_form,
+       Map.merge(form, %{label: params["label"] || "", language: params["language"] || ""})
+     )}
+  end
+
+  def handle_event("replace_audio_description", %{"id" => id}, socket) do
+    case Assets.get_audio_description_for_embed(id, socket.assigns.embed) do
+      nil ->
+        {:noreply, socket}
+
+      track ->
+        {:noreply,
+         assign(socket, :audio_description_form, %{
+           mode: :replace,
+           audio_track_id: track.id,
+           label: track.label || Languages.spoken_language(track.language),
+           language: track.language,
+           picker_ref: System.unique_integer([:positive])
+         })}
+    end
+  end
+
+  def handle_event(event, %{"id" => id} = params, socket)
+      when event in ["blur_audio_description_label", "change_audio_description_language"] do
+    field = if event == "blur_audio_description_label", do: :label, else: :language
+    value = params["value"] || get_in(params, ["audio_track", Atom.to_string(field)])
+
+    audio_description_result(
+      socket,
+      Assets.update_audio_description_outputs(socket.assigns.embed, id, %{
+        field => blank_to_nil(value)
+      })
+    )
+  end
+
+  def handle_event("upload_audio_description_vtt", %{"id" => id}, socket) do
+    case Assets.get_audio_description_for_embed(id, socket.assigns.embed) do
+      nil ->
+        {:noreply, socket}
+
+      description ->
+        {:noreply,
+         assign(socket, :audio_description_vtt_form, %{
+           audio_track_id: description.id,
+           label: description.label,
+           language: description.language,
+           picker_ref: System.unique_integer([:positive])
+         })}
+    end
+  end
+
+  def handle_event("delete_audio_description", %{"id" => id}, socket) do
+    audio_description_result(
+      socket,
+      Assets.delete_audio_description_outputs(socket.assigns.embed, id)
+    )
   end
 
   def handle_event("add_subtitle", _params, socket) do
@@ -359,6 +454,43 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     end
   end
 
+  def handle_event("request_media_delete", %{"kind" => kind, "id" => id}, socket) do
+    target =
+      case kind do
+        "audio_track" -> scoped_audio_track(socket, id)
+        "audio_description" -> Assets.get_audio_description_for_embed(id, socket.assigns.embed)
+        "subtitle" -> scoped_subtitle(socket, id)
+        _ -> nil
+      end
+
+    if target && !Map.get(target, :default, false) do
+      label = Map.get(target, :label) || Map.get(target, :language) || gettext("this track")
+      {:noreply, assign(socket, :pending_media_delete, %{kind: kind, id: id, label: label})}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_media_delete", _, socket),
+    do: {:noreply, assign(socket, :pending_media_delete, nil)}
+
+  def handle_event("confirm_media_delete", _, socket) do
+    case socket.assigns.pending_media_delete do
+      %{kind: kind, id: id} ->
+        event =
+          %{
+            "audio_track" => "delete_audio_track",
+            "audio_description" => "delete_audio_description",
+            "subtitle" => "delete_subtitle"
+          }[kind]
+
+        handle_event(event, %{"id" => id}, assign(socket, :pending_media_delete, nil))
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   @impl true
   def handle_event("noop", _params, socket), do: {:noreply, socket}
 
@@ -401,6 +533,54 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     end
 
     {:noreply, socket}
+  end
+
+  def handle_progress(:audio_description_file, entry, socket) do
+    form = socket.assigns.audio_description_form || %{}
+
+    pending = %{
+      id: form[:audio_track_id],
+      mode: form[:mode] || :new,
+      label: form[:label],
+      language: form[:language],
+      kind: :audio_description
+    }
+
+    if entry.done? do
+      consume_uploaded_entries(socket, :audio_description_file, fn _meta, _entry ->
+        {:ok, :uploaded}
+      end)
+
+      notify_parent({:audio_track_uploaded, pending})
+      {:noreply, assign(socket, :audio_description_form, nil)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_progress(:audio_description_vtt_file, entry, socket) do
+    form = socket.assigns.audio_description_vtt_form || %{}
+
+    if entry.done? do
+      consume_uploaded_entries(socket, :audio_description_vtt_file, fn _, _ ->
+        {:ok, :uploaded}
+      end)
+
+      notify_parent(
+        {:audio_track_uploaded,
+         %{
+           id: form[:audio_track_id],
+           mode: :replace,
+           label: form[:label],
+           language: form[:language],
+           kind: :audio_description
+         }}
+      )
+
+      {:noreply, assign(socket, :audio_description_vtt_form, nil)}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_progress(:subtitle_file, entry, socket) do
@@ -470,6 +650,25 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     {:ok, options, socket}
   end
 
+  def presign_audio_description_upload(entry, socket) do
+    description_socket = assign(socket, :audio_track_form, socket.assigns.audio_description_form)
+    {:ok, options, _} = presign_audio_track_upload(entry, description_socket)
+    {:ok, Map.put(options, :audio_description, true), socket}
+  end
+
+  def presign_audio_description_vtt_upload(entry, socket) do
+    form = socket.assigns.audio_description_vtt_form || %{}
+
+    subtitle_socket =
+      assign(socket, :subtitle_form, %{
+        subtitle_id: form[:audio_track_id],
+        language: form[:language]
+      })
+
+    {:ok, options, _} = presign_subtitle_upload(entry, subtitle_socket)
+    {:ok, Map.put(options, :audio_description, true), socket}
+  end
+
   def presign_subtitle_upload(_entry, socket) do
     form = socket.assigns.subtitle_form || %{}
 
@@ -519,6 +718,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
               uploads={@uploads}
               uploading_poster={@uploading_poster}
               audio_track_form={@audio_track_form}
+              audio_description_form={@audio_description_form}
+              audio_description_vtt_form={@audio_description_vtt_form}
               subtitle_form={@subtitle_form}
               processing_uploaded_audio_track={@processing_uploaded_audio_track}
               processing_uploaded_subtitle={@processing_uploaded_subtitle}
@@ -538,6 +739,23 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           <.tab_navigation current_tab={@current_tab} myself={@myself} />
         </:footer>
       </.settings_panel>
+      <.dialog
+        :if={@pending_media_delete}
+        id="delete-media-dialog"
+        show={true}
+        title={gettext("Delete track?")}
+        confirm_label={gettext("Delete")}
+        confirm_variant="danger"
+        on_confirm={JS.push("confirm_media_delete", target: @myself)}
+        on_cancel={JS.push("cancel_media_delete", target: @myself)}
+      >
+        {gettext("Are you sure you want to delete “%{name}” from this video?",
+          name: @pending_media_delete.label
+        )}
+        <span :if={@pending_media_delete.kind == "audio_description"} class="block mt-2">
+          {gettext("Its audio and description text will both be removed.")}
+        </span>
+      </.dialog>
     </div>
     """
   end
@@ -608,6 +826,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         audio_only={@video.original.audio_only}
         renditions={@video.renditions}
         audio_tracks={@video.audio_tracks}
+        audio_descriptions={Map.get(@video, :audio_descriptions, [])}
         subtitles={@video.subtitles}
       />
 
@@ -868,6 +1087,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   attr :uploads, :map, required: true
   attr :uploading_poster, :boolean, required: true
   attr :audio_track_form, :map, default: nil
+  attr :audio_description_form, :map, default: nil
+  attr :audio_description_vtt_form, :map, default: nil
   attr :subtitle_form, :map, default: nil
   attr :processing_uploaded_audio_track, :map, default: nil
   attr :processing_uploaded_subtitle, :map, default: nil
@@ -913,8 +1134,26 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       <.audio_tracks_options_section
         :if={@show_audio_tracks_section}
         tracks={@video.audio_tracks}
+        current_space={@current_space}
+        video_id={@video.id}
         audio_track_form={@audio_track_form}
-        processing_uploaded_audio_track={@processing_uploaded_audio_track}
+        processing_uploaded_audio_track={
+          audio_upload_pending(@processing_uploaded_audio_track, :audio_track)
+        }
+        uploads={@uploads}
+        myself={@myself}
+      />
+      <.audio_tracks_options_section
+        :if={@show_audio_tracks_section}
+        kind={:audio_description}
+        current_space={@current_space}
+        video_id={@video.id}
+        tracks={Map.get(@video, :audio_descriptions, [])}
+        audio_track_form={@audio_description_form}
+        vtt_form={@audio_description_vtt_form}
+        processing_uploaded_audio_track={
+          audio_upload_pending(@processing_uploaded_audio_track, :audio_description)
+        }
         uploads={@uploads}
         myself={@myself}
       />
@@ -1596,9 +1835,9 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
   defp processing_audio_track_row(assigns) do
     ~H"""
-    <div class="relative w-full flex items-center my-1.5 pointer-events-none">
+    <div class="relative w-full flex items-center pointer-events-none">
       <div class="flex-grow border-r border-stone-900 pr-2">
-        <div class="flex flex-col space-y-1.5">
+        <div class="flex flex-col space-y-2">
           <input
             type="text"
             value={Map.get(@track, :label) || gettext("Audio track")}
@@ -1637,12 +1876,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         </div>
       </div>
 
-      <div class="relative flex-none h-6 px-1 text-sm bg-stone-800 text-stone-400 outline-none overflow-hidden rounded-sm flex items-center justify-center">
+      <div class="flex-none h-6 w-6 flex items-center justify-center text-stone-400">
         <.media_spinner />
-      </div>
-
-      <div class="border-l border-stone-900 flex-none h-6 px-1 text-sm outline-none overflow-hidden rounded-sm flex items-center justify-end">
-        <.remove_icon />
       </div>
     </div>
     """
@@ -1653,7 +1888,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
   defp processing_subtitle_row(assigns) do
     ~H"""
-    <div class="relative w-full flex items-center my-1.5 pointer-events-none">
+    <div class="relative w-full flex items-center pointer-events-none">
       <div class="relative flex-grow flex border-r border-stone-900 pr-2">
         <div class="w-full">
           <div class="relative">
@@ -1688,71 +1923,10 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         </div>
       </div>
 
-      <div class="relative flex-none h-6 px-1 text-sm bg-stone-800 text-stone-400 outline-none overflow-hidden rounded-sm flex items-center justify-center">
-        <.download_icon />
-      </div>
-
-      <div class="relative ml-px flex-none h-6 px-1 text-sm bg-stone-800 text-stone-400 outline-none overflow-hidden rounded-sm flex items-center justify-center">
+      <div class="flex-none h-6 w-6 flex items-center justify-center text-stone-400">
         <.media_spinner />
       </div>
-
-      <div class="border-l border-stone-900 flex-none h-6 px-1 text-sm outline-none overflow-hidden rounded-sm flex items-center justify-end">
-        <.remove_icon />
-      </div>
     </div>
-    """
-  end
-
-  defp download_icon(assigns) do
-    ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke-width="1.5"
-      stroke="currentColor"
-      class="w-4 h-4"
-    >
-      <path
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        d="M12 4.5v15m0 0l6.75-6.75M12 19.5l-6.75-6.75"
-      />
-    </svg>
-    """
-  end
-
-  defp replace_icon(assigns) do
-    ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke-width="2"
-      stroke="currentColor"
-      class="h-3.5 w-3.5"
-    >
-      <path
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.992 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182"
-      />
-    </svg>
-    """
-  end
-
-  defp remove_icon(assigns) do
-    ~H"""
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke-width="2"
-      stroke="currentColor"
-      class="h-4 w-4 rotate-45"
-    >
-      <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-    </svg>
     """
   end
 
@@ -1762,6 +1936,229 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     """
   end
 
+  attr :id, :string, required: true
+  attr :trigger_id, :string, required: true
+  attr :label, :string, required: true
+  attr :items, :list, required: true
+  attr :busy, :boolean, default: false
+  attr :myself, :any, required: true
+  slot :inner_block
+
+  defp media_file_menu(assigns) do
+    ~H"""
+    <div
+      id={"#{@id}-root"}
+      phx-hook="file_menu"
+      data-settings-control="menu"
+      class="relative flex-none h-6 w-6 flex items-center justify-center text-stone-500"
+    >
+      <button
+        type="button"
+        id={@trigger_id}
+        aria-label={@label}
+        aria-haspopup="menu"
+        aria-expanded="false"
+        aria-controls={@id}
+        data-file-menu-trigger="true"
+        disabled={@busy}
+        class="flex h-6 w-6 items-center justify-center cursor-pointer rounded-sm transition-colors hover:bg-stone-800 hover:text-stone-300 outline-none focus-visible:bg-stone-800 focus-visible:ring-1 focus-visible:ring-blue-500"
+      >
+        <.media_spinner :if={@busy} />
+        <.icon :if={!@busy} name="hero-ellipsis-horizontal" class="h-4 w-4" />
+      </button>
+      <div
+        id={@id}
+        role="menu"
+        aria-labelledby={@trigger_id}
+        data-file-menu-panel
+        style="display: none;"
+        class="fixed z-[100] w-52 overflow-hidden rounded-lg bg-stone-800 text-sm shadow-xl shadow-black/40 ring-1 ring-white/10"
+      >
+        <div :for={item <- @items} class={item.separator && "border-t border-white/10"}>
+          <a
+            :if={item.href}
+            id={item.id}
+            href={item.href}
+            download={item.filename}
+            role="menuitem"
+            tabindex="-1"
+            class="group flex w-full items-center gap-2.5 px-3.5 py-3 text-left text-stone-200 outline-none transition-colors duration-150 hover:bg-white/[0.05] hover:text-white focus-visible:bg-white/[0.05] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/20 cursor-pointer"
+          >
+            <.icon
+              name={item.icon}
+              class="h-4 w-4 shrink-0 text-stone-400 transition-colors group-hover:text-stone-300 group-focus-visible:text-stone-300"
+            />
+            <span class="flex-1 text-xs font-medium">{item.label}</span>
+            <span
+              :if={item.format}
+              class="rounded border border-stone-600/60 px-1 py-0.5 text-[10px] leading-none text-stone-400"
+            >{item.format}</span>
+          </a>
+          <button
+            :if={!item.href}
+            id={item.id}
+            type="button"
+            role="menuitem"
+            tabindex="-1"
+            disabled={item.disabled}
+            aria-label={item.label}
+            phx-click={JS.push(item.event, target: @myself, value: item.value)}
+            class={[
+              "group flex w-full items-center gap-2.5 px-3.5 py-3 text-left outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/20",
+              item.disabled && "opacity-35 cursor-not-allowed",
+              !item.disabled && "hover:bg-white/[0.05] focus-visible:bg-white/[0.05] cursor-pointer",
+              item.danger && "text-red-400",
+              !item.danger && "text-stone-200 hover:text-white"
+            ]}
+          >
+            <.icon
+              name={item.icon}
+              class={[
+                "h-4 w-4 shrink-0 transition-colors",
+                item.danger && "text-red-400",
+                !item.danger &&
+                  "text-stone-400 group-hover:text-stone-300 group-focus-visible:text-stone-300"
+              ]}
+            />
+            <span class="flex-1 text-xs font-medium">{item.label}</span>
+            <span
+              :if={item.format}
+              class="rounded border border-stone-600/60 px-1 py-0.5 text-[10px] leading-none text-stone-400"
+            >{item.format}</span>
+          </button>
+        </div>
+      </div>
+      {render_slot(@inner_block)}
+    </div>
+    """
+  end
+
+  defp menu_item(id, label, icon, opts) do
+    Map.merge(
+      %{
+        id: id,
+        label: label,
+        icon: icon,
+        href: nil,
+        filename: nil,
+        format: nil,
+        event: nil,
+        value: %{},
+        danger: false,
+        disabled: false,
+        separator: false
+      },
+      Map.new(opts)
+    )
+  end
+
+  defp audio_menu_items(kind, track, space, video_id, events) do
+    prefix = if kind == :audio_description, do: "audio-description", else: "audio-track"
+    format = if kind == :audio_description, do: "MP3", else: audio_track_format(track)
+
+    href =
+      if kind == :audio_description,
+        do: DashboardRoutes.description_download_path(space, video_id, track.id, "mp3"),
+        else: DashboardRoutes.audio_download_path(space, video_id, track.id)
+
+    base = [
+      menu_item(
+        "#{prefix}-download-#{track.id}",
+        gettext("Download audio"),
+        "hero-arrow-down-tray",
+        href: href,
+        filename: true,
+        format: format
+      ),
+      menu_item(
+        "#{prefix}-replace-audio-#{track.id}",
+        gettext("Replace audio"),
+        "hero-arrow-path",
+        event: events.replace,
+        value: %{id: track.id},
+        format: format
+      )
+    ]
+
+    text =
+      if kind == :audio_description do
+        download =
+          if track.vtt_url do
+            [
+              menu_item(
+                "#{prefix}-download-vtt-#{track.id}",
+                gettext("Download text"),
+                "hero-arrow-down-tray",
+                href: DashboardRoutes.description_download_path(space, video_id, track.id, "vtt"),
+                filename: true,
+                format: "VTT",
+                separator: true
+              )
+            ]
+          else
+            []
+          end
+
+        download ++
+          [
+            menu_item(
+              "#{prefix}-vtt-#{track.id}",
+              if(track.vtt_url, do: gettext("Replace text"), else: gettext("Upload text")),
+              "hero-document-text",
+              event: "upload_audio_description_vtt",
+              value: %{id: track.id},
+              format: "VTT",
+              separator: download == []
+            )
+          ]
+      else
+        []
+      end
+
+    base ++
+      text ++
+      [
+        menu_item(
+          "delete-#{prefix}-#{track.id}",
+          gettext("Delete"),
+          "hero-trash",
+          event: "request_media_delete",
+          value: %{kind: Atom.to_string(kind), id: track.id},
+          danger: true,
+          separator: true,
+          disabled: track.default
+        )
+      ]
+  end
+
+  defp subtitle_menu_items(subtitle, space, video_id) do
+    [
+      menu_item(
+        "subtitle-download-#{subtitle.id}",
+        gettext("Download text"),
+        "hero-arrow-down-tray",
+        href: DashboardRoutes.subtitle_download_path(space, video_id, subtitle.id),
+        filename: subtitle_download_filename(subtitle),
+        format: "VTT"
+      ),
+      menu_item("subtitle-replace-#{subtitle.id}", gettext("Replace text"), "hero-arrow-path",
+        event: "replace_subtitle",
+        value: %{id: subtitle.id},
+        format: "VTT"
+      ),
+      menu_item("delete-subtitle-#{subtitle.id}", gettext("Delete"), "hero-trash",
+        event: "request_media_delete",
+        value: %{kind: "subtitle", id: subtitle.id},
+        danger: true,
+        separator: true
+      )
+    ]
+  end
+
+  attr :current_space, :map, required: true
+  attr :video_id, :string, required: true
+  attr :kind, :atom, default: :audio_track
+  attr :vtt_form, :map, default: nil
   attr :tracks, :list, required: true
   attr :audio_track_form, :map, default: nil
   attr :processing_uploaded_audio_track, :map, default: nil
@@ -1771,12 +2168,38 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   defp audio_tracks_options_section(assigns) do
     assigns = assign(assigns, :language_options, language_options())
     has_tracks = Enum.any?(assigns.tracks || [])
-    assigns = assign(assigns, :has_tracks, has_tracks)
+
+    assigns =
+      assigns
+      |> assign(:has_tracks, has_tracks)
+      |> assign(
+        :heading,
+        if(assigns.kind == :audio_description, do: "audio descriptions", else: "audio tracks")
+      )
+      |> assign(
+        :track_label,
+        if(assigns.kind == :audio_description,
+          do: gettext("Audio description"),
+          else: gettext("Audio track")
+        )
+      )
+      |> assign(
+        :control_prefix,
+        if(assigns.kind == :audio_description, do: "audio-description", else: "audio-track")
+      )
+      |> assign(
+        :upload_name,
+        if(assigns.kind == :audio_description,
+          do: :audio_description_file,
+          else: :audio_track_file
+        )
+      )
+      |> assign(:events, audio_management_events(assigns.kind))
 
     ~H"""
-    <div>
-      <.settings_header title="audio tracks" addable phx-click="add_audio_track" phx-target={@myself} />
-      <div class="pl-3 pr-2.5 py-1.5 text-sm text-stone-400">
+    <div id={"#{@control_prefix}-settings"}>
+      <.settings_header title={@heading} addable phx-click={@events.add} phx-target={@myself} />
+      <div class="px-3 py-1 space-y-2 text-sm text-stone-400">
         <div
           :if={!@has_tracks and is_nil(@audio_track_form) and !@processing_uploaded_audio_track}
           class="h-1"
@@ -1785,29 +2208,32 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         <div
           :for={track <- @tracks}
           class={[
-            "relative w-full flex items-center my-1.5",
+            "relative w-full flex items-center",
             processing_audio_track?(@processing_uploaded_audio_track, track) && "pointer-events-none"
           ]}
         >
           <div class="flex-grow border-r border-stone-900 pr-2">
-            <div class="flex flex-col space-y-1.5">
+            <div class="flex flex-col space-y-2">
               <input
                 name="audio_track[label]"
                 type="text"
                 value={track.label}
-                placeholder="Audio track"
+                placeholder={@track_label}
                 class="w-full h-6 bg-stone-800 border-b border-stone-800 px-2 py-0.5 text-sm text-stone-400 outline-none focus:ring-blue-600 ring-1 rounded-sm ring-transparent"
-                phx-blur="blur_audio_track_label"
+                phx-blur={@events.blur}
                 phx-target={@myself}
                 phx-value-id={track.id}
               />
-              <div class="relative">
+              <form
+                id={"#{@control_prefix}-language-form-#{track.id}"}
+                class="relative"
+                phx-change={@events.language}
+                phx-target={@myself}
+              >
+                <input type="hidden" name="_track_id" value={track.id} />
                 <select
                   name="audio_track[language]"
                   class="w-full h-6 bg-stone-800 border-b border-stone-800 px-2 py-0.5 pr-7 text-sm text-stone-400 outline-none focus:ring-blue-600 ring-1 rounded-sm ring-transparent appearance-none"
-                  phx-change="change_audio_track_language"
-                  phx-target={@myself}
-                  phx-value-id={track.id}
                 >
                   {Phoenix.HTML.Form.options_for_select(@language_options, track.language || "")}
                 </select>
@@ -1829,97 +2255,52 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
                     />
                   </svg>
                 </div>
-              </div>
+              </form>
             </div>
           </div>
 
-          <div class={
-              "relative flex-none h-6 px-1 text-sm bg-stone-800 text-stone-400 outline-none overflow-hidden rounded-sm flex items-center justify-center #{if active_audio_upload_target?(@audio_track_form, track), do: "hover:bg-stone-600", else: "cursor-pointer hover:bg-stone-600"}"
-            }>
-            <%= if active_audio_upload_target?(@audio_track_form, track) do %>
-              <form
-                id={"audio-track-picker-#{track.id}-#{@audio_track_form[:picker_ref]}"}
-                phx-change="noop"
-                phx-target={@myself}
-                class="absolute inset-0"
-                phx-hook="auto_open_file_picker"
-                data-picker-ref={@audio_track_form[:picker_ref]}
-              >
-                <.live_file_input
-                  upload={@uploads.audio_track_file}
-                  class="absolute inset-0 opacity-0 cursor-pointer"
-                />
-              </form>
-            <% end %>
-
-            <%= if (@uploads.audio_track_file.entries != [] and active_audio_upload_target?(@audio_track_form, track)) or
-                      processing_audio_track?(@processing_uploaded_audio_track, track) do %>
-              <.media_spinner />
-            <% else %>
-              <button
-                type="button"
-                class="flex h-full items-center justify-center cursor-pointer"
-                phx-click="replace_audio_track"
-                phx-target={@myself}
-                phx-value-id={track.id}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke-width="2"
-                  stroke="currentColor"
-                  class="h-3.5 w-3.5"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.992 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182"
-                  />
-                </svg>
-              </button>
-            <% end %>
-          </div>
-
-          <div class="border-l border-stone-900 flex-none h-6 px-1 text-sm outline-none overflow-hidden rounded-sm flex items-center justify-end">
-            <button
-              id={"delete-audio-track-#{track.id}"}
-              type="button"
-              aria-label={gettext("Remove audio track")}
-              class={[
-                "relative w-4 h-6 flex items-center justify-end text-stone-500 phx-click-loading:pointer-events-none phx-click-loading:cursor-wait phx-click-loading:text-stone-300",
-                track.default && "opacity-40 pointer-events-none",
-                !track.default && "cursor-pointer hover:text-stone-300"
-              ]}
-              phx-click={
-                JS.push("delete_audio_track",
-                  target: @myself,
-                  value: %{id: track.id},
-                  loading: "#delete-audio-track-#{track.id}"
-                )
-              }
+          <.media_file_menu
+            id={"#{@control_prefix}-files-#{track.id}"}
+            trigger_id={"#{@control_prefix}-replace-#{track.id}"}
+            label={
+              if @kind == :audio_description,
+                do: gettext("Edit audio description"),
+                else: gettext("Edit audio track")
+            }
+            items={audio_menu_items(@kind, track, @current_space, @video_id, @events)}
+            busy={
+              processing_audio_track?(@processing_uploaded_audio_track, track) ||
+                (@uploads[@upload_name].entries != [] &&
+                   active_audio_upload_target?(@audio_track_form, track))
+            }
+            myself={@myself}
+          >
+            <form
+              :if={active_audio_upload_target?(@audio_track_form, track)}
+              id={"#{@control_prefix}-picker-#{track.id}-#{@audio_track_form[:picker_ref]}"}
+              phx-change="noop"
+              phx-target={@myself}
+              class="absolute inset-0 pointer-events-none"
+              phx-hook="auto_open_file_picker"
+              data-picker-ref={@audio_track_form[:picker_ref]}
             >
-              <span class="inline-flex items-center justify-end phx-click-loading:hidden">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke-width="2"
-                  stroke="currentColor"
-                  class="h-4 w-4 rotate-45"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M12 4.5v15m7.5-7.5h-15"
-                  />
-                </svg>
-              </span>
-              <span class="hidden h-4 w-4 items-center justify-center phx-click-loading:inline-flex">
-                <span class="h-3.5 w-3.5 animate-spin rounded-full border border-stone-500 border-t-transparent"></span>
-              </span>
-            </button>
-          </div>
+              <.live_file_input upload={@uploads[@upload_name]} class="absolute inset-0 opacity-0" />
+            </form>
+            <form
+              :if={@vtt_form && @vtt_form.audio_track_id == track.id}
+              id={"audio-description-vtt-picker-#{track.id}-#{@vtt_form.picker_ref}"}
+              phx-change="noop"
+              phx-target={@myself}
+              class="absolute inset-0 pointer-events-none"
+              phx-hook="auto_open_file_picker"
+              data-picker-ref={@vtt_form.picker_ref}
+            >
+              <.live_file_input
+                upload={@uploads.audio_description_vtt_file}
+                class="absolute inset-0 opacity-0"
+              />
+            </form>
+          </.media_file_menu>
         </div>
 
         <.processing_audio_track_row
@@ -1929,19 +2310,19 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         />
 
         <%= if @audio_track_form && @audio_track_form.mode == :new do %>
-          <div class="w-full flex items-center my-1.5">
+          <div class="w-full flex items-center">
             <div class="flex-grow border-r border-stone-900 pr-2">
               <form
-                id="new-audio-track-form"
-                phx-change="change_new_audio_track"
+                id={"new-#{@control_prefix}-form"}
+                phx-change={@events.change}
                 phx-target={@myself}
-                class="flex flex-col space-y-1.5"
+                class="flex flex-col space-y-2"
               >
                 <input
                   name="audio_track[label]"
                   type="text"
                   value={@audio_track_form.label}
-                  placeholder="Audio track"
+                  placeholder={@track_label}
                   class="w-full h-6 bg-stone-800 border-b border-stone-800 px-2 py-0.5 text-sm text-stone-400 outline-none focus:ring-blue-600 ring-1 rounded-sm ring-transparent"
                 />
                 <div class="relative">
@@ -1977,16 +2358,16 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             </div>
 
             <form
-              id="new-audio-track-upload-form"
+              id={"new-#{@control_prefix}-upload-form"}
               phx-change="noop"
               phx-target={@myself}
               class="relative flex-none h-6 px-1 text-sm bg-stone-800 text-stone-400 outline-none overflow-hidden rounded-sm flex items-center justify-center cursor-pointer hover:bg-stone-600"
             >
               <.live_file_input
-                upload={@uploads.audio_track_file}
+                upload={@uploads[@upload_name]}
                 class="absolute inset-0 opacity-0 cursor-pointer"
               />
-              <%= if @uploads.audio_track_file.entries == [] do %>
+              <%= if @uploads[@upload_name].entries == [] do %>
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   fill="none"
@@ -2011,7 +2392,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
               <button
                 type="button"
                 class="w-4 h-6 flex items-center justify-end text-stone-500 cursor-pointer hover:text-stone-300"
-                phx-click="cancel_audio_track"
+                phx-click={@events.cancel}
                 phx-target={@myself}
               >
                 <svg
@@ -2049,7 +2430,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     ~H"""
     <div>
       <.settings_header title="subtitles" addable phx-click="add_subtitle" phx-target={@myself} />
-      <div class="pl-3 pr-2.5 py-1.5 text-sm text-stone-400">
+      <div class="px-3 py-1 space-y-2 text-sm text-stone-400">
         <div
           :if={!@has_subtitles and is_nil(@subtitle_form) and !@processing_uploaded_subtitle}
           class="h-1"
@@ -2058,7 +2439,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         <div
           :for={subtitle <- @subtitles}
           class={[
-            "relative w-full flex items-center my-1.5",
+            "relative w-full flex items-center",
             processing_subtitle?(@processing_uploaded_subtitle, subtitle) && "pointer-events-none"
           ]}
         >
@@ -2099,99 +2480,30 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             </form>
           </div>
 
-          <a
-            href={DashboardRoutes.subtitle_download_path(@current_space, @video.id, subtitle.id)}
-            download={subtitle_download_filename(subtitle)}
-            class="relative flex-none h-6 px-1 text-sm bg-stone-800 text-stone-400 outline-none overflow-hidden rounded-sm flex items-center justify-center cursor-pointer hover:bg-stone-600"
+          <.media_file_menu
+            id={"subtitle-files-#{subtitle.id}"}
+            trigger_id={"subtitle-edit-#{subtitle.id}"}
+            label={gettext("Edit subtitles")}
+            items={subtitle_menu_items(subtitle, @current_space, @video.id)}
+            busy={
+              processing_subtitle?(@processing_uploaded_subtitle, subtitle) ||
+                (@uploads.subtitle_file.entries != [] &&
+                   active_subtitle_upload_target?(@subtitle_form, subtitle))
+            }
+            myself={@myself}
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke-width="1.5"
-              stroke="currentColor"
-              class="w-4 h-4"
+            <form
+              :if={active_subtitle_upload_target?(@subtitle_form, subtitle)}
+              id={"subtitle-picker-#{subtitle.id}-#{@subtitle_form[:picker_ref]}"}
+              phx-change="noop"
+              phx-target={@myself}
+              class="absolute inset-0 pointer-events-none"
+              phx-hook="auto_open_file_picker"
+              data-picker-ref={@subtitle_form[:picker_ref]}
             >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M12 4.5v15m0 0l6.75-6.75M12 19.5l-6.75-6.75"
-              />
-            </svg>
-          </a>
-
-          <div class="relative ml-px flex-none h-6 px-1 text-sm bg-stone-800 text-stone-400 outline-none overflow-hidden rounded-sm flex items-center justify-center cursor-pointer hover:bg-stone-600">
-            <%= if active_subtitle_upload_target?(@subtitle_form, subtitle) do %>
-              <form
-                id={"subtitle-picker-#{subtitle.id}-#{@subtitle_form[:picker_ref]}"}
-                phx-change="noop"
-                phx-target={@myself}
-                class="absolute inset-0"
-                phx-hook="auto_open_file_picker"
-                data-picker-ref={@subtitle_form[:picker_ref]}
-              >
-                <.live_file_input
-                  upload={@uploads.subtitle_file}
-                  class="absolute inset-0 opacity-0 cursor-pointer"
-                />
-              </form>
-              <%= if @uploads.subtitle_file.entries != [] do %>
-                <.media_spinner />
-              <% else %>
-                <.replace_icon />
-              <% end %>
-            <% else %>
-              <%= if processing_subtitle?(@processing_uploaded_subtitle, subtitle) do %>
-                <.media_spinner />
-              <% else %>
-                <button
-                  type="button"
-                  class="flex h-full items-center justify-center cursor-pointer"
-                  phx-click="replace_subtitle"
-                  phx-target={@myself}
-                  phx-value-id={subtitle.id}
-                >
-                  <.replace_icon />
-                </button>
-              <% end %>
-            <% end %>
-          </div>
-
-          <div class="border-l border-stone-900 flex-none h-6 px-1 text-sm outline-none overflow-hidden rounded-sm flex items-center justify-end">
-            <button
-              id={"delete-subtitle-#{subtitle.id}"}
-              type="button"
-              aria-label={gettext("Remove subtitle")}
-              class="relative w-4 h-6 flex items-center justify-end text-stone-500 cursor-pointer hover:text-stone-300 phx-click-loading:pointer-events-none phx-click-loading:cursor-wait phx-click-loading:text-stone-300"
-              phx-click={
-                JS.push("delete_subtitle",
-                  target: @myself,
-                  value: %{id: subtitle.id},
-                  loading: "#delete-subtitle-#{subtitle.id}"
-                )
-              }
-            >
-              <span class="inline-flex items-center justify-end phx-click-loading:hidden">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke-width="2"
-                  stroke="currentColor"
-                  class="h-4 w-4 rotate-45"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M12 4.5v15m7.5-7.5h-15"
-                  />
-                </svg>
-              </span>
-              <span class="hidden h-4 w-4 items-center justify-center phx-click-loading:inline-flex">
-                <span class="h-3.5 w-3.5 animate-spin rounded-full border border-stone-500 border-t-transparent"></span>
-              </span>
-            </button>
-          </div>
+              <.live_file_input upload={@uploads.subtitle_file} class="absolute inset-0 opacity-0" />
+            </form>
+          </.media_file_menu>
         </div>
 
         <.processing_subtitle_row
@@ -2201,7 +2513,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         />
 
         <%= if @subtitle_form && @subtitle_form.mode == :new do %>
-          <div class="w-full flex items-center my-1.5">
+          <div class="w-full flex items-center">
             <div class="flex-grow border-r border-stone-900 pr-2">
               <form
                 id="new-subtitle-form"
@@ -2303,6 +2615,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
   attr :renditions, :list, required: true
   attr :audio_tracks, :list, default: []
+  attr :audio_descriptions, :list, default: []
   attr :subtitles, :list, default: []
 
   attr :audio_only, :boolean, default: false
@@ -2323,7 +2636,9 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       <%= for {label, types} <- @groups, not (@audio_only and label in ["videos", "clips", "keyframes"]) do %>
         <% grouped = renditions_of_group(@renditions, types) %>
         <% audio_group_rows =
-          if label == "audio", do: audio_group_rows(@audio_tracks, grouped), else: [] %>
+          if label == "audio",
+            do: audio_group_rows(@audio_tracks, grouped, @audio_descriptions),
+            else: [] %>
         <% subtitle_group_rows =
           if label == "subtitles", do: subtitle_group_rows(@subtitles, grouped), else: [] %>
         <%= unless grouped == [] and audio_group_rows == [] and subtitle_group_rows == [] do %>
@@ -2748,7 +3063,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       (is_integer(progress) and progress > 0 and progress < 100)
   end
 
-  defp audio_group_rows(audio_tracks, renditions) do
+  defp audio_group_rows(audio_tracks, renditions, audio_descriptions) do
     audio_renditions = Enum.filter(renditions, &(Map.get(&1, :type) == "audio"))
 
     completed_container_badges =
@@ -2759,31 +3074,52 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       |> Enum.uniq()
       |> Enum.sort_by(&format_index/1)
 
-    audio_tracks
-    |> List.wrap()
-    |> Enum.map(fn track ->
-      base_badges =
-        track
-        |> audio_track_format()
-        |> case do
-          nil -> []
-          format -> [format]
-        end
+    track_rows =
+      audio_tracks
+      |> List.wrap()
+      |> Enum.map(fn track ->
+        base_badges =
+          track
+          |> audio_track_format()
+          |> case do
+            nil -> []
+            format -> [format]
+          end
 
-      label = Map.get(track, :label) || gettext("Audio track")
+        label = Map.get(track, :label) || gettext("Audio track")
 
-      %{
-        progress: audio_track_progress(audio_renditions),
-        status: audio_track_status(audio_renditions),
-        size: nil,
-        label: label,
-        badges:
-          (completed_container_badges ++
-             Enum.reject(base_badges, &(&1 in completed_container_badges)))
-          |> Enum.uniq()
-          |> Enum.sort_by(&format_index/1)
-      }
-    end)
+        %{
+          progress: audio_track_progress(audio_renditions),
+          status: audio_track_status(audio_renditions),
+          size: nil,
+          label: label,
+          badges:
+            (completed_container_badges ++
+               Enum.reject(base_badges, &(&1 in completed_container_badges)))
+            |> Enum.uniq()
+            |> Enum.sort_by(&format_index/1)
+        }
+      end)
+
+    rows = if track_rows == [], do: grouped_rows_for("audio", renditions), else: track_rows
+
+    rows ++
+      Enum.map(audio_descriptions, fn description ->
+        %{
+          progress: 100,
+          status: "succeeded",
+          size: nil,
+          label: "#{description.label} (AD)",
+          badges:
+            [
+              {Map.get(description, :hls_playlist), "HLS"},
+              {description.mp3_url, "MP3"},
+              {description.vtt_url, "VTT"}
+            ]
+            |> Enum.filter(fn {url, _format} -> url not in [nil, ""] end)
+            |> Enum.map(fn {_url, format} -> format end)
+        }
+      end)
   end
 
   defp subtitle_group_rows(subtitles, renditions) do
@@ -2943,6 +3279,35 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
   defp upload_error_to_string(other) when is_binary(other), do: other
   defp upload_error_to_string(other), do: inspect(other)
+
+  defp audio_management_events(kind) do
+    name = Atom.to_string(kind)
+
+    %{
+      add: "add_#{name}",
+      replace: "replace_#{name}",
+      delete: "delete_#{name}",
+      change: "change_new_#{name}",
+      cancel: "cancel_#{name}",
+      blur: "blur_#{name}_label",
+      language: "change_#{name}_language"
+    }
+  end
+
+  defp audio_upload_pending(nil, _kind), do: nil
+
+  defp audio_upload_pending(pending, kind) do
+    if Map.get(pending, :kind, :audio_track) == kind, do: pending
+  end
+
+  defp audio_description_result(socket, {:ok, _description}) do
+    notify_parent(:audio_tracks_updated)
+    {:noreply, socket}
+  end
+
+  defp audio_description_result(socket, {:error, _reason}) do
+    {:noreply, put_flash(socket, :error, gettext("Could not update audio description."))}
+  end
 
   defp scoped_audio_track(socket, id) do
     Assets.get_audio_track_for_embed(id, socket.assigns.embed)
@@ -3127,6 +3492,36 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         progress: &handle_progress/3,
         auto_upload: true,
         max_file_size: 104_857_600
+      )
+    end
+  end
+
+  defp maybe_allow_audio_description_upload(socket) do
+    if Map.has_key?(socket.assigns[:uploads] || %{}, :audio_description_file) do
+      socket
+    else
+      allow_upload(socket, :audio_description_file,
+        accept: ~w(.mp3),
+        max_entries: 1,
+        auto_upload: true,
+        external: &presign_audio_description_upload/2,
+        progress: &handle_progress/3,
+        max_file_size: 104_857_600
+      )
+    end
+  end
+
+  defp maybe_allow_audio_description_vtt_upload(socket) do
+    if Map.has_key?(socket.assigns[:uploads] || %{}, :audio_description_vtt_file) do
+      socket
+    else
+      allow_upload(socket, :audio_description_vtt_file,
+        accept: ~w(.vtt),
+        max_entries: 1,
+        max_file_size: 10_485_760,
+        external: &presign_audio_description_vtt_upload/2,
+        progress: &handle_progress/3,
+        auto_upload: true
       )
     end
   end

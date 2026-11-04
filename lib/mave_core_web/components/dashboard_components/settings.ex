@@ -86,7 +86,7 @@ defmodule MaveCoreWeb.DashboardComponents.Settings do
     ~H"""
     <div
       class={[
-        "w-full h-8 px-2.5 border-y border-stone-800 font-semibold flex items-center text-xs uppercase text-stone-500",
+        "w-full h-8 px-3 border-y border-stone-800 font-semibold flex items-center text-xs uppercase text-stone-500",
         @disclosable && !@disabled && "cursor-pointer",
         !@disclosable && "cursor-default",
         @disabled && "opacity-50"
@@ -115,25 +115,31 @@ defmodule MaveCoreWeb.DashboardComponents.Settings do
 
       <div
         :if={@addable}
-        class="h-[1.125rem] w-[1.125rem] bg-stone-800 border-stone-900 mx-[0.1875rem] rounded-full flex items-center justify-center cursor-pointer hover:bg-stone-700"
-        {@rest}
+        data-settings-control="add"
+        class="h-6 w-6 flex-none flex items-center justify-center"
       >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke-width="2"
-          stroke="currentColor"
-          class="w-4 h-4 border-transparent border-b-[0.5px]"
+        <div
+          class="h-[1.125rem] w-[1.125rem] bg-stone-800 border-stone-900 mx-[0.1875rem] rounded-full flex items-center justify-center cursor-pointer hover:bg-stone-700"
+          {@rest}
         >
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-        </svg>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="2"
+            stroke="currentColor"
+            class="w-4 h-4 border-transparent border-b-[0.5px]"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+          </svg>
+        </div>
       </div>
 
       <div
         :if={@toggable}
+        data-settings-control="toggle"
         class={[
-          "h-6 flex items-center",
+          "h-6 w-6 flex-none flex items-center justify-center",
           @disabled && "opacity-50",
           !@disabled && "cursor-pointer"
         ]}

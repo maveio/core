@@ -233,8 +233,13 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
 
   def handle_info({VideoSettingsComponent, {:audio_track_uploaded, pending_track}}, socket) do
     if socket.assigns.resource_embed do
-      previous_signature = media_signature(socket.assigns.video, :audio_tracks)
-      previous_count = socket.assigns.video |> Map.get(:audio_tracks, []) |> length()
+      field =
+        if Map.get(pending_track || %{}, :kind) == :audio_description,
+          do: :audio_descriptions,
+          else: :audio_tracks
+
+      previous_signature = media_signature(socket.assigns.video, field)
+      previous_count = socket.assigns.video |> Map.get(field, []) |> length()
 
       Process.send_after(
         self(),
@@ -368,8 +373,9 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   def handle_info({:reload_audio_tracks, embed_id, previous_count, attempts_left}, socket) do
     case resolve_current_video_embed(socket, embed_id) do
       {:ok, %Embed{} = embed} ->
-        audio_count = dashboard_payload_count(socket, embed, :audio_tracks)
-        audio_signature = dashboard_payload_signature(socket, embed, :audio_tracks)
+        field = pending_audio_field(socket)
+        audio_count = dashboard_payload_count(socket, embed, field)
+        audio_signature = dashboard_payload_signature(socket, embed, field)
 
         if audio_count > previous_count or
              uploaded_media_signature_changed?(
@@ -941,7 +947,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
     |> maybe_complete_poster_upload(video_embed, video)
     |> maybe_clear_materialized_media_processing(
       video,
-      :audio_tracks,
+      pending_audio_field(socket),
       :processing_uploaded_audio_track,
       :processing_uploaded_audio_track_signature
     )
@@ -1062,6 +1068,12 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
     end
   end
 
+  defp pending_audio_field(socket) do
+    if get_in(socket.assigns, [:processing_uploaded_audio_track, :kind]) == :audio_description,
+      do: :audio_descriptions,
+      else: :audio_tracks
+  end
+
   defp media_signature(video, field) when is_map(video) do
     video
     |> Map.get(field, [])
@@ -1072,7 +1084,18 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
 
   defp media_signature_item(item) when is_map(item) do
     item
-    |> Map.take([:id, :filename, :path, :label, :language, :codec, :file_size, :default])
+    |> Map.take([
+      :id,
+      :filename,
+      :path,
+      :label,
+      :language,
+      :codec,
+      :file_size,
+      :default,
+      :mp3_url,
+      :vtt_url
+    ])
     |> Enum.sort()
   end
 

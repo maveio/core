@@ -7,7 +7,7 @@ defmodule MaveCore.Flow do
 
   alias Ecto.Adapters.SQL
   alias MaveCore.Assets
-  alias MaveCore.Assets.{Asset, AudioTrack, Rendition, Subtitle, Video}
+  alias MaveCore.Assets.{Asset, AudioDescription, AudioTrack, Rendition, Subtitle, Video}
   alias MaveCore.Embeds
   alias MaveCore.Embeds.{Embed, ManifestPublisher, PlayerPublisher}
   alias MaveCore.Embeds.Events, as: EmbedEvents
@@ -67,10 +67,12 @@ defmodule MaveCore.Flow do
   @failed_run_pending_step_error "not executed because flow run failed"
   @default_flame_pool MaveCore.Workers.FlameRunner
   @media_step_types ~w(
+    media.detect_scenes
     media.extract_frame
     media.generate_audio_peaks
     media.generate_segments
     media.generate_storyboard
+    media.mix_audio_description
     media.package_hls_audio
     media.package_hls_variant
     media.transcode_audio
@@ -4550,6 +4552,7 @@ defmodule MaveCore.Flow do
                 "media.generate_audio_peaks",
                 "ai.transcribe_audio",
                 "ai.translate_subtitles",
+                "media.mix_audio_description",
                 "manifest.build"
               ] do
     with %Run{input: %{"space_hash" => space_hash, "embed_hash" => embed_hash}} = run <-
@@ -4560,6 +4563,9 @@ defmodule MaveCore.Flow do
       case step_type do
         "media.transcode_audio" ->
           sync_audio_tracks(video.id, step_runs)
+
+        "media.mix_audio_description" ->
+          sync_audio_descriptions(video.id, step_runs)
 
         subtitle_step when subtitle_step in ["ai.transcribe_audio", "ai.translate_subtitles"] ->
           sync_subtitles(video.id, step_runs)
@@ -4637,7 +4643,12 @@ defmodule MaveCore.Flow do
   end
 
   defp maybe_refresh_completed_hls_master(step_type, %Embed{} = embed)
-       when step_type in ["ai.transcribe_audio", "ai.translate_subtitles", "manifest.build"] do
+       when step_type in [
+              "ai.transcribe_audio",
+              "ai.translate_subtitles",
+              "media.mix_audio_description",
+              "manifest.build"
+            ] do
     Assets.refresh_hls_master_playlist(embed)
   end
 
@@ -4772,6 +4783,46 @@ defmodule MaveCore.Flow do
       %AudioTrack{}
       |> AudioTrack.changeset(build_audio_track_attrs(video_id, track))
       |> Repo.insert!()
+    end)
+  end
+
+  # Upserts per language, so a run that skipped audio description (or one language of
+  # it) keeps the descriptions this video version already has.
+  defp sync_audio_descriptions(video_id, step_runs) when is_binary(video_id) do
+    Enum.each(step_runs, fn
+      %StepRun{
+        step_type: "media.mix_audio_description",
+        status: "succeeded",
+        output: %{"status" => "ok", "audio_description" => %{} = description}
+      } ->
+        %AudioDescription{}
+        |> AudioDescription.changeset(
+          description
+          |> Map.put("video_id", video_id)
+          |> Map.put("generation_language", description["language"])
+        )
+        |> Repo.insert!(
+          on_conflict:
+            from(existing in AudioDescription,
+              where: not existing.user_managed and is_nil(existing.deleted_at),
+              update: [
+                set: [
+                  audio_filename: fragment("EXCLUDED.audio_filename"),
+                  audio_file_size: fragment("EXCLUDED.audio_file_size"),
+                  vtt_filename: fragment("EXCLUDED.vtt_filename"),
+                  vtt_file_size: fragment("EXCLUDED.vtt_file_size"),
+                  cue_count: fragment("EXCLUDED.cue_count"),
+                  ducked_cue_count: fragment("EXCLUDED.ducked_cue_count"),
+                  updated_at: fragment("EXCLUDED.updated_at")
+                ]
+              ]
+            ),
+          conflict_target: [:video_id, :generation_language],
+          allow_stale: true
+        )
+
+      _step_run ->
+        :ok
     end)
   end
 
@@ -5166,6 +5217,7 @@ defmodule MaveCore.Flow do
     sync_video_renditions(video.id, step_runs)
     sync_audio_tracks(video.id, step_runs)
     sync_subtitles(video.id, step_runs)
+    sync_audio_descriptions(video.id, step_runs)
     maybe_apply_detected_audio_track_language(video.id, step_runs)
   end
 
