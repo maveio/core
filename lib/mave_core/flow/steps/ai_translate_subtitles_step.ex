@@ -8,6 +8,7 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
   alias MaveCore.Languages
   alias MaveCore.Media.Storage
   alias MaveCore.Transcription.LanguageDetector
+  alias MaveCore.Transcription.SubtitleCues
 
   @target_language "en"
 
@@ -53,7 +54,8 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
            translate(translation_provider, transcription, source_language, target_language),
          {:ok, subtitle_body} <-
            translation_to_vtt(translation, transcription_duration(transcription)),
-         {:ok, subtitle_json} <- translation_to_json(translation),
+         {:ok, subtitle_json} <-
+           translation_to_json(translation, transcription_duration(transcription)),
          {:ok, key} <- build_subtitle_key(embed_hash, version, target_language),
          {:ok, uri} <- put_subtitle(storage_adapter, bucket, key, subtitle_body, region),
          {:ok, json_key} <- build_subtitle_json_key(embed_hash, version, target_language),
@@ -277,71 +279,15 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
 
   defp normalize_transcription(_), do: {:error, :empty_translation_input}
 
-  defp translation_to_vtt(%{segments: [_ | _] = segments}, _fallback_duration) do
-    segments_to_vtt(segments)
+  defp translation_to_vtt(translation, fallback_duration) do
+    translation |> SubtitleCues.from_transcription(fallback_duration) |> SubtitleCues.to_vtt()
   end
 
-  defp translation_to_vtt(%{text: text}, fallback_duration) when is_binary(text) and text != "" do
-    duration = fallback_duration || 5.0
+  defp translation_to_json(%{text: text} = translation, fallback_duration) when is_binary(text) do
+    cues = SubtitleCues.from_transcription(translation, fallback_duration)
 
-    [
-      "WEBVTT\n\n",
-      format_time(0.0),
-      " --> ",
-      format_time(max(duration, 0.5)),
-      "\n",
-      String.trim(text),
-      "\n"
-    ]
-    |> IO.iodata_to_binary()
-    |> then(&{:ok, &1})
-  end
-
-  defp translation_to_vtt(_translation, _fallback_duration),
-    do: {:error, :empty_translation_response}
-
-  defp translation_to_json(%{text: text, segments: segments}) when is_binary(text) do
-    json_segments =
-      segments
-      |> Enum.with_index(1)
-      |> Enum.map(fn {segment, index} ->
-        %{
-          "id" => index,
-          "start" => segment.start,
-          "end" => segment.end,
-          "text" => segment.text,
-          "words" => segment_words(segment)
-        }
-      end)
-
-    {:ok, Jason.encode!(%{"text" => String.trim(text), "segments" => json_segments})}
-  end
-
-  defp segments_to_vtt(segments) do
-    valid_segments =
-      segments
-      |> normalize_segments()
-      |> Enum.filter(&(&1.text != ""))
-
-    if valid_segments == [] do
-      {:error, :empty_translation_segments}
-    else
-      [
-        "WEBVTT\n\n",
-        Enum.map(valid_segments, fn segment ->
-          [
-            format_time(segment.start),
-            " --> ",
-            format_time(segment.end),
-            "\n",
-            segment.text,
-            "\n\n"
-          ]
-        end)
-      ]
-      |> IO.iodata_to_binary()
-      |> then(&{:ok, &1})
-    end
+    {:ok,
+     Jason.encode!(%{"text" => String.trim(text), "segments" => SubtitleCues.json_segments(cues)})}
   end
 
   defp normalize_segments(segments) when is_list(segments) do
@@ -361,32 +307,6 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
   end
 
   defp normalize_segments(_), do: []
-
-  defp segment_words(%{text: text, start: start_time, end: end_time}) do
-    words = String.split(text, ~r/\s+/, trim: true)
-    duration = max(end_time - start_time, 0.001)
-
-    case words do
-      [] ->
-        []
-
-      words ->
-        word_duration = duration / length(words)
-
-        words
-        |> Enum.with_index()
-        |> Enum.map(fn {word, index} ->
-          word_start = Float.round(start_time + word_duration * index, 3)
-          word_end = Float.round(min(end_time, word_start + word_duration), 3)
-
-          %{
-            "start" => word_start,
-            "end" => word_end,
-            "word" => word
-          }
-        end)
-    end
-  end
 
   defp build_subtitle_key(embed_hash, version, language) do
     with {:ok, embed_hash} <- StepSupport.require_binary(embed_hash, :embed_hash),
@@ -517,15 +437,6 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
   end
 
   defp normalize_optional_language(_), do: nil
-
-  defp format_time(seconds) do
-    total_ms = trunc(max(seconds, 0.0) * 1000)
-    hours = div(total_ms, 3_600_000)
-    minutes = div(rem(total_ms, 3_600_000), 60_000)
-    secs = div(rem(total_ms, 60_000), 1000)
-    millis = rem(total_ms, 1000)
-    :io_lib.format("~2..0B:~2..0B:~2..0B.~3..0B", [hours, minutes, secs, millis]) |> to_string()
-  end
 
   defp map_get(map, key, default \\ nil)
 

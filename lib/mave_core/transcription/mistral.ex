@@ -7,9 +7,12 @@ defmodule MaveCore.Transcription.Mistral do
   @receive_timeout_ms 30 * 60 * 1000
 
   def transcribe(audio_body, opts \\ []) when is_binary(audio_body) do
+    model = transcription_model()
+    granularity = timestamp_granularity(model, opts)
+
     with {:ok, api_key} <- fetch_api_key(),
-         {:ok, response} <- request_transcription(audio_body, api_key, opts),
-         {:ok, transcription} <- normalize_response(response.body) do
+         {:ok, response} <- request_transcription(audio_body, api_key, opts, model, granularity),
+         {:ok, transcription} <- normalize_response(response.body, granularity) do
       {:ok, transcription}
     else
       {:error, _reason} = error ->
@@ -18,9 +21,12 @@ defmodule MaveCore.Transcription.Mistral do
   end
 
   def transcribe_url(file_url, opts \\ []) when is_binary(file_url) do
+    model = transcription_model()
+    granularity = timestamp_granularity(model, opts)
+
     with {:ok, api_key} <- fetch_api_key(),
-         {:ok, response} <- request_transcription_url(file_url, api_key, opts),
-         {:ok, transcription} <- normalize_response(response.body) do
+         {:ok, response} <- request_transcription_url(file_url, api_key, model, granularity),
+         {:ok, transcription} <- normalize_response(response.body, granularity) do
       {:ok, transcription}
     else
       {:error, _reason} = error ->
@@ -35,8 +41,7 @@ defmodule MaveCore.Transcription.Mistral do
     end
   end
 
-  defp request_transcription(audio_body, api_key, opts) do
-    model = transcription_model()
+  defp request_transcription(audio_body, api_key, opts, model, granularity) do
     filename = Keyword.get(opts, :filename, "audio.mp3")
     content_type = Keyword.get(opts, :content_type, "audio/mpeg")
 
@@ -44,19 +49,17 @@ defmodule MaveCore.Transcription.Mistral do
       [
         {"file", {audio_body, filename: filename, content_type: content_type}},
         {"model", model},
-        {"timestamp_granularities", "segment"}
+        {"timestamp_granularities", granularity}
       ]
 
     request(multipart, api_key, :form_multipart)
   end
 
-  defp request_transcription_url(file_url, api_key, _opts) do
-    model = transcription_model()
-
+  defp request_transcription_url(file_url, api_key, model, granularity) do
     body = %{
       "file_url" => file_url,
       "model" => model,
-      "timestamp_granularities" => ["segment"]
+      "timestamp_granularities" => [granularity]
     }
 
     request(body, api_key, :json)
@@ -96,16 +99,67 @@ defmodule MaveCore.Transcription.Mistral do
     end
   end
 
-  defp normalize_response(%{"text" => text} = body) when is_binary(text) do
+  # Word timestamps are supported by the pinned V2 model, but not by Voxtral 3.
+  # Unknown model overrides retain the existing segment-only request.
+  defp timestamp_granularity(model, opts) do
+    case Keyword.get(opts, :timestamp_granularity) do
+      value when value in [:word, "word"] -> "word"
+      value when value in [:segment, "segment"] -> "segment"
+      _ -> if model == @default_model, do: "word", else: "segment"
+    end
+  end
+
+  defp normalize_response(%{"text" => text} = body, granularity) when is_binary(text) do
+    segments = normalize_segments(Map.get(body, "segments", []))
+    words = response_words(body, granularity)
+
+    # With word granularity, Mistral can put individual words in `segments`.
+    # Keep a full-text fallback envelope instead of exposing one-word cues.
+    segments =
+      if granularity == "word" and words != [] and not match?([_ | _], body["words"]) do
+        [%{start: hd(words).start, end: List.last(words).end, text: String.trim(text)}]
+      else
+        segments
+      end
+
     {:ok,
      %{
        text: String.trim(text),
        language: normalize_language(Map.get(body, "language")),
-       segments: normalize_segments(Map.get(body, "segments", []))
+       segments: segments,
+       words: words
      }}
   end
 
-  defp normalize_response(body), do: {:error, {:mistral_invalid_response, body}}
+  defp normalize_response(body, _granularity), do: {:error, {:mistral_invalid_response, body}}
+
+  defp response_words(body, granularity) do
+    entries =
+      case body["words"] do
+        [_ | _] = words -> words
+        _ -> if(granularity == "word", do: body["segments"], else: [])
+      end
+
+    if is_list(entries) do
+      entries
+      |> Enum.filter(&is_map/1)
+      |> Enum.map(fn entry ->
+        %{
+          word: to_string(entry["word"] || entry["text"] || "") |> String.trim(),
+          start: parse_float(entry["start"]),
+          end: parse_float(entry["end"])
+        }
+      end)
+      |> Enum.filter(&valid_word?/1)
+    else
+      []
+    end
+  end
+
+  defp valid_word?(entry) do
+    is_number(entry.start) and is_number(entry.end) and entry.start >= 0 and
+      entry.end >= entry.start and entry.word != "" and not String.match?(entry.word, ~r/\s/u)
+  end
 
   defp normalize_segments(segments) when is_list(segments) do
     segments

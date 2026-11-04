@@ -2,6 +2,7 @@ defmodule MaveCore.Transcription.MistralTest do
   use ExUnit.Case, async: false
 
   alias MaveCore.Transcription.Mistral
+  alias MaveCore.Transcription.SubtitleCues
 
   defmodule RequestAdapter do
     def run(request) do
@@ -11,11 +12,13 @@ defmodule MaveCore.Transcription.MistralTest do
         status: 200,
         headers: [{"content-type", "application/json"}],
         body:
-          Jason.encode!(%{
-            "text" => "Hello world",
-            "language" => "en",
-            "segments" => [%{"start" => 0.0, "end" => 1.0, "text" => "Hello world"}]
-          })
+          Jason.encode!(
+            Process.get(:mistral_body, %{
+              "text" => "Hello world",
+              "language" => "en",
+              "segments" => [%{"start" => 0.0, "end" => 1.0, "text" => "Hello world"}]
+            })
+          )
       }
 
       {request, Req.Response.new(response)}
@@ -79,7 +82,7 @@ defmodule MaveCore.Transcription.MistralTest do
     assert %{
              "file_url" => "https://space-ubg50.video-dns.com/video/audio.mp3",
              "model" => "voxtral-mini-2602",
-             "timestamp_granularities" => ["segment"]
+             "timestamp_granularities" => ["word"]
            } = Jason.decode!(req.body)
 
     refute Map.has_key?(Jason.decode!(req.body), "language")
@@ -149,6 +152,94 @@ defmodule MaveCore.Transcription.MistralTest do
       assert_receive {:retry_request, _}
       refute_receive {:mistral_request, _}
     end
+  end
+
+  test "normalizes word-level segments without exposing one-word subtitle segments" do
+    Req.default_options(adapter: RequestAdapter)
+
+    Process.put(:mistral_body, %{
+      "text" => "Hello world.",
+      "language" => "en",
+      "segments" => [
+        %{"text" => " Hello", "start" => 0.15, "end" => 0.4},
+        %{"text" => " world.", "start" => 0.6, "end" => 1.2}
+      ]
+    })
+
+    assert {:ok, transcription} = Mistral.transcribe("synthetic audio")
+
+    assert Map.fetch!(transcription, :words) == [
+             %{word: "Hello", start: 0.15, end: 0.4},
+             %{word: "world.", start: 0.6, end: 1.2}
+           ]
+
+    assert [%{start: 0.15, end: 1.2, text: "Hello world."}] = transcription.segments
+    assert_receive {:mistral_request, req}
+    body = IO.iodata_to_binary(req.body)
+    assert body =~ "name=\"timestamp_granularities\"\r\n\r\nword"
+  end
+
+  test "retains explicit words when the response includes both representations" do
+    Req.default_options(adapter: RequestAdapter)
+
+    Process.put(:mistral_body, %{
+      "text" => "Hello world",
+      "segments" => [%{"text" => "Hello world", "start" => 0, "end" => 2}],
+      "words" => [
+        %{"word" => "Hello", "start" => 0.1, "end" => 0.4},
+        %{"word" => "world", "start" => 1.0, "end" => 1.8}
+      ]
+    })
+
+    assert {:ok, result} = Mistral.transcribe_url("https://example.com/audio.mp3")
+    assert length(Map.fetch!(result, :words)) == 2
+    assert [%{text: "Hello world", start: start_time, end: 2.0}] = result.segments
+    assert start_time == 0.0
+  end
+
+  test "recorded word-granularity response preserves every provider timestamp" do
+    Req.default_options(adapter: RequestAdapter)
+
+    body =
+      "../../fixtures/transcription/mistral_word_timestamps.json"
+      |> Path.expand(__DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+
+    Process.put(:mistral_body, body)
+    assert {:ok, result} = Mistral.transcribe("synthetic audio")
+    words = Map.get(result, :words)
+    assert length(words) == length(body["segments"])
+
+    assert Enum.zip(words, body["segments"])
+           |> Enum.all?(fn {word, raw} ->
+             word.word == String.trim(raw["text"]) and word.start == raw["start"] and
+               word.end == raw["end"]
+           end)
+
+    cues = SubtitleCues.from_transcription(result)
+    assert Enum.flat_map(cues, &Map.fetch!(&1, :words)) == words
+    assert Enum.all?(cues, &(&1.end > &1.start))
+  end
+
+  test "model overrides keep segment requests unless word timestamps are explicitly requested" do
+    Req.default_options(adapter: RequestAdapter)
+    System.put_env("MISTRAL_TRANSCRIPTION_MODEL", "voxtral-mini-transcribe-3-0")
+    assert {:ok, _} = Mistral.transcribe_url("https://example.com/audio.mp3")
+    assert_receive {:mistral_request, req}
+    assert Jason.decode!(req.body)["timestamp_granularities"] == ["segment"]
+  end
+
+  test "callers can explicitly retain segment timing on V2" do
+    Req.default_options(adapter: RequestAdapter)
+
+    assert {:ok, _} =
+             Mistral.transcribe_url("https://example.com/audio.mp3",
+               timestamp_granularity: :segment
+             )
+
+    assert_receive {:mistral_request, req}
+    assert Jason.decode!(req.body)["timestamp_granularities"] == ["segment"]
   end
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
