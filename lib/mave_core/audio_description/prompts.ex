@@ -100,7 +100,7 @@ defmodule MaveCore.AudioDescription.Prompts do
   defp duration_line(_duration), do: ""
 
   @doc "The closing text of a batch of labelled stills."
-  def stills_request(window, previous_texts) do
+  def stills_request(window, previous_texts, language) do
     previous =
       case previous_texts do
         [] ->
@@ -113,7 +113,7 @@ defmodule MaveCore.AudioDescription.Prompts do
 
     [
       "These are stills from #{seconds(window.start)}-#{seconds(window.end)} s of the video (at least one per camera",
-      "cut), labelled with their scene and time. Write the audio description cues for this part, in English.",
+      "cut), labelled with their scene and time. Write the audio description cues for this part in #{Languages.spoken_language(language) || language} (#{language}).",
       previous
     ]
     |> Enum.reject(&is_nil/1)

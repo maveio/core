@@ -1442,7 +1442,11 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   defp framework_player_name(_video), do: "Player"
 
   defp player_dom_id(video) do
-    "player-#{video.public_id}-#{:erlang.phash2({dashboard_player_tag(video), dashboard_player_attributes_string(video)})}"
+    tracks =
+      Enum.map([:audio_tracks, :audio_descriptions, :subtitles], &media_signature(video, &1))
+
+    signature = {dashboard_player_tag(video), dashboard_player_attributes_string(video), tracks}
+    "player-#{video.public_id}-#{:erlang.phash2(signature)}"
   end
 
   defp dashboard_player_attributes(video) when is_map(video) do

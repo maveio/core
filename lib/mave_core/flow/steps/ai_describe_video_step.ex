@@ -85,14 +85,16 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
     }
 
     timing = Timeline.timing_prompt(speech, scenes, duration, window)
+    language = AD.language(ctx)
     previous = previous_cues |> Enum.take(-3) |> Enum.map(&to_string(&1["text"]))
 
     with {:ok, images} <- load_stills(ctx, batch) do
       content =
-        images ++ [%{"type" => "text", "text" => Prompts.stills_request(window, previous)}]
+        images ++
+          [%{"type" => "text", "text" => Prompts.stills_request(window, previous, language)}]
 
       case AD.chat_provider().chat_json(
-             Prompts.describe_instruction(duration, timing, AD.language(ctx)),
+             Prompts.describe_instruction(duration, timing, language),
              content,
              schema: Prompts.cues_schema(),
              max_tokens: 8_000
