@@ -183,7 +183,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
               </div>
             </:actions>
           </.data_table_row>
-          <.data_table_row id="audio-description-feature">
+          <.data_table_row :if={@features.audio_description_visible} id="audio-description-feature">
             <div>
               <div>{gettext("Audio description")}</div>
               <div
@@ -196,7 +196,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
             </div>
             <.info_hover>
               {gettext(
-                "New videos get spoken descriptions of what happens on screen, in English and Dutch: an audio track with the descriptions mixed in, and a descriptions VTT."
+                "New videos get spoken descriptions of what happens on screen, in the video’s language: an audio track with the descriptions mixed in, and a descriptions VTT."
               )}
             </.info_hover>
             <:actions>
@@ -708,11 +708,13 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
   # A space that lost access can still switch the feature off, but not back on.
   defp audio_description_features(%Space{} = space) do
     enabled? = space.audio_description_enabled == true
+    visible? = UsageLimits.can_manage_audio_description?(space) == :ok
 
     case UsageLimits.can_use_audio_description?(space) do
       :ok ->
         %{
           audio_description: enabled?,
+          audio_description_visible: visible?,
           audio_description_disabled: false,
           audio_description_notice: nil
         }
@@ -722,6 +724,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
 
         %{
           audio_description: enabled?,
+          audio_description_visible: visible?,
           audio_description_disabled: not enabled?,
           audio_description_notice:
             Map.get(copy, :notice, gettext("Audio description isn't available for this space."))

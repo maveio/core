@@ -642,7 +642,7 @@ defmodule MaveCore.Spaces do
 
   @doc """
   Whether new uploads in the space get audio descriptions: the space opted in and
-  the host still allows it (a downgraded space stops getting them).
+  the host still allows it.
   """
   def audio_description_active?(%Space{audio_description_enabled: true} = space) do
     UsageLimits.can_use_audio_description?(space) == :ok
@@ -650,10 +650,10 @@ defmodule MaveCore.Spaces do
 
   def audio_description_active?(_space), do: false
 
-  # Turning audio descriptions off is always allowed; turning them on needs the host's consent.
-  defp authorize_feature_change(%Space{} = space, %{"audio_description_enabled" => value})
-       when value in [true, "true"] do
-    UsageLimits.can_use_audio_description?(space)
+  defp authorize_feature_change(%Space{} = space, %{"audio_description_enabled" => value}) do
+    with :ok <- UsageLimits.can_manage_audio_description?(space) do
+      if value in [true, "true"], do: UsageLimits.can_use_audio_description?(space), else: :ok
+    end
   end
 
   defp authorize_feature_change(_space, _attrs), do: :ok

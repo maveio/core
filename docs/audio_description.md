@@ -123,8 +123,15 @@ VTT. The generated pipeline creates both files automatically. Background publica
 Without a host policy every space may turn the feature on. A host can refuse with
 `{:error, reason}` and provide `restriction_copy(:audio_description, reason)`;
 the dashboard then shows the notice and keeps the toggle off. Turning the feature
-off is always allowed. The check is repeated for every new run, so a space that
-loses access stops getting audio descriptions without changing its setting.
+off is allowed unless the host manages the setting. The check is repeated for
+every new run, so a space that loses access stops getting audio descriptions
+without changing its setting.
+
+Hosts can also implement `can_manage_audio_description?/1`. Returning
+`{:error, reason}` hides the setting and rejects changes through
+`Spaces.update_space_features/2`, including attempts to disable it. This lets a
+host manage access through its own authorized interface. Both callbacks default
+to allowing access when no policy is configured.
 
 ## Providers and configuration
 
