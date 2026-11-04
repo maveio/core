@@ -245,9 +245,9 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     versioned_thumbnail_url =
       "#{thumbnail_url}?e=#{DateTime.to_unix(inserted_at, :microsecond)}"
 
-    {:ok, _view, html} = live(conn, "/videos/#{video.id}")
+    {:ok, view, html} = live(conn, "/videos/#{video.id}")
 
-    assert html =~ ~s(<mave-player embed="#{space.hash}#{video.hash}")
+    assert has_element?(view, ~s(mave-player[embed="#{space.hash}#{video.hash}"]))
     assert html =~ ~s(poster="#{versioned_thumbnail_url}")
     assert html =~ versioned_thumbnail_url
   end
@@ -1642,6 +1642,46 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     stop_live_view(view)
   end
 
+  test "background audio descriptions refresh the player only when the tracks change", %{
+    conn: conn
+  } do
+    {conn, space} = authenticated_conn(conn)
+
+    embed =
+      video_embed_fixture(space, %{name: "Background descriptions"})
+      |> Repo.preload(asset: [:current_video])
+
+    {:ok, view, initial_html} = live(conn, "/videos/#{embed.id}")
+    [_, original_id] = Regex.run(~r/id="(player-[^"]+)"/, initial_html)
+
+    Repo.insert!(%AudioDescription{
+      video_id: embed.asset.current_video_id,
+      language: "nl",
+      generation_language: "nl",
+      audio_filename: "audio_description_nl.mp3",
+      vtt_filename: "descriptions_nl.vtt"
+    })
+
+    event =
+      {:embed_updated,
+       %{
+         "space_id" => space.id,
+         "embed_id" => embed.id,
+         "phase" => "processing",
+         "step_type" => "media.mix_audio_description"
+       }}
+
+    send(view.pid, event)
+    html = render(view)
+    [_, updated_id] = Regex.run(~r/id="(player-[^"]+)"/, html)
+    refute updated_id == original_id
+    assert has_element?(view, "#audio-description-settings input[value='Dutch (AD)']")
+
+    send(view.pid, event)
+    assert has_element?(view, "##{updated_id} mave-player")
+    stop_live_view(view)
+  end
+
   test "audio descriptions have their own editable settings and appear under Audio in Info", %{
     conn: conn
   } do
@@ -1964,7 +2004,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     [_, refreshed_player_dom_id] = Regex.run(~r/id="(player-[^"]+)"/, html)
 
     refute refreshed_player_dom_id == player_dom_id
-    assert html =~ ~s(<mave-player embed="#{space.hash}#{video.hash}")
+    assert has_element?(view, ~s(mave-player[embed="#{space.hash}#{video.hash}"]))
   end
 
   test "/videos/:id renders subtitle controls in settings", %{conn: conn} do
@@ -2142,7 +2182,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     [_, refreshed_player_dom_id] = Regex.run(~r/id="(player-[^"]+)"/, html)
 
     refute refreshed_player_dom_id == player_dom_id
-    assert html =~ ~s(<mave-player embed="#{space.hash}#{video.hash}")
+    assert has_element?(view, ~s(mave-player[embed="#{space.hash}#{video.hash}"]))
   end
 
   test "/videos/:id hides subtitle controls while the video is still processing", %{conn: conn} do
@@ -2267,7 +2307,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     html = render(view)
 
     assert html =~ ~s(id="#{player_dom_id}")
-    assert html =~ ~s(<mave-player embed="#{space.hash}#{video.hash}")
+    assert has_element?(view, ~s(mave-player[embed="#{space.hash}#{video.hash}"]))
     assert html =~ ~s(poster="12")
   end
 
@@ -2284,7 +2324,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     [_, refreshed_player_dom_id] = Regex.run(~r/id="(player-[^"]+)"/, html)
 
     refute refreshed_player_dom_id == player_dom_id
-    assert html =~ ~s(<mave-player embed="#{space.hash}#{video.hash}")
+    assert has_element?(view, ~s(mave-player[embed="#{space.hash}#{video.hash}"]))
   end
 
   test "/videos/:id keeps the player stable after a completed flow step", %{conn: conn} do
@@ -2308,7 +2348,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     [_, refreshed_player_dom_id] = Regex.run(~r/id="(player-[^"]+)"/, html)
 
     assert refreshed_player_dom_id == player_dom_id
-    assert html =~ ~s(<mave-player embed="#{space.hash}#{video.hash}")
+    assert has_element?(view, ~s(mave-player[embed="#{space.hash}#{video.hash}"]))
   end
 
   test "/videos/:id renders real analytics data instead of mock metrics", %{

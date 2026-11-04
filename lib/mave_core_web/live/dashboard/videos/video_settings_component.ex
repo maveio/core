@@ -2209,7 +2209,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     ~H"""
     <div id={"#{@control_prefix}-settings"}>
       <.settings_header title={@heading} addable phx-click={@events.add} phx-target={@myself} />
-      <div class="px-3 py-1 space-y-2 text-sm text-stone-400">
+      <div class="p-3 space-y-2 text-sm text-stone-400">
         <div
           :if={!@has_tracks and is_nil(@audio_track_form) and !@processing_uploaded_audio_track}
           class="h-1"
@@ -2440,7 +2440,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     ~H"""
     <div>
       <.settings_header title="subtitles" addable phx-click="add_subtitle" phx-target={@myself} />
-      <div class="px-3 py-1 space-y-2 text-sm text-stone-400">
+      <div class="p-3 space-y-2 text-sm text-stone-400">
         <div
           :if={!@has_subtitles and is_nil(@subtitle_form) and !@processing_uploaded_subtitle}
           class="h-1"
