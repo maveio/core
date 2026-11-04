@@ -1,10 +1,10 @@
 defmodule MaveCore.AudioDescription do
   @moduledoc """
   Audio description: per video, a full-mix MP3 (the video's audio with spoken
-  descriptions of what is on screen) and a descriptions VTT, in English and Dutch.
+  descriptions of what is on screen) and a descriptions VTT in the original language.
 
-  English is always described first, from the picture; every other language is a
-  translation of that English text. See `docs/audio_description.md`.
+  New runs describe the picture directly in the detected language, falling back
+  to English when no language is known. See `docs/audio_description.md`.
   """
 
   alias MaveCore.Spaces
@@ -23,7 +23,7 @@ defmodule MaveCore.AudioDescription do
   """
   def run_input(%Space{} = space) do
     if Spaces.audio_description_active?(space),
-      do: %{"languages" => @languages},
+      do: %{"languages" => ["original"], "fallback_language" => "en"},
       else: nil
   end
 
@@ -33,10 +33,38 @@ defmodule MaveCore.AudioDescription do
   def requested_languages(%{"audio_description" => %{"languages" => languages}})
       when is_list(languages) do
     languages = Enum.filter(languages, &is_binary/1)
-    if languages == [], do: [], else: Enum.uniq([@source_language | languages])
+
+    cond do
+      languages == [] -> []
+      "original" in languages -> ["original"]
+      true -> Enum.uniq([@source_language | languages])
+    end
   end
 
   def requested_languages(_run_input), do: []
+
+  @doc "Original language from transcription or run metadata, with a configurable fallback."
+  def original_language(run_input, outputs, fallback_language \\ nil) do
+    candidates = [
+      get_in(outputs, ["transcribe_audio", "transcription_language"]),
+      get_in(outputs, ["transcribe_audio", "language"]),
+      run_input["language"]
+    ]
+
+    fallback =
+      normalize_language(fallback_language) ||
+        normalize_language(get_in(run_input, ["audio_description", "fallback_language"])) ||
+        @source_language
+
+    Enum.find_value(candidates, fallback, &normalize_language/1)
+  end
+
+  defp normalize_language(value) when is_binary(value) do
+    value = value |> String.trim() |> String.downcase() |> String.split(~r/[-_]/) |> hd()
+    if value =~ ~r/^[a-z]{2,3}$/ and value not in ["und", "zxx"], do: value
+  end
+
+  defp normalize_language(_), do: nil
 
   def requested?(run_input), do: requested_languages(run_input) != []
 

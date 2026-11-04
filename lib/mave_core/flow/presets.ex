@@ -3,7 +3,6 @@ defmodule MaveCore.Flow.Presets do
   Built-in flow templates used as migration starting points.
   """
 
-  alias MaveCore.AudioDescription
   alias MaveCore.Media.ProductionEncodingProfile
 
   @spec all() :: [map()]
@@ -110,57 +109,32 @@ defmodule MaveCore.Flow.Presets do
     )
   end
 
-  # Audio description (English + translations). The steps skip themselves unless the
-  # run asks for it, and nothing waits for them: the mix steps republish the HLS master
-  # and manifest when they finish.
+  # A single original-language track is generated in the background.
   defp with_audio_description(definition) do
-    source = AudioDescription.source_language()
-    translations = AudioDescription.languages() -- [source]
-
-    steps =
-      [
-        background_step("detect_scenes", "media.detect_scenes", "Detect Scenes", ["inspect_media"]),
-        background_step(
-          "describe_video",
-          "ai.describe_video",
-          "Describe Video",
-          ["detect_scenes", "transcribe_audio", "transcode_audio"]
-        )
-      ] ++
-        Enum.map(translations, fn language ->
-          background_step(
-            "translate_descriptions_#{language}",
-            "ai.translate_descriptions",
-            "Translate Descriptions (#{language})",
-            ["describe_video"],
-            %{"language" => language, "source_step_id" => "describe_video"}
-          )
-        end) ++
-        Enum.flat_map([source | translations], &speak_and_mix_steps(&1, source))
-
-    Map.update!(definition, "steps", &(&1 ++ steps))
-  end
-
-  defp speak_and_mix_steps(language, source) do
-    cues_step =
-      if language == source, do: "describe_video", else: "translate_descriptions_#{language}"
-
-    [
+    steps = [
+      background_step("detect_scenes", "media.detect_scenes", "Detect Scenes", ["inspect_media"]),
+      background_step("describe_video", "ai.describe_video", "Describe Video", [
+        "detect_scenes",
+        "transcribe_audio",
+        "transcode_audio"
+      ]),
       background_step(
-        "speak_descriptions_#{language}",
+        "speak_descriptions_original",
         "ai.speak_descriptions",
-        "Speak Descriptions (#{language})",
-        [cues_step],
-        %{"language" => language, "source_step_id" => cues_step}
+        "Speak Descriptions",
+        ["describe_video"],
+        %{"language" => "original", "source_step_id" => "describe_video"}
       ),
       background_step(
-        "mix_audio_description_#{language}",
+        "mix_audio_description_original",
         "media.mix_audio_description",
-        "Mix Audio Description (#{language})",
-        ["speak_descriptions_#{language}", "transcode_audio"],
-        %{"language" => language, "source_step_id" => "speak_descriptions_#{language}"}
+        "Mix Audio Description",
+        ["speak_descriptions_original", "transcode_audio"],
+        %{"language" => "original", "source_step_id" => "speak_descriptions_original"}
       )
     ]
+
+    Map.update!(definition, "steps", &(&1 ++ steps))
   end
 
   defp background_step(id, type, name, depends_on, params \\ nil) do

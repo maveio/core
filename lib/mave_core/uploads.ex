@@ -333,10 +333,15 @@ defmodule MaveCore.Uploads do
   end
 
   defp handle_custom_audio_track(scope, bucket, key, metadata, upload) do
+    ingest =
+      if present(metadata, "audio_description") in ["true", "1", "yes"],
+        do: &Assets.ingest_uploaded_audio_description/4,
+        else: &Assets.ingest_uploaded_audio_track/4
+
     with {:ok, %Embed{space: %Space{hash: space_hash}, hash: embed_hash} = embed} <-
            upload_scope_existing_video(scope),
          {:ok, track} <-
-           Assets.ingest_uploaded_audio_track(
+           ingest.(
              embed,
              %{
                "audio_track_id" => present(metadata, "audio_track_id"),
@@ -366,10 +371,15 @@ defmodule MaveCore.Uploads do
   end
 
   defp handle_custom_subtitle(scope, bucket, key, metadata) do
+    ingest =
+      if present(metadata, "audio_description") in ["true", "1", "yes"],
+        do: &Assets.ingest_uploaded_audio_description_vtt/4,
+        else: &Assets.ingest_uploaded_subtitle/4
+
     with {:ok, %Embed{space: %Space{hash: space_hash}, hash: embed_hash} = embed} <-
            upload_scope_existing_video(scope),
          {:ok, subtitle} <-
-           Assets.ingest_uploaded_subtitle(
+           ingest.(
              embed,
              %{
                "subtitle_id" => present(metadata, "subtitle_id"),

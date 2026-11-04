@@ -4,14 +4,14 @@ defmodule MaveCore.AudioDescription.MistralSpeech do
 
   Every language gets a voice in that language, because Voxtral keeps the accent
   of its voice prompt. Voices come from `MAVE_AUDIO_DESCRIPTION_VOICES`
-  (`en:gb_jane_neutral,nl:nl_kore_neutral` by default); a language without one
+  (`en:gb_jane_neutral,nl:voice_3145` by default); a language without one
   falls back to `MAVE_AUDIO_DESCRIPTION_VOICE`. Never clone voices from customer
   videos.
   """
 
   @endpoint "https://api.mistral.ai/v1/audio/speech"
-  @default_model "voxtral-mini-tts-2603"
-  @default_voices "en:gb_jane_neutral,nl:nl_kore_neutral"
+  @default_model "voxtral-mini-tts-3-0"
+  @default_voices "en:gb_jane_neutral,nl:voice_3145"
   @default_voice "gb_jane_neutral"
   @pool_timeout_ms 30_000
   @receive_timeout_ms 2 * 60 * 1000

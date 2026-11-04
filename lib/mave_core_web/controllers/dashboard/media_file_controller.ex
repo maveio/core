@@ -1,4 +1,4 @@
-defmodule MaveCoreWeb.Dashboard.SubtitleController do
+defmodule MaveCoreWeb.Dashboard.MediaFileController do
   @moduledoc false
 
   use MaveCoreWeb, :controller
@@ -7,6 +7,7 @@ defmodule MaveCoreWeb.Dashboard.SubtitleController do
   alias MaveCore.Assets
   alias MaveCore.Assets.Subtitle
   alias MaveCore.Assets.Video
+  alias MaveCore.AudioDescription
   alias MaveCore.Embeds
   alias MaveCore.Embeds.Embed
   alias MaveCore.Media.Storage
@@ -33,6 +34,52 @@ defmodule MaveCoreWeb.Dashboard.SubtitleController do
         |> text("Subtitle not found")
     end
   end
+
+  def audio(conn, %{"id" => embed_id, "track_id" => id} = params) do
+    with {:ok, space} <- resolve_space(conn.assigns.current_user, params),
+         {:ok, embed} <- Embeds.resolve_dashboard_embed(space, embed_id),
+         %{} = track <- Assets.get_audio_track_for_embed(id, embed) do
+      download_file(conn, space, embed, track.filename, track.label || track.language || "audio")
+    else
+      _ -> not_found(conn)
+    end
+  end
+
+  def description(conn, %{"id" => embed_id, "track_id" => id, "format" => format} = params) do
+    with true <- format in ["mp3", "vtt"],
+         {:ok, space} <- resolve_space(conn.assigns.current_user, params),
+         {:ok, embed} <- Embeds.resolve_dashboard_embed(space, embed_id),
+         %{} = track <- Assets.get_audio_description_for_embed(id, embed) do
+      filename = if format == "mp3", do: track.audio_filename, else: track.vtt_filename
+      download_file(conn, space, embed, filename, track.label || track.language || "description")
+    else
+      _ -> not_found(conn)
+    end
+  end
+
+  defp download_file(conn, space, embed, filename, label) when is_binary(filename) do
+    key =
+      "#{AudioDescription.version_prefix(embed.hash, Embeds.current_video_version(embed))}/#{filename}"
+
+    bucket = Storage.bucket_for_space(space.hash, space.region)
+
+    case storage_adapter().get(bucket, key, space.region) do
+      {:ok, body} when is_binary(body) ->
+        extension = Path.extname(filename)
+        name = String.replace(label, ~r/[^\p{L}\p{N} _.-]/u, "_") <> extension
+
+        conn
+        |> put_resp_content_type("application/octet-stream")
+        |> put_resp_header("x-content-type-options", "nosniff")
+        |> send_download({:binary, body}, filename: name, disposition: :attachment)
+
+      _ ->
+        not_found(conn)
+    end
+  end
+
+  defp download_file(conn, _space, _embed, _filename, _label), do: not_found(conn)
+  defp not_found(conn), do: conn |> put_status(:not_found) |> text("File not found")
 
   defp resolve_space(current_user, %{"space_id" => space_id}) when is_binary(space_id) do
     case Accounts.set_current_space_by_id(current_user, space_id) do

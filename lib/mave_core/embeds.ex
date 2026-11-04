@@ -618,10 +618,15 @@ defmodule MaveCore.Embeds do
         ManifestPublisher.serialize_audio_description(description, bucket, embed.hash, version)
 
       %{
+        id: description.id,
         language: description.language,
         label:
-          Languages.spoken_language(description.language) || String.upcase(description.language),
+          description.label || Languages.spoken_language(description.language) ||
+            String.upcase(description.language),
+        default: false,
+        codec: "mp3",
         mp3_url: get_in(serialized, ["audio", "path"]),
+        hls_playlist: get_in(serialized, ["audio", "hls_playlist"]),
         vtt_url: get_in(serialized, ["vtt", "path"]),
         cue_count: description.cue_count
       }

@@ -5,7 +5,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
   import Phoenix.LiveViewTest
 
   alias MaveCore.Accounts
-  alias MaveCore.Assets.{Asset, AudioTrack, Subtitle, Video}
+  alias MaveCore.Assets.{Asset, AudioDescription, AudioTrack, Subtitle, Video}
   alias MaveCore.ClickHouseRepo
   alias MaveCore.Collections.{Collection, CollectionEmbed}
   alias MaveCore.Embeds.{Embed, SettingsSerializer}
@@ -1624,6 +1624,101 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     stop_live_view(reloaded_view)
   end
 
+  test "audio descriptions have their own editable settings and appear under Audio in Info", %{
+    conn: conn
+  } do
+    {conn, space} = authenticated_conn(conn)
+
+    embed =
+      video_embed_fixture(space, %{name: "Description management"})
+      |> Repo.preload(asset: [:current_video])
+
+    description =
+      Repo.insert!(%AudioDescription{
+        video_id: embed.asset.current_video_id,
+        language: "nl",
+        generation_language: "nl",
+        audio_filename: "description.mp3",
+        vtt_filename: "description.vtt"
+      })
+
+    {:ok, view, _html} = live(conn, "/videos/#{embed.id}")
+    assert has_element?(view, "#audio-description-settings")
+    refute render(view) =~ "Upload a full audio mix"
+    assert has_element?(view, "#audio-description-settings [phx-click=add_audio_description]")
+    assert has_element?(view, "#audio-description-replace-#{description.id}[aria-haspopup=menu]")
+
+    assert has_element?(
+             view,
+             "#audio-description-files-#{description.id} [role=menuitem]",
+             "Replace text"
+           )
+
+    render_click(element(view, "#audio-description-replace-audio-#{description.id}"))
+    assert has_element?(view, "input[type=file][accept='.mp3']")
+
+    render_click(element(view, "#audio-description-vtt-#{description.id}"))
+    assert has_element?(view, "input[type=file][accept='.vtt']")
+    assert has_element?(view, "#delete-audio-description-#{description.id}")
+
+    view
+    |> element("#audio-description-settings input[name='audio_track[label]']")
+    |> render_blur(%{"id" => description.id, "value" => "Dutch accessible audio"})
+
+    assert Repo.get!(AudioDescription, description.id).label == "Dutch accessible audio"
+
+    view
+    |> element("#audio-description-language-form-#{description.id}")
+    |> render_change(%{"audio_track" => %{"language" => "en"}})
+
+    assert Repo.get!(AudioDescription, description.id).language == "en"
+
+    render_click(element(view, "[phx-value-tab=info]"))
+    assert has_element?(view, "#rendition-group-audio", "Dutch accessible audio (AD)")
+    assert has_element?(view, "#rendition-group-audio", "HLS")
+    assert has_element?(view, "#rendition-group-audio", "MP3")
+    assert has_element?(view, "#rendition-group-audio", "VTT")
+    refute has_element?(view, "#audio-descriptions")
+    refute has_element?(view, "#rendition-group-audio a")
+
+    render_click(element(view, "[phx-value-tab=options]"))
+    render_click(element(view, "#delete-audio-description-#{description.id}"))
+    assert Repo.get!(AudioDescription, description.id).deleted_at == nil
+    assert has_element?(view, "#delete-media-dialog", "Dutch accessible audio")
+    render_click(element(view, "#delete-media-dialog-confirm"))
+    assert Repo.get!(AudioDescription, description.id).deleted_at
+    refute has_element?(view, "#delete-audio-description-#{description.id}")
+    stop_live_view(view)
+  end
+
+  test "audio description settings ignore changes to another video's description", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    embed = video_embed_fixture(space, %{name: "Description scope"})
+
+    other =
+      video_embed_fixture(space, %{name: "Other video"}) |> Repo.preload(asset: [:current_video])
+
+    description =
+      Repo.insert!(%AudioDescription{
+        video_id: other.asset.current_video_id,
+        language: "en",
+        audio_filename: "other.mp3"
+      })
+
+    {:ok, view, _html} = live(conn, "/videos/#{embed.id}")
+    target = with_target(view, "#video-settings")
+
+    render_hook(target, "blur_audio_description_label", %{
+      "id" => description.id,
+      "value" => "Changed"
+    })
+
+    render_hook(target, "delete_audio_description", %{"id" => description.id})
+    assert Repo.get!(AudioDescription, description.id).label == nil
+    assert Repo.get!(AudioDescription, description.id).deleted_at == nil
+    stop_live_view(view)
+  end
+
   test "/videos/:id renders an empty audio tracks state when there are no tracks", %{conn: conn} do
     {conn, space} = authenticated_conn(conn)
     video = video_embed_fixture(space, %{name: "Audio Track Settings"})
@@ -1653,13 +1748,22 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
       })
       |> Repo.insert!()
 
-    {:ok, _view, html} = live(conn, "/videos/#{video.id}")
+    {:ok, view, html} = live(conn, "/videos/#{video.id}")
+
+    render_click(element(view, "#delete-audio-track-#{track.id}"))
+    assert Repo.get(AudioTrack, track.id)
+    render_click(element(view, "#delete-media-dialog button", "cancel"))
+    assert Repo.get(AudioTrack, track.id)
+    refute has_element?(view, "#delete-media-dialog")
+    render_click(element(view, "#delete-audio-track-#{track.id}"))
+    render_click(element(view, "#delete-media-dialog-confirm"))
+    refute Repo.get(AudioTrack, track.id)
 
     assert html =~ "audio tracks"
     assert html =~ "Commentary"
     assert html =~ ~s(id="delete-audio-track-#{track.id}")
-    assert html =~ "Remove audio track"
-    assert html =~ "phx-click-loading:inline-flex"
+    assert html =~ "Delete"
+    assert html =~ "file_menu"
   end
 
   test "/videos/:id saves audio track label on blur", %{conn: conn} do
@@ -1691,8 +1795,13 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
       "value" => "Director Commentary"
     })
 
+    view
+    |> element("#audio-track-language-form-#{track.id}")
+    |> render_change(%{"audio_track" => %{"language" => "nl"}})
+
     stop_live_view(view)
     assert Repo.get!(AudioTrack, track.id).label == "Director Commentary"
+    assert Repo.get!(AudioTrack, track.id).language == "nl"
   end
 
   test "/videos/:id ignores audio track mutations from another space", %{conn: conn} do
@@ -1858,8 +1967,73 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     assert has_element?(view, ~s(a[href="#{subtitle_download_path}"][download="en.vtt"]))
     refute has_element?(view, ~s(a[href="#{subtitle_download_path}"][target]))
     assert html =~ ~s(id="delete-subtitle-#{subtitle.id}")
-    assert html =~ "Remove subtitle"
-    assert html =~ "phx-click-loading:inline-flex"
+    assert html =~ "Delete"
+    assert html =~ "file_menu"
+  end
+
+  test "audio downloads are attachments scoped to the current video", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+
+    embed =
+      video_embed_fixture(space, %{name: "Audio downloads"})
+      |> Repo.preload(asset: [:current_video])
+
+    other = video_embed_fixture(space, %{name: "Other video"})
+
+    track =
+      Repo.insert!(%AudioTrack{
+        video_id: embed.asset.current_video_id,
+        label: "Original",
+        filename: "audio.mp3",
+        codec: "mp3"
+      })
+
+    description =
+      Repo.insert!(%AudioDescription{
+        video_id: embed.asset.current_video_id,
+        label: "Accessible",
+        language: "en",
+        audio_filename: "ad.mp3",
+        vtt_filename: "ad.vtt"
+      })
+
+    bucket = Storage.bucket_for_space(space.hash, space.region)
+
+    for {file, body, type} <- [
+          {"audio.mp3", "audio bytes", "audio/mpeg"},
+          {"ad.mp3", "description bytes", "audio/mpeg"},
+          {"ad.vtt", "WEBVTT\n", "text/vtt"}
+        ] do
+      {:ok, _} =
+        FlowStorageAdapterStub.put_public(
+          bucket,
+          "#{embed.hash}/#{file}",
+          body,
+          type,
+          space.region
+        )
+    end
+
+    for {suffix, body} <- [
+          {"audio-tracks/#{track.id}/download", "audio bytes"},
+          {"audio-descriptions/#{description.id}/mp3/download", "description bytes"},
+          {"audio-descriptions/#{description.id}/vtt/download", "WEBVTT\n"}
+        ] do
+      downloaded = get(conn, "/#{space.id}/videos/#{embed.id}/#{suffix}")
+      assert response(downloaded, 200) == body
+      assert hd(get_resp_header(downloaded, "content-disposition")) =~ "attachment"
+      assert response(get(conn, "/#{space.id}/videos/#{other.id}/#{suffix}"), 404)
+    end
+
+    description |> Ecto.Changeset.change(deleted_at: DateTime.utc_now()) |> Repo.update!()
+
+    assert response(
+             get(
+               conn,
+               "/#{space.id}/videos/#{embed.id}/audio-descriptions/#{description.id}/mp3/download"
+             ),
+             404
+           )
   end
 
   test "/videos/:id subtitle download returns VTT as an attachment", %{conn: conn} do

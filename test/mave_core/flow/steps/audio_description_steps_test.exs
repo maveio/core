@@ -7,6 +7,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
     AiDescribeVideoStep,
     AiSpeakDescriptionsStep,
     AiTranslateDescriptionsStep,
+    AudioDescriptionSupport,
     MediaBuildHlsMasterStep,
     MediaDetectScenesStep,
     MediaMixAudioDescriptionStep
@@ -18,6 +19,21 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
   @embed "LeDE9v86ye"
   @bucket "space-ubg50"
   @requested %{"languages" => ["en", "nl"]}
+
+  defmodule DecodedJsonStorage do
+    def get(_bucket, "object.json", _region), do: {:ok, %{"duration" => 12}}
+    def get(_bucket, "array.json", _region), do: {:ok, [%{"text" => "A red square."}]}
+  end
+
+  test "working JSON accepts bodies already decoded by the HTTP storage adapter" do
+    ctx = %{storage: DecodedJsonStorage, bucket: "test", region: nil}
+
+    assert {:ok, %{"duration" => 12}} =
+             AudioDescriptionSupport.get_json(ctx, "object.json")
+
+    assert {:ok, [%{"text" => "A red square."}]} =
+             AudioDescriptionSupport.get_json(ctx, "array.json")
+  end
 
   defmodule ChatStub do
     @moduledoc false
@@ -115,8 +131,10 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
       steps = definition["steps"]
 
       ids =
-        ~w(detect_scenes describe_video translate_descriptions_nl speak_descriptions_en
-           speak_descriptions_nl mix_audio_description_en mix_audio_description_nl)
+        ~w(detect_scenes describe_video speak_descriptions_original mix_audio_description_original)
+
+      refute Enum.any?(steps, &(&1["type"] == "ai.translate_descriptions"))
+      assert Enum.count(steps, &(&1["type"] == "media.mix_audio_description")) == 1
 
       for id <- ids do
         step = Enum.find(steps, &(&1["id"] == id))
@@ -210,6 +228,118 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
              ~s|#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Dutch (audio description)",LANGUAGE="nl",DEFAULT=NO,AUTOSELECT=YES,CHARACTERISTICS="public.accessibility.describes-video",CHANNELS="2",URI="audio_description_nl_hls/playlist.m3u8"|
 
     assert playlist =~ ~s(NAME="Original",LANGUAGE="en",DEFAULT=YES,AUTOSELECT=YES,CHANNELS="2")
+  end
+
+  test "speech retries reuse unchanged cues but regenerate changed text" do
+    key = "#{@embed}/audio_description/en/cues.json"
+    step = %{"id" => "speak_descriptions_en", "params" => %{"language" => "en"}}
+
+    context = %{
+      run_input: Map.put(base_input(), "audio_description", @requested),
+      dependency_outputs: %{
+        "describe_video" => %{
+          "status" => "ok",
+          "cues_key" => key,
+          "speech_key" => "speech.json",
+          "duration" => 8
+        }
+      }
+    }
+
+    put_cue = fn text ->
+      Storage.put(
+        @bucket,
+        key,
+        Jason.encode!([%{"start" => 0, "end" => 1, "text" => text}]),
+        "application/json",
+        nil
+      )
+    end
+
+    put_cue.("A red screen.")
+    assert {:ok, first, []} = AiSpeakDescriptionsStep.run(step, context)
+    assert_received {:speak, "en"}
+    assert {:ok, retry, []} = AiSpeakDescriptionsStep.run(step, context)
+    assert retry["clips"] == first["clips"]
+    refute_received {:speak, "en"}
+
+    put_cue.("A blue screen.")
+    assert {:ok, changed, []} = AiSpeakDescriptionsStep.run(step, context)
+    assert_received {:speak, "en"}
+    refute changed["clips"] == first["clips"]
+  end
+
+  @tag :integration
+  test "original-language preset describes and packages just the detected language" do
+    Process.put(:ad_test_pid, self())
+    {video, audio} = media_fixtures()
+
+    input =
+      Map.merge(base_input(), %{
+        "audio_description" => %{"languages" => ["original"]},
+        "source_body" => video,
+        "source_content_type" => "video/mp4"
+      })
+
+    Storage.put_public(@bucket, "#{@embed}/audio.mp3", audio, "audio/mpeg", nil)
+
+    Storage.put(
+      @bucket,
+      "#{@embed}/subtitle.json",
+      Jason.encode!(%{"segments" => []}),
+      "application/json",
+      nil
+    )
+
+    outputs = %{
+      "source" => %{"space_hash" => @space, "embed_hash" => @embed, "version" => 0},
+      "inspect_media" => %{"duration" => 8.0, "has_video" => true, "has_audio" => true},
+      "transcribe_audio" => %{
+        "status" => "ok",
+        "language" => "nl",
+        "subtitle_json_key" => "#{@embed}/subtitle.json"
+      },
+      "transcode_audio" => %{
+        "status" => "ok",
+        "bucket" => @bucket,
+        "key" => "#{@embed}/audio.mp3",
+        "uri" => "s3://#{@bucket}/#{@embed}/audio.mp3"
+      }
+    }
+
+    {:ok, preset} = Presets.fetch("publish_local")
+
+    steps =
+      Enum.filter(
+        preset["definition"]["steps"],
+        &(&1["id"] in ~w(detect_scenes describe_video speak_descriptions_original mix_audio_description_original))
+      )
+
+    outputs =
+      Enum.reduce(steps, outputs, fn step, acc ->
+        assert {:ok, %{"status" => "ok"} = output, _artifacts} =
+                 Map.fetch!(
+                   %{
+                     "media.detect_scenes" => MediaDetectScenesStep,
+                     "ai.describe_video" => AiDescribeVideoStep,
+                     "ai.speak_descriptions" => AiSpeakDescriptionsStep,
+                     "media.mix_audio_description" => MediaMixAudioDescriptionStep
+                   },
+                   step["type"]
+                 ).run(step, %{run_input: input, dependency_outputs: acc})
+
+        Map.put(acc, step["id"], output)
+      end)
+
+    assert outputs["describe_video"]["language"] == "nl"
+    assert outputs["speak_descriptions_original"]["language"] == "nl"
+    assert outputs["mix_audio_description_original"]["audio_description"]["language"] == "nl"
+    assert_received {:chat, instruction, _}
+    assert instruction =~ "Dutch (nl)"
+    assert_received {:speak, "nl"}
+    refute_received {:speak, "en"}
+    assert {:ok, _} = Storage.get(@bucket, "#{@embed}/audio_description_nl.mp3", nil)
+    assert {:error, _} = Storage.get(@bucket, "#{@embed}/audio_description_en.mp3", nil)
   end
 
   @tag :integration

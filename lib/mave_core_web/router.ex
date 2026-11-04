@@ -306,11 +306,25 @@ defmodule MaveCoreWeb.Router do
       live "/cli/auth/:user_code", CliAuthLive, :authorize
     end
 
-    get "/videos/:id/subtitles/:subtitle_id/download", Dashboard.SubtitleController, :download
+    get "/videos/:id/subtitles/:subtitle_id/download", Dashboard.MediaFileController, :download
 
     get "/:space_id/videos/:id/subtitles/:subtitle_id/download",
-        Dashboard.SubtitleController,
+        Dashboard.MediaFileController,
         :download
+
+    get "/videos/:id/audio-tracks/:track_id/download", Dashboard.MediaFileController, :audio
+
+    get "/:space_id/videos/:id/audio-tracks/:track_id/download",
+        Dashboard.MediaFileController,
+        :audio
+
+    get "/videos/:id/audio-descriptions/:track_id/:format/download",
+        Dashboard.MediaFileController,
+        :description
+
+    get "/:space_id/videos/:id/audio-descriptions/:track_id/:format/download",
+        Dashboard.MediaFileController,
+        :description
   end
 
   use MaveCoreWeb.DevRoutes

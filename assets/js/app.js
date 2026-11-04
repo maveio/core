@@ -28,6 +28,7 @@ import topbar from "../vendor/topbar"
 import "@lottiefiles/lottie-player"
 import { ChartHook } from "./hooks/chart"
 import { cdn } from "./upload"
+import { FileMenuHook } from "./hooks/file_menu"
 
 let selectedEmbed = null
 
@@ -717,6 +718,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
     draggable: DraggableEmbedHook,
     thumbnail_preview: ThumbnailPreviewHook,
     auto_open_file_picker: AutoOpenFilePickerHook,
+    file_menu: FileMenuHook,
     preserve_scroll: PreserveScrollHook,
   },
   uploaders: { cdn },
