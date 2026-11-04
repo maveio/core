@@ -15,6 +15,13 @@ defmodule MaveCore.AudioDescriptionTest do
     def can_use_audio_description?(_space), do: {:error, :paid_plan_required}
   end
 
+  defmodule HostManaged do
+    @behaviour MaveCore.UsageLimits
+    def can_create_video_embed?(_space), do: :ok
+    def can_add_space_member?(_space, _role), do: :ok
+    def can_manage_audio_description?(_space), do: {:error, :managed_feature}
+  end
+
   setup do
     old_backend = Application.get_env(:mave_core, :usage_limits_backend)
 
@@ -63,6 +70,17 @@ defmodule MaveCore.AudioDescriptionTest do
 
     assert {:ok, %Space{audio_description_enabled: false}} =
              Spaces.update_space_features(space, %{audio_description_enabled: false})
+  end
+
+  test "host-managed settings reject both enabling and disabling", %{space: space} do
+    Application.put_env(:mave_core, :usage_limits_backend, HostManaged)
+
+    for enabled <- [true, false] do
+      assert {:error, :managed_feature} =
+               Spaces.update_space_features(space, %{audio_description_enabled: enabled})
+    end
+
+    refute Repo.get!(Space, space.id).audio_description_enabled
   end
 
   test "English is always described first" do

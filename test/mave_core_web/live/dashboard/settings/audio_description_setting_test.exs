@@ -20,6 +20,13 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.AudioDescriptionSettingTest do
     def restriction_copy(_operation, _reason), do: %{}
   end
 
+  defmodule HostManaged do
+    @behaviour MaveCore.UsageLimits
+    def can_create_video_embed?(_space), do: :ok
+    def can_add_space_member?(_space, _role), do: :ok
+    def can_manage_audio_description?(_space), do: {:error, :managed_feature}
+  end
+
   setup do
     old_backend = Application.get_env(:mave_core, :usage_limits_backend)
 
@@ -54,6 +61,14 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.AudioDescriptionSettingTest do
     assert html =~ "Available on paid plans"
     assert has_element?(view, "#audio-description-toggle.pointer-events-none")
     refute Repo.get!(Space, space.id).audio_description_enabled
+  end
+
+  test "hides settings when the host manages audio description", %{conn: conn} do
+    {conn, _space} = authenticated_conn(conn)
+    Application.put_env(:mave_core, :usage_limits_backend, HostManaged)
+    {:ok, view, _html} = live(conn, "/settings")
+
+    refute has_element?(view, "#audio-description-feature")
   end
 
   defp authenticated_conn(conn) do
