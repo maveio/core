@@ -84,7 +84,7 @@ generation language; uploaded tracks may share the same language.
 The HLS master playlist lists each MP3 in the `audio` group:
 
 ```text
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Dutch (audio description)",LANGUAGE="nl",DEFAULT=NO,AUTOSELECT=YES,CHARACTERISTICS="public.accessibility.describes-video",CHANNELS="2",URI="audio_description_nl_hls/playlist.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Dutch (AD)",LANGUAGE="nl",DEFAULT=NO,AUTOSELECT=YES,CHARACTERISTICS="public.accessibility.describes-video",CHANNELS="2",URI="audio_description_nl_hls/playlist.m3u8"
 ```
 
 `manifest.json` has a separate key, so players that don't know it are unaffected
@@ -94,7 +94,7 @@ The HLS master playlist lists each MP3 in the `audio` group:
 "audio_descriptions": [
   {
     "language": "nl",
-    "label": "Dutch (audio description)",
+    "label": "Dutch (AD)",
     "audio": {"path": "https://…/audio_description_nl.mp3", "hls_playlist": "audio_description_nl_hls/playlist.m3u8", "file_size": 123456},
     "vtt": {"path": "https://…/descriptions_nl.vtt", "file_size": 1234}
   }
@@ -132,6 +132,10 @@ Hosts can also implement `can_manage_audio_description?/1`. Returning
 `Spaces.update_space_features/2`, including attempts to disable it. This lets a
 host manage access through its own authorized interface. Both callbacks default
 to allowing access when no policy is configured.
+
+Track labels are used verbatim in the player. The default description label is
+`<language> (AD)`. Original audio uses `<language> (original)` when its language
+is known, and `Original` otherwise. Custom labels are preserved.
 
 ## Providers and configuration
 

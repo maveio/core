@@ -568,7 +568,7 @@ defmodule MaveCore.Embeds.ManifestPublisher do
   defp serialize_manifest_audio_track(track, bucket, embed_hash, version) do
     %{
       "id" => public_shortuuid(track.id),
-      "label" => track.label,
+      "label" => AudioTrack.display_label(track),
       "language" => track.language,
       "default" => track.default,
       "codec" => track.codec,

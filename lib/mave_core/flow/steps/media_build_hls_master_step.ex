@@ -4,6 +4,7 @@ defmodule MaveCore.Flow.Steps.MediaBuildHlsMasterStep do
   """
   @behaviour MaveCore.Flow.Step
 
+  alias MaveCore.Assets.AudioTrack
   alias MaveCore.Flow.Steps.Support, as: StepSupport
   alias MaveCore.Media.Storage
 
@@ -328,6 +329,7 @@ defmodule MaveCore.Flow.Steps.MediaBuildHlsMasterStep do
       "playlist_path" => map_get(output, "playlist_path"),
       "playlist_uri" => map_get(output, "playlist_uri")
     }
+    |> put_audio_track_name()
   end
 
   defp normalize_audio_track_map(track) do
@@ -342,6 +344,18 @@ defmodule MaveCore.Flow.Steps.MediaBuildHlsMasterStep do
       "playlist_uri" => first_map_value(track, ["hls_src", "playlist_uri"]),
       "characteristics" => first_map_value(track, ["characteristics"])
     }
+    |> put_audio_track_name()
+  end
+
+  defp put_audio_track_name(track) do
+    label =
+      AudioTrack.display_label(%{
+        label: track["name"],
+        language: track["language"],
+        default: track["default"]
+      })
+
+    Map.put(track, "name", label)
   end
 
   defp normalize_subtitle(subtitle, embed_hash, version) do

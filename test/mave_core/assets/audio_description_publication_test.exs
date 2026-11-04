@@ -33,11 +33,12 @@ defmodule MaveCore.Assets.AudioDescriptionPublicationTest do
     assert :ok = Assets.refresh_hls_master_playlist(embed)
     {:ok, body} = Storage.get("space-abcde", "abcdefghij/playlist.m3u8", "eu")
 
-    assert body =~ ~s(NAME="Original",LANGUAGE="en",DEFAULT=YES,AUTOSELECT=YES,CHANNELS="2")
+    assert body =~
+             ~s|NAME="English (original)",LANGUAGE="en",DEFAULT=YES,AUTOSELECT=YES,CHANNELS="2"|
 
     for {language, name} <- [{"en", "English"}, {"nl", "Dutch"}] do
       assert body =~
-               ~s|NAME="#{name} (audio description)",LANGUAGE="#{language}",DEFAULT=NO,AUTOSELECT=YES,| <>
+               ~s|NAME="#{name} (AD)",LANGUAGE="#{language}",DEFAULT=NO,AUTOSELECT=YES,| <>
                  ~s|CHARACTERISTICS="public.accessibility.describes-video",CHANNELS="2",| <>
                  ~s|URI="audio_description_#{language}_hls/playlist.m3u8"|
     end
@@ -56,7 +57,7 @@ defmodule MaveCore.Assets.AudioDescriptionPublicationTest do
     assert [
              %{
                "language" => "nl",
-               "label" => "Dutch (audio description)",
+               "label" => "Dutch (AD)",
                "audio" => %{
                  "path" => mp3,
                  "hls_playlist" => "audio_description_nl_hls/playlist.m3u8"
@@ -68,6 +69,48 @@ defmodule MaveCore.Assets.AudioDescriptionPublicationTest do
     assert String.ends_with?(mp3, "/abcdefghij/audio_description_nl.mp3")
     assert String.ends_with?(vtt, "/abcdefghij/descriptions_nl.vtt")
     assert [%{"filename" => "audio.mp3"}] = manifest["audio_tracks"]
+  end
+
+  test "deletion republishes the playlist and removes the final description from the manifest" do
+    embed = embed_fixture()
+    dutch = description(embed, "nl")
+    english = description(embed, "en")
+    assert :ok = Assets.refresh_audio_outputs(embed)
+
+    assert {:ok, _} = Assets.delete_audio_description_outputs(embed, dutch.id)
+    {:ok, playlist} = Storage.get("space-abcde", "abcdefghij/playlist.m3u8", "eu")
+    refute playlist =~ "audio_description_nl_hls"
+    assert playlist =~ "audio_description_en_hls"
+    {:ok, body} = Storage.get("space-abcde", "abcdefghij/manifest.json", "eu")
+    assert [%{"language" => "en"}] = Jason.decode!(body)["audio_descriptions"]
+
+    assert {:ok, _} = Assets.delete_audio_description_outputs(embed, english.id)
+    {:ok, playlist} = Storage.get("space-abcde", "abcdefghij/playlist.m3u8", "eu")
+    refute playlist =~ "audio_description_"
+    assert playlist =~ "audio_hls/playlist.m3u8"
+    {:ok, body} = Storage.get("space-abcde", "abcdefghij/manifest.json", "eu")
+    refute Map.has_key?(Jason.decode!(body), "audio_descriptions")
+  end
+
+  test "custom labels are identical in the manifest and HLS playlist" do
+    embed = embed_fixture()
+    description = description(embed, "nl")
+
+    description
+    |> Ecto.Changeset.change(label: "Accessible narration", user_managed: true)
+    |> Repo.update!()
+
+    original = Repo.get_by!(AudioTrack, video_id: embed.asset.current_video.id)
+    original |> Ecto.Changeset.change(label: "Studio mix") |> Repo.update!()
+
+    assert :ok = Assets.refresh_hls_master_playlist(embed)
+    {:ok, body} = Storage.get("space-abcde", "abcdefghij/playlist.m3u8", "eu")
+    assert body =~ ~s(NAME="Accessible narration")
+    assert body =~ ~s(NAME="Studio mix")
+    refute body =~ "Accessible narration (AD)"
+    assert {:ok, manifest} = ManifestPublisher.current(embed)
+    assert [%{"label" => "Accessible narration"}] = manifest["audio_descriptions"]
+    assert [%{"label" => "Studio mix"}] = manifest["audio_tracks"]
   end
 
   test "late generation updates untouched descriptions and preserves managed or deleted ones" do
@@ -93,7 +136,9 @@ defmodule MaveCore.Assets.AudioDescriptionPublicationTest do
           %{
             "space_hash" => embed.space.hash,
             "embed_hash" => embed.hash
-          }, enqueue: false)
+          },
+          enqueue: false
+        )
 
       Repo.get_by!(StepRun, flow_run_id: run.id, step_id: "mix")
       |> StepRun.changeset(%{

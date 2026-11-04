@@ -50,10 +50,22 @@ defmodule MaveCore.Assets.AudioDescription do
 
   def display_label(%__MODULE__{} = description) do
     name =
-      description.label || MaveCore.Languages.spoken_language(description.language) ||
+      MaveCore.Languages.spoken_language(description.language) ||
         String.upcase(description.language)
 
-    "#{name} (audio description)"
+    label = description.label
+
+    if label in [nil, ""] or
+         (not description.user_managed and label in [name, "#{name} (audio description)"]) do
+      default_label(description.language)
+    else
+      label
+    end
+  end
+
+  def default_label(language) do
+    name = MaveCore.Languages.spoken_language(language) || String.upcase(language)
+    "#{name} (AD)"
   end
 
   @doc "HLS playlist of the audio track, relative to the video version's prefix."

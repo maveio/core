@@ -1624,6 +1624,24 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     stop_live_view(reloaded_view)
   end
 
+  test "empty audio description settings are only shown when the space enables the feature", %{
+    conn: conn
+  } do
+    {conn, space} = authenticated_conn(conn)
+    embed = video_embed_fixture(space, %{name: "Description visibility"})
+
+    {:ok, view, _html} = live(conn, "/videos/#{embed.id}")
+    refute has_element?(view, "#audio-description-settings")
+    assert has_element?(view, "#audio-track-settings")
+    stop_live_view(view)
+
+    space |> Ecto.Changeset.change(audio_description_enabled: true) |> Repo.update!()
+    {:ok, view, _html} = live(conn, "/videos/#{embed.id}")
+    assert has_element?(view, "#audio-description-settings")
+    assert has_element?(view, "#audio-description-settings [phx-click=add_audio_description]")
+    stop_live_view(view)
+  end
+
   test "audio descriptions have their own editable settings and appear under Audio in Info", %{
     conn: conn
   } do
@@ -1685,9 +1703,16 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     render_click(element(view, "#delete-audio-description-#{description.id}"))
     assert Repo.get!(AudioDescription, description.id).deleted_at == nil
     assert has_element?(view, "#delete-media-dialog", "Dutch accessible audio")
+    assert has_element?(view, "mave-player[cache=false]")
+
+    [_, previous_player_id] = Regex.run(~r/id="(player-[^"]+)"/, render(view))
+
     render_click(element(view, "#delete-media-dialog-confirm"))
+    refute has_element?(view, "##{previous_player_id}")
+    assert has_element?(view, "mave-player[cache=false]")
     assert Repo.get!(AudioDescription, description.id).deleted_at
     refute has_element?(view, "#delete-audio-description-#{description.id}")
+    refute has_element?(view, "#audio-description-settings")
     stop_live_view(view)
   end
 

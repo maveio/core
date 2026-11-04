@@ -264,7 +264,7 @@ defmodule MaveCore.Flow.Steps.MediaBuildHlsMasterStepTest do
     assert {:ok, playlist_body} =
              FlowStorageAdapterStub.get("space-ubg50", "LeDE9v86ye/playlist.m3u8", nil)
 
-    assert String.contains?(playlist_body, "NAME=\"Original\"")
+    assert String.contains?(playlist_body, "NAME=\"English (original)\"")
     assert String.contains?(playlist_body, "NAME=\"Dutch\"")
     assert String.contains?(playlist_body, "audio_hls/playlist.m3u8")
     assert String.contains?(playlist_body, "track_2_mp3_hls/playlist.m3u8")

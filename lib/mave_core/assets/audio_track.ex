@@ -20,6 +20,24 @@ defmodule MaveCore.Assets.AudioTrack do
     timestamps()
   end
 
+  @doc "Uses the configured label, or identifies the original audio by its known language."
+  def display_label(track) do
+    label = Map.get(track, :label, Map.get(track, "label"))
+    language = Map.get(track, :language, Map.get(track, "language"))
+    default? = Map.get(track, :default, Map.get(track, "default")) in [true, "true", 1, "1"]
+
+    name =
+      language
+      |> MaveCore.Languages.normalize_media_language()
+      |> MaveCore.Languages.spoken_language()
+
+    if default? and label in [nil, "", "Original"] do
+      if name, do: "#{name} (original)", else: "Original"
+    else
+      if label in [nil, ""], do: "Audio track", else: label
+    end
+  end
+
   def changeset(audio_track, attrs) do
     audio_track
     |> cast(attrs, [:video_id, :label, :language, :default, :codec, :file_size, :filename])

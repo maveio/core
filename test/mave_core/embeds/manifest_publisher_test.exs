@@ -275,7 +275,7 @@ defmodule MaveCore.Embeds.ManifestPublisherTest do
     assert manifest["audio_tracks"] == [
              %{
                "id" => audio_track.id,
-               "label" => "Original",
+               "label" => "English (original)",
                "language" => "en",
                "default" => true,
                "codec" => "mp3",
