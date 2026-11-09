@@ -44,16 +44,23 @@ defmodule MaveCore.Flow.Steps.MediaMixAudioDescriptionStep do
          speech = Enum.map(speech_json, &%{start: &1["start"] * 1.0, end: &1["end"] * 1.0}),
          lengths = Enum.map(clips, &div(byte_size(&1), 2)),
          timeline = Timeline.plan_timeline(cues, lengths, speech, duration, Wav.sample_rate()),
+         timeline =
+           Map.put(timeline, :quality, Timeline.quality_metrics(timeline.cues, speech, duration)),
          :ok <- require_placements(timeline),
          {:ok, audio_size} <- render_and_mix(ctx, context, timeline, clips, duration, language),
          vtt = Cues.to_vtt(timeline.cues, language),
          vtt_key = AD.output_key(ctx, AudioDescription.vtt_filename(language)),
          {:ok, _} <- ctx.storage.put_public(ctx.bucket, vtt_key, vtt, "text/vtt", ctx.region),
          {:ok, hls} <- package_hls(ctx, language, audio_size) do
-      output(ctx, language, timeline, audio_size, byte_size(vtt), hls)
+      output(ctx, language, timeline, audio_size, byte_size(vtt), hls, speech_output)
     else
       {:error, :no_placements} ->
-        {:ok, AD.skipped(@step_type, ctx, "no_descriptions", %{"language" => language}), []}
+        {:ok,
+         AD.skipped(@step_type, ctx, "no_descriptions", %{
+           "language" => language,
+           "review_required" => Map.get(speech_output, "review_required", false),
+           "unplaced_cue_count" => Map.get(speech_output, "unplaced_cue_count", 0)
+         }), []}
 
       {:error, reason} ->
         AD.failure(@step_type, ctx, reason)
@@ -198,7 +205,7 @@ defmodule MaveCore.Flow.Steps.MediaMixAudioDescriptionStep do
   @doc "Default label of an audio-description track, e.g. `English (AD)`."
   def label(language), do: MaveCore.Assets.AudioDescription.default_label(language)
 
-  defp output(ctx, language, timeline, audio_size, vtt_size, hls) do
+  defp output(ctx, language, timeline, audio_size, vtt_size, hls, speech_output) do
     audio_filename = AudioDescription.audio_filename(language)
     vtt_filename = AudioDescription.vtt_filename(language)
     audio_key = AD.output_key(ctx, audio_filename)
@@ -239,8 +246,15 @@ defmodule MaveCore.Flow.Steps.MediaMixAudioDescriptionStep do
        "audio_track" => track,
        "cue_count" => length(timeline.cues),
        "ducked_cue_count" => length(timeline.ducks),
-       "skipped_cue_count" => length(timeline.skipped)
-     },
+       "skipped_cue_count" =>
+         length(timeline.skipped) + Map.get(speech_output, "unplaced_cue_count", 0),
+       "adjusted_cue_count" => Map.get(speech_output, "adjusted_cue_count", 0),
+       "review_required" =>
+         Map.get(speech_output, "review_required", false) or timeline.skipped != [],
+       "category" => speech_output["category"],
+       "uncovered_text_count" => Map.get(speech_output, "uncovered_text_count", 0)
+     }
+     |> Map.merge(timeline.quality),
      [
        AD.artifact("audio_description_#{language}", ctx, audio_key, "audio/mpeg", audio_size, %{
          "language" => language

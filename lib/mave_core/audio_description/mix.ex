@@ -53,7 +53,7 @@ defmodule MaveCore.AudioDescription.Mix do
     {inputs, filter} =
       if original do
         {["-i", original | description_input],
-         "[0:a]#{@normalize},volume='#{duck_expression(ducks)}':eval=frame[orig];" <>
+         "[0:a]#{@normalize},apad=whole_dur=#{fixed(duration)},atrim=duration=#{fixed(duration)},volume='#{duck_expression(ducks)}':eval=frame[orig];" <>
            "[1:a]#{@normalize}[desc];" <>
            "[orig][desc]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.97[out]"}
       else

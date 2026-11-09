@@ -179,6 +179,21 @@ defmodule MaveCore.AudioDescription.Timeline do
     Enum.flat_map(list, &shot_stills(&1, scenes, every))
   end
 
+  @doc "Sample each shot for visual observation, preserving enough frames to assess changes."
+  def plan_observation_stills(scenes, duration, shots) do
+    shots = if shots == [], do: [%{start: 0.0, end: duration * 1.0}], else: shots
+
+    Enum.flat_map(shots, fn shot ->
+      count =
+        max(if(shot.end - shot.start >= 1.0, do: 2, else: 1), ceil((shot.end - shot.start) / 2))
+
+      for index <- 0..(count - 1) do
+        time = round3(shot.start + (index + 0.5) * (shot.end - shot.start) / count)
+        %{scene: scene_index(scenes, time), time: time}
+      end
+    end)
+  end
+
   defp shot_stills(%{start: start, end: stop}, _scenes, _every) when stop <= start, do: []
 
   defp shot_stills(shot, scenes, every) do
@@ -212,9 +227,17 @@ defmodule MaveCore.AudioDescription.Timeline do
     start = min_inf(max(cue.start, lo), max_inf(lo, sub_inf(hi, 0.3)))
     stop = min_inf(hi, max(cue.end, start + 0.5))
 
-    %{start: round3(start), end: round3(max(stop, start + 0.1)), text: cue.text}
+    cue
+    |> Map.take([:priority, :kind, :on_screen_text, :observation_ids, :visual_window])
+    |> Map.merge(%{start: round3(start), end: round3(max(stop, start + 0.1)), text: cue.text})
     |> put_scene(scene)
   end
+
+  defp cue_scene(%{visual_window: %{"start" => start, "end" => stop}}, _scenes),
+    do: %{start: start, end: stop}
+
+  defp cue_scene(%{visual_window: %{start: start, end: stop}}, _scenes),
+    do: %{start: start, end: stop}
 
   defp cue_scene(cue, scenes) do
     indexed(scenes, cue[:scene]) ||
@@ -272,6 +295,45 @@ defmodule MaveCore.AudioDescription.Timeline do
     }
   end
 
+  @doc "Measured timing indicators for a rendered script."
+  def quality_metrics(cues, speech, duration) do
+    described = Enum.reduce(cues, 0.0, &(&2 + &1.end - &1.start))
+
+    overlap =
+      Enum.reduce(cues, 0.0, fn cue, total ->
+        Enum.reduce(speech, total, fn words, sum ->
+          sum + max(0.0, min(cue.end, words.end) - max(cue.start, words.start))
+        end)
+      end)
+
+    last_end = Enum.reduce(cues, 0.0, &max(&1.end, &2))
+
+    %{
+      "description_seconds" => round3(described),
+      "speech_overlap_seconds" => round3(overlap),
+      "ending_room_seconds" => round3(max(0.0, duration - last_end)),
+      "spoken_word_count" =>
+        Enum.reduce(cues, 0, fn cue, sum ->
+          sum + length(String.split(cue.text, ~r/\s+/u, trim: true))
+        end)
+    }
+  end
+
+  defp place(%{window: window} = cue, index, length, sample_rate, _gaps, speech, duration, state) do
+    seconds = length / sample_rate
+    start = max(window.start, state.cursor)
+    stop = start + seconds
+    overlaps? = Enum.any?(speech, &(start < &1.end and &1.start < stop))
+
+    allow_ducking? = cue[:allow_ducking] == true and cue[:priority] == 3
+
+    if stop <= min(window.end, duration - 0.3) + @epsilon and (not overlaps? or allow_ducking?) do
+      put_placement(state, cue, index, length, start, seconds, sample_rate, overlaps?)
+    else
+      %{state | skipped: [index | state.skipped]}
+    end
+  end
+
   defp place(cue, index, length, sample_rate, gaps, speech, duration, state) do
     seconds = length / sample_rate
     scene = cue[:scene]
@@ -302,7 +364,7 @@ defmodule MaveCore.AudioDescription.Timeline do
     start = Enum.max([cue.start, state.cursor, if(scene, do: scene.start, else: cue.start)])
     start = if start + seconds > duration, do: max(state.cursor, duration - seconds), else: start
 
-    if gt_inf?(start, latest_start) or start + seconds > duration + 0.5 do
+    if gt_inf?(start, latest_start) or start + seconds > duration + @epsilon do
       %{state | skipped: [index | state.skipped]}
     else
       ducked? = Enum.any?(speech, &(start < &1.end and &1.start < start + seconds))

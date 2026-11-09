@@ -1096,33 +1096,39 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   attr :myself, :any, required: true
 
   defp options_tab(assigns) do
+    pending = Map.get(assigns.video || %{}, :pending_media, %{})
+    assigns = assign(assigns, :generated_media, pending)
+
     assigns =
       assigns
       |> assign(
         :show_audio_tracks_section,
-        show_audio_tracks_section?(
-          assigns.video,
-          assigns.audio_track_form,
-          assigns.processing_uploaded_audio_track
-        )
+        Map.get(pending, :audio_tracks, []) != [] or
+          show_audio_tracks_section?(
+            assigns.video,
+            assigns.audio_track_form,
+            assigns.processing_uploaded_audio_track
+          )
       )
       |> assign(
         :show_audio_descriptions_section,
-        show_audio_descriptions_section?(
-          assigns.current_space,
-          assigns.video,
-          assigns.audio_description_form,
-          assigns.audio_description_vtt_form,
-          audio_upload_pending(assigns.processing_uploaded_audio_track, :audio_description)
-        )
+        Map.get(pending, :audio_descriptions, []) != [] or
+          show_audio_descriptions_section?(
+            assigns.current_space,
+            assigns.video,
+            assigns.audio_description_form,
+            assigns.audio_description_vtt_form,
+            audio_upload_pending(assigns.processing_uploaded_audio_track, :audio_description)
+          )
       )
       |> assign(
         :show_subtitles_section,
-        show_subtitles_section?(
-          assigns.video,
-          assigns.subtitle_form,
-          assigns.processing_uploaded_subtitle
-        )
+        Map.get(pending, :subtitles, []) != [] or
+          show_subtitles_section?(
+            assigns.video,
+            assigns.subtitle_form,
+            assigns.processing_uploaded_subtitle
+          )
       )
 
     ~H"""
@@ -1144,6 +1150,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       <.audio_tracks_options_section
         :if={@show_audio_tracks_section}
         tracks={@video.audio_tracks}
+        generated_tracks={Map.get(@generated_media, :audio_tracks, [])}
         current_space={@current_space}
         video_id={@video.id}
         audio_track_form={@audio_track_form}
@@ -1159,6 +1166,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         current_space={@current_space}
         video_id={@video.id}
         tracks={Map.get(@video, :audio_descriptions, [])}
+        generated_tracks={Map.get(@generated_media, :audio_descriptions, [])}
         audio_track_form={@audio_description_form}
         vtt_form={@audio_description_vtt_form}
         processing_uploaded_audio_track={
@@ -1171,6 +1179,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         :if={@show_subtitles_section}
         video={@video}
         subtitles={@video.subtitles || []}
+        generated_tracks={Map.get(@generated_media, :subtitles, [])}
         subtitle_form={@subtitle_form}
         processing_uploaded_subtitle={@processing_uploaded_subtitle}
         uploads={@uploads}
@@ -1840,6 +1849,37 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     """
   end
 
+  attr :item, :map, required: true
+  attr :kind, :atom, required: true
+  attr :language_options, :list, required: true
+
+  defp generated_media_row(assigns) do
+    ~H"""
+    <div
+      id={@item.id}
+      class="opacity-60"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      title={if @item.state == :queued, do: gettext("Queued"), else: gettext("Processing")}
+    >
+      <span class="sr-only">{if @item.state == :queued,
+        do: gettext("Queued"),
+        else: gettext("Processing")} {@item.label}</span>
+      <.processing_audio_track_row
+        :if={@kind != :subtitle}
+        track={@item}
+        language_options={@language_options}
+      />
+      <.processing_subtitle_row
+        :if={@kind == :subtitle}
+        subtitle={@item}
+        language_options={@language_options}
+      />
+    </div>
+    """
+  end
+
   attr :track, :map, required: true
   attr :language_options, :list, required: true
 
@@ -2170,6 +2210,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   attr :kind, :atom, default: :audio_track
   attr :vtt_form, :map, default: nil
   attr :tracks, :list, required: true
+  attr :generated_tracks, :list, default: []
   attr :audio_track_form, :map, default: nil
   attr :processing_uploaded_audio_track, :map, default: nil
   attr :uploads, :map, required: true
@@ -2211,7 +2252,10 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       <.settings_header title={@heading} addable phx-click={@events.add} phx-target={@myself} />
       <div class="p-3 space-y-2 text-sm text-stone-400">
         <div
-          :if={!@has_tracks and is_nil(@audio_track_form) and !@processing_uploaded_audio_track}
+          :if={
+            !@has_tracks and @generated_tracks == [] and is_nil(@audio_track_form) and
+              !@processing_uploaded_audio_track
+          }
           class="h-1"
         >
         </div>
@@ -2313,6 +2357,12 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           </.media_file_menu>
         </div>
 
+        <.generated_media_row
+          :for={track <- @generated_tracks}
+          item={track}
+          kind={@kind}
+          language_options={@language_options}
+        />
         <.processing_audio_track_row
           :if={new_processing_media?(@processing_uploaded_audio_track)}
           track={@processing_uploaded_audio_track}
@@ -2426,6 +2476,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
   attr :video, :map, required: true
   attr :subtitles, :list, required: true
+  attr :generated_tracks, :list, default: []
   attr :subtitle_form, :map, default: nil
   attr :processing_uploaded_subtitle, :map, default: nil
   attr :uploads, :map, required: true
@@ -2442,7 +2493,10 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       <.settings_header title="subtitles" addable phx-click="add_subtitle" phx-target={@myself} />
       <div class="p-3 space-y-2 text-sm text-stone-400">
         <div
-          :if={!@has_subtitles and is_nil(@subtitle_form) and !@processing_uploaded_subtitle}
+          :if={
+            !@has_subtitles and @generated_tracks == [] and is_nil(@subtitle_form) and
+              !@processing_uploaded_subtitle
+          }
           class="h-1"
         >
         </div>
@@ -2516,6 +2570,12 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           </.media_file_menu>
         </div>
 
+        <.generated_media_row
+          :for={track <- @generated_tracks}
+          item={track}
+          kind={:subtitle}
+          language_options={@language_options}
+        />
         <.processing_subtitle_row
           :if={new_processing_media?(@processing_uploaded_subtitle)}
           subtitle={@processing_uploaded_subtitle}

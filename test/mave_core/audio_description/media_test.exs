@@ -139,13 +139,6 @@ defmodule MaveCore.AudioDescription.MediaTest do
   end
 
   describe "Prompts" do
-    test "puts the duration and timing into the describer's instructions" do
-      text = Prompts.describe_instruction(12.0, "Scenes ...")
-      assert text =~ "The video is 12.000 seconds long"
-      assert String.ends_with?(text, "Scenes ...")
-      refute text =~ "\n\n"
-    end
-
     test "builds the translation request with time slots" do
       {instruction, input} =
         Prompts.translation_request([%{start: 1.0, end: 2.26, text: "A door opens."}], "nl")

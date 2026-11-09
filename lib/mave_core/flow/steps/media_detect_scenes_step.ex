@@ -1,7 +1,7 @@
 defmodule MaveCore.Flow.Steps.MediaDetectScenesStep do
   @moduledoc """
   Detects camera cuts with FFmpeg (`scdet`), groups them into scenes of at least
-  3 s and extracts labelled 360p stills (one per ~3 s per shot) for the
+  3 s and extracts labelled 720p stills (at least two per shot of one second or longer) for the
   description model. One decode of the canonical source does both.
 
   Stores the private `audio_description/scenes.json` and `audio_description/stills/*`.
@@ -77,7 +77,16 @@ defmodule MaveCore.Flow.Steps.MediaDetectScenesStep do
           cuts = parse_cuts(scd)
           shots = Timeline.shots_from_cuts(cuts, duration)
           scenes = Timeline.scenes_from_shots(shots)
-          stills = Timeline.plan_stills(scenes, duration, 3, shots)
+
+          stills =
+            (Timeline.plan_observation_stills(scenes, duration, shots) ++
+               [
+                 %{scene: 0, time: min(0.1, duration / 2)},
+                 %{scene: max(length(scenes) - 1, 0), time: max(0.0, duration - 0.1)}
+               ])
+            |> Enum.uniq_by(&round(&1.time * fps))
+            |> Enum.sort_by(& &1.time)
+
           store(ctx, frames_dir, fps, duration, cuts, shots, scenes, stills)
         end
       end)
@@ -152,7 +161,7 @@ defmodule MaveCore.Flow.Steps.MediaDetectScenesStep do
       "[0:v]split=2[a][b];" <>
         "[a]scale=320:-2,scdet=threshold=#{@scdet_threshold}," <>
         "metadata=print:key=lavfi.scd.time:file='#{escape_filter_path(scd_path)}'[cuts];" <>
-        "[b]fps=#{fps},scale=-2:360[stills]"
+        "[b]fps=#{fps},scale=-2:720[stills]"
 
     [
       "-y",

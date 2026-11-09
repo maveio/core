@@ -36,10 +36,42 @@ defmodule MaveCore.AudioDescription.Scaleway do
         }
         |> maybe_put("reasoning_effort", reasoning_effort())
 
-      body
-      |> request(api_key)
-      |> decode_answer()
+      request_json(body, api_key, 1)
     end
+  end
+
+  defp request_json(body, api_key, retries_left) do
+    result = body |> request(api_key) |> decode_answer()
+
+    case result do
+      {:error, reason}
+      when retries_left > 0 and
+             reason in [:invalid_model_json, :model_output_truncated, :empty_model_answer] ->
+        body
+        |> retry_body(reason)
+        |> request_json(api_key, retries_left - 1)
+
+      _ ->
+        result
+    end
+  end
+
+  defp retry_body(body, reason) do
+    instruction = %{
+      "role" => "system",
+      "content" =>
+        "Return exactly one complete JSON object conforming to the supplied schema. No Markdown, explanations or text outside JSON. Escape quotation marks and newlines inside strings correctly. Keep the response concise."
+    }
+
+    tokens =
+      if reason == :model_output_truncated,
+        do: min(body["max_tokens"] * 2, 16_000),
+        else: body["max_tokens"]
+
+    body
+    |> Map.put("temperature", 0.1)
+    |> Map.put("max_tokens", tokens)
+    |> Map.update!("messages", &(&1 ++ [instruction]))
   end
 
   defp request(body, api_key) do
@@ -57,6 +89,12 @@ defmodule MaveCore.AudioDescription.Scaleway do
     end
   end
 
+  defp decode_answer({:ok, %{"choices" => [%{"finish_reason" => "content_filter"} | _]}}),
+    do: {:error, :model_response_filtered}
+
+  defp decode_answer({:ok, %{"choices" => [%{"finish_reason" => "length"} | _]}}),
+    do: {:error, :model_output_truncated}
+
   defp decode_answer({:ok, %{"choices" => [%{"message" => %{"content" => content}} | _]}})
        when is_binary(content) and content != "" do
     content
@@ -70,8 +108,8 @@ defmodule MaveCore.AudioDescription.Scaleway do
     end
   end
 
-  defp decode_answer({:ok, %{"choices" => [%{"finish_reason" => reason} | _]}}),
-    do: {:error, {:empty_model_answer, reason}}
+  defp decode_answer({:ok, %{"choices" => [_ | _]}}),
+    do: {:error, :empty_model_answer}
 
   defp decode_answer({:ok, _body}), do: {:error, :empty_model_answer}
   defp decode_answer({:error, _reason} = error), do: error

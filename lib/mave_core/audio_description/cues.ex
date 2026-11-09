@@ -10,6 +10,17 @@ defmodule MaveCore.AudioDescription.Cues do
   alias MaveCore.AudioDescription.Timeline
 
   @min_cue_seconds 0.5
+  @metadata_fields [
+    :visual_window,
+    :observation_ids,
+    :priority,
+    :kind,
+    :window,
+    :duck_window,
+    :allow_ducking,
+    :max_words,
+    :on_screen_text
+  ]
 
   @doc """
   Parse a timestamp into seconds. Accepts numbers and strings like `HH:MM:SS.mmm`,
@@ -68,7 +79,7 @@ defmodule MaveCore.AudioDescription.Cues do
     |> Enum.reduce([], fn cue, acc ->
       case acc do
         [prev | rest] when cue.start - prev.start < 0.05 ->
-          [%{prev | text: prev.text <> " " <> cue.text, end: max(prev.end, cue.end)} | rest]
+          [merge_cues(prev, cue) | rest]
 
         _ ->
           [cue | acc]
@@ -77,6 +88,15 @@ defmodule MaveCore.AudioDescription.Cues do
     |> Enum.reverse()
     |> fix_ends(limit)
     |> Enum.filter(&(&1.end > &1.start))
+  end
+
+  defp merge_cues(previous, next) do
+    preferred =
+      if Map.get(next, :priority, 2) > Map.get(previous, :priority, 2), do: next, else: previous
+
+    previous
+    |> Map.merge(Map.take(preferred, @metadata_fields))
+    |> Map.merge(%{text: previous.text <> " " <> next.text, end: max(previous.end, next.end)})
   end
 
   defp parse_cue(cue, limit) do
@@ -91,7 +111,11 @@ defmodule MaveCore.AudioDescription.Cues do
       stop =
         if is_nil(stop) or stop <= start, do: start + estimate_speech_seconds(text), else: stop
 
-      [%{start: start, end: stop, text: text} |> maybe_put_scene(field(cue, :scene))]
+      [
+        %{start: start, end: stop, text: text}
+        |> maybe_put_scene(field(cue, :scene))
+        |> put_metadata(cue)
+      ]
     end
   end
 
@@ -121,6 +145,24 @@ defmodule MaveCore.AudioDescription.Cues do
     do: maybe_put_scene(cue, %{start: start, end: stop})
 
   defp maybe_put_scene(cue, _scene), do: cue
+
+  defp put_metadata(target, source) do
+    Enum.reduce(@metadata_fields, target, fn key, result ->
+      case field(source, key) do
+        nil ->
+          result
+
+        %{"start" => start, "end" => stop} when key in [:window, :duck_window, :visual_window] ->
+          Map.put(result, key, %{start: start, end: stop})
+
+        value ->
+          Map.put(result, key, value)
+      end
+    end)
+    |> then(fn cue ->
+      if Map.has_key?(cue, :duck_window), do: Map.put_new(cue, :window, nil), else: cue
+    end)
+  end
 
   defp clean_text(text) when is_binary(text),
     do: text |> String.replace(~r/\s+/u, " ") |> String.trim()
@@ -153,6 +195,16 @@ defmodule MaveCore.AudioDescription.Cues do
     Enum.map(cues, fn cue ->
       %{"start" => cue.start, "end" => cue.end, "text" => cue.text}
       |> put_scene_json(cue[:scene])
+      |> put_json_metadata(cue)
+    end)
+  end
+
+  defp put_json_metadata(json, cue) do
+    Enum.reduce(@metadata_fields, json, fn key, result ->
+      case Map.get(cue, key) do
+        nil -> result
+        value -> Map.put(result, Atom.to_string(key), value)
+      end
     end)
   end
 
@@ -166,7 +218,11 @@ defmodule MaveCore.AudioDescription.Cues do
     Enum.flat_map(list, fn
       %{"start" => start, "end" => stop, "text" => text} = cue
       when is_number(start) and is_number(stop) and is_binary(text) ->
-        [%{start: start * 1.0, end: stop * 1.0, text: text} |> maybe_put_scene(cue["scene"])]
+        [
+          %{start: start * 1.0, end: stop * 1.0, text: text}
+          |> maybe_put_scene(cue["scene"])
+          |> put_metadata(cue)
+        ]
 
       _ ->
         []

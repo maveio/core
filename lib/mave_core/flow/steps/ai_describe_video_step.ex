@@ -1,7 +1,7 @@
 defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
   @moduledoc """
-  Writes the original-language audio description cues from the labelled stills of
-  `media.detect_scenes`, around the speech measured by speech-to-text.
+  Collects timestamped visual observations from `media.detect_scenes`, then asks
+  the configured writer for original-language narration around measured speech.
 
   Speech comes from the `ai.transcribe_audio` segments (never from the description
   model); when that step has none, this step transcribes the audio itself. The
@@ -9,13 +9,11 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
   """
   @behaviour MaveCore.Flow.Step
 
-  alias MaveCore.AudioDescription.{Cues, Prompts, Timeline}
+  alias MaveCore.AudioDescription.{Budget, Cues, Observations, Script, Timeline}
   alias MaveCore.Embeds.SettingsSerializer
   alias MaveCore.Flow.Steps.AudioDescriptionSupport, as: AD
 
   @step_type "ai.describe_video"
-  # Scaleway's vision models accept at most this many images per prompt.
-  @max_images 12
 
   @impl true
   def run(step, context) do
@@ -32,17 +30,42 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
   defp describe(ctx, scenes_output) do
     with {:ok, document} <- AD.get_json(ctx, scenes_output["scenes_key"]),
          duration = document["duration"] * 1.0,
-         {:ok, speech} <- speech(ctx, duration),
+         {:ok, transcript} <- speech(ctx, duration),
+         speech = transcript.intervals,
          scenes = intervals(document["scenes"]),
-         {:ok, raw_cues} <- describe_batches(ctx, document["stills"], scenes, speech, duration),
-         cues = clean_cues(raw_cues, speech, scenes, duration),
-         :ok <- require_cues(cues),
+         {:ok, observations} <-
+           Observations.collect(ctx, document, AD.chat_provider(), AD.language(ctx)),
+         {:ok, observations_key} <-
+           AD.put_json(ctx, AD.work_key(ctx, "observations.json"), %{
+             "schema_version" => 1,
+             "frames" => observations
+           }),
+         {:ok, script} <-
+           Script.write(
+             AD.writer_provider(),
+             observations,
+             document,
+             transcript,
+             AD.language(ctx)
+           ),
+         raw_cues = script["cues"],
+         plan = Map.take(script, ["category", "summary", "essential_text"]),
+         candidates = clean_cues(raw_cues, speech, scenes, duration, transcript.text),
+         allocation = Budget.allocate(candidates, speech, duration, plan["category"]),
+         cues = allocation.cues,
          language = AD.language(ctx),
          {:ok, cues_key} <-
            AD.put_json(ctx, AD.work_key(ctx, "#{language}/cues.json"), Cues.to_json(cues)),
          {:ok, speech_key} <-
            AD.put_json(ctx, AD.work_key(ctx, "speech.json"), Enum.map(speech, &interval_json/1)),
-         {:ok, _} <- AD.put_json(ctx, AD.work_key(ctx, "raw-cues.json"), raw_cues) do
+         {:ok, _} <- AD.put_json(ctx, AD.work_key(ctx, "raw-cues.json"), raw_cues),
+         {:ok, plan_key} <-
+           AD.put_json(
+             ctx,
+             AD.work_key(ctx, "plan.json"),
+             Map.put(plan, "spoken_text", transcript.text)
+           ),
+         {:ok, _} <- AD.put_json(ctx, AD.work_key(ctx, "unplaced-cues.json"), allocation.rejected) do
       {:ok,
        %{
          "status" => "ok",
@@ -50,9 +73,15 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
          "step_id" => ctx.step_id,
          "language" => language,
          "cues_key" => cues_key,
+         "plan_key" => plan_key,
+         "observations_key" => observations_key,
          "speech_key" => speech_key,
          "duration" => duration,
          "cue_count" => length(cues),
+         "unplaced_cue_count" => length(allocation.rejected),
+         "review_required" => Enum.any?(allocation.rejected, &(&1["priority"] == 3)),
+         "category" => plan["category"],
+         "word_limit" => allocation.word_limit,
          "scene_count" => length(scenes),
          "speech_seconds" =>
            speech |> Enum.reduce(0.0, &(&2 + &1.end - &1.start)) |> Float.round(1)
@@ -66,104 +95,76 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
     end
   end
 
-  defp describe_batches(ctx, stills, scenes, speech, duration) do
-    stills
-    |> Enum.map(&%{scene: &1["scene"], time: &1["time"] * 1.0, key: &1["key"]})
-    |> Timeline.batch_stills(@max_images)
-    |> Enum.reduce_while({:ok, []}, fn batch, {:ok, cues} ->
-      case describe_batch(ctx, batch, cues, scenes, speech, duration) do
-        {:ok, batch_cues} -> {:cont, {:ok, cues ++ batch_cues}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp describe_batch(ctx, batch, previous_cues, scenes, speech, duration) do
-    window = %{
-      start: scene_bound(scenes, hd(batch).scene, :start, 0.0),
-      end: scene_bound(scenes, List.last(batch).scene, :end, duration)
-    }
-
-    timing = Timeline.timing_prompt(speech, scenes, duration, window)
-    language = AD.language(ctx)
-    previous = previous_cues |> Enum.take(-3) |> Enum.map(&to_string(&1["text"]))
-
-    with {:ok, images} <- load_stills(ctx, batch) do
-      content =
-        images ++
-          [%{"type" => "text", "text" => Prompts.stills_request(window, previous, language)}]
-
-      case AD.chat_provider().chat_json(
-             Prompts.describe_instruction(duration, timing, language),
-             content,
-             schema: Prompts.cues_schema(),
-             max_tokens: 8_000
-           ) do
-        {:ok, %{"cues" => cues}} when is_list(cues) -> {:ok, Enum.filter(cues, &is_map/1)}
-        {:ok, _answer} -> {:ok, []}
-        {:error, reason} -> {:error, reason}
-      end
-    end
-  end
-
-  defp load_stills(ctx, batch) do
-    Enum.reduce_while(batch, {:ok, []}, fn still, {:ok, parts} ->
-      case ctx.storage.get(ctx.bucket, still.key, ctx.region) do
-        {:ok, image} ->
-          label = "S#{still.scene} at #{:erlang.float_to_binary(still.time, decimals: 2)} s:"
-
-          {:cont,
-           {:ok,
-            parts ++
-              [
-                %{"type" => "text", "text" => label},
-                %{
-                  "type" => "image_url",
-                  "image_url" => %{"url" => "data:image/jpeg;base64," <> Base.encode64(image)}
-                }
-              ]}}
-
-        {:error, reason} ->
-          {:halt, {:error, {:still_unavailable, still.key, reason}}}
-      end
-    end)
-  end
-
-  # Pin cues to their scene and chosen pause, using the same scenes and pauses the model was given.
-  defp clean_cues(raw_cues, speech, scenes, duration) do
+  # Preserve visual event times. The measured-audio scheduler chooses pauses afterwards;
+  # model-selected pauses must not move an event to an unrelated picture.
+  defp clean_cues(raw_cues, speech, scenes, duration, transcript) do
     gaps = Timeline.free_gaps(speech, duration)
 
     raw_cues
-    |> Enum.flat_map(fn cue ->
-      start = Cues.parse_timestamp(cue["start"])
-      text = cue["text"]
-
-      if is_nil(start) or not is_binary(text) do
-        []
-      else
-        [
-          %{
-            start: start,
-            end: Cues.parse_timestamp(cue["end"]) || start + 2,
-            text: text,
-            pause: integer_or_nil(cue["pause"]),
-            scene: integer_or_nil(cue["shot"])
-          }
-        ]
-      end
-    end)
+    |> Enum.flat_map(&clean_cue(&1, scenes, transcript))
     |> Timeline.snap_cues(gaps, scenes)
     |> Cues.normalize(duration)
   end
 
-  defp require_cues([]), do: {:error, :no_descriptions}
-  defp require_cues(_cues), do: :ok
+  defp clean_cue(%{"text" => text} = cue, scenes, transcript) when is_binary(text) do
+    start = Cues.parse_timestamp(cue["start"])
+    required = literal_text(cue, text)
+    spoken = required && String.contains?(comparable_text(transcript), comparable_text(required))
+
+    cond do
+      is_nil(start) ->
+        []
+
+      spoken && comparable_text(text) == comparable_text(required) ->
+        []
+
+      true ->
+        [build_cue(cue, scenes, start, text, if(spoken, do: nil, else: required))]
+    end
+  end
+
+  defp clean_cue(_cue, _scenes, _transcript), do: []
+
+  defp build_cue(cue, scenes, start, text, required) do
+    %{
+      start: start,
+      end: Cues.parse_timestamp(cue["end"]) || start + 2,
+      text: text,
+      pause: -1,
+      scene: cue_scene_index(cue, scenes, start),
+      on_screen_text: required || "",
+      observation_ids: Map.get(cue, "observation_ids", []),
+      visual_window: cue["visual_window"],
+      priority: if(required, do: 3, else: cue_priority(cue)),
+      kind: if(required, do: "text", else: cue_kind(cue))
+    }
+  end
+
+  defp literal_text(%{"on_screen_text" => required}, text) when is_binary(required) do
+    normalized = comparable_text(required)
+    if normalized != "" and String.contains?(comparable_text(text), normalized), do: required
+  end
+
+  defp literal_text(_cue, _text), do: nil
+
+  defp cue_scene_index(cue, scenes, start) do
+    Enum.find_index(scenes, &(start >= &1.start and start < &1.end)) ||
+      integer_or_nil(cue["shot"])
+  end
+
+  defp comparable_text(text),
+    do: text |> String.downcase() |> String.replace(~r/[^\p{L}\p{N}]+/u, " ") |> String.trim()
+
+  defp cue_priority(%{"priority" => value}) when value in [1, 2, 3], do: value
+  defp cue_priority(_cue), do: 2
+  defp cue_kind(%{"kind" => value}) when value in ["action", "setting"], do: value
+  defp cue_kind(_cue), do: "action"
 
   defp speech(ctx, duration) do
     case Map.get(ctx.outputs, "transcribe_audio") do
       %{"status" => "ok", "subtitle_json_key" => key} when is_binary(key) ->
         with {:ok, %{"segments" => segments}} <- AD.get_json(ctx, key) do
-          {:ok, speech_from_segments(segments, duration)}
+          {:ok, transcript_data(segments, duration)}
         end
 
       _ ->
@@ -180,11 +181,11 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
           Application.get_env(:mave_core, :transcription_provider, MaveCore.Transcription.Mistral)
 
         with {:ok, transcription} <- transcribe_with(provider, ctx, key) do
-          {:ok, speech_from_segments(Map.get(transcription, :segments, []), duration)}
+          {:ok, transcript_data(Map.get(transcription, :segments, []), duration)}
         end
 
       _ ->
-        {:ok, []}
+        {:ok, %{intervals: [], text: "No spoken words."}}
     end
   end
 
@@ -208,6 +209,17 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
     end
   end
 
+  defp transcript_data(segments, duration) when is_list(segments) do
+    text =
+      Enum.map_join(segments, "\n", fn segment ->
+        "#{segment[:start] || segment["start"]}-#{segment[:end] || segment["end"]}: #{segment[:text] || segment["text"] || ""}"
+      end)
+
+    %{intervals: speech_from_segments(segments, duration), text: String.slice(text, 0, 40_000)}
+  end
+
+  defp transcript_data(_segments, _duration), do: %{intervals: [], text: "No spoken words."}
+
   defp speech_from_segments(segments, duration) when is_list(segments) do
     segments
     |> Enum.flat_map(fn segment ->
@@ -216,15 +228,6 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
       if start && stop, do: [%{start: start, end: stop}], else: []
     end)
     |> Timeline.speech_from_words(duration)
-  end
-
-  defp speech_from_segments(_segments, _duration), do: []
-
-  defp scene_bound(scenes, index, key, default) do
-    case Enum.at(scenes, index || 0) do
-      %{} = scene -> Map.fetch!(scene, key)
-      nil -> default
-    end
   end
 
   defp intervals(list) when is_list(list) do

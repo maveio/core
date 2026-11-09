@@ -36,6 +36,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
   end
 
   defmodule ChatStub do
+    alias MaveCore.AudioDescription.Cues
     @moduledoc false
 
     # Describes every batch of stills with one cue per scene and translates by prefixing.
@@ -43,18 +44,62 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
       send(Process.get(:ad_test_pid) || self(), {:chat, system, content})
 
       case opts[:schema]["required"] do
-        ["duration_seconds", "cues"] ->
-          images = Enum.count(content, &(&1["type"] == "image_url"))
-          if images == 0, do: raise("no stills sent")
+        ["observations"] ->
+          rows =
+            for %{"type" => "text", "text" => label} <- content do
+              [_, index] = Regex.run(~r/Frame (\d+);/, label)
 
+              %{
+                "frame" => String.to_integer(index),
+                "setting" => "A room",
+                "people_and_objects" => [],
+                "actions" => ["Screen changes color"],
+                "visible_text" => [],
+                "changes" => [],
+                "uncertainties" => []
+              }
+            end
+
+          {:ok, %{"observations" => rows}}
+
+        ["duration_seconds", "cues", "category", "summary", "essential_text"] ->
           {:ok,
            %{
              "duration_seconds" => 8,
-             "cues" => [
-               cue(0, 0, "00:00:00.200", "00:00:01.000", "A red screen."),
-               cue(1, -1, "00:00:05.500", "00:00:06.500", "It turns blue.")
-             ]
+             "category" => "montage",
+             "summary" => "A color change",
+             "essential_text" => [],
+             "cues" =>
+               Process.get(:ad_cues, [
+                 cue(0, 0, "00:00:00.200", "00:00:01.000", "A red screen."),
+                 cue(1, -1, "00:00:05.500", "00:00:06.500", "It turns blue.")
+               ])
+               |> Enum.with_index()
+               |> Enum.filter(fn {_, i} -> i in Process.get(:ad_keep, [0, 1]) end)
+               |> Enum.map(fn {c, _} ->
+                 observations = Jason.decode!(List.last(content)["text"])["observations"]
+                 start = Cues.parse_timestamp(c["start"])
+                 closest = Enum.min_by(observations, &abs(&1["time"] - start))
+                 Map.put(c, "observation_ids", [closest["id"]])
+               end)
            }}
+
+        ["category", "summary", "essential_text", "guidance"] ->
+          {:ok,
+           %{
+             "category" => "montage",
+             "summary" => "A screen changes color.",
+             "essential_text" => [],
+             "guidance" => "Describe changes only."
+           }}
+
+        ["keep"] ->
+          [%{"text" => json}] = content
+          candidates = Jason.decode!(json)["candidates"]
+          {:ok, %{"keep" => Process.get(:ad_keep, Enum.map(candidates, & &1["index"]))}}
+
+        ["text"] ->
+          {:ok, %{"text" => "Red."}}
 
         ["translations"] ->
           [%{"text" => json}] = content
@@ -77,11 +122,13 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
     @moduledoc false
 
     # One second of a 440 Hz tone as a 24 kHz WAV.
-    def speak(_text, language) do
+    def speak(text, language) do
       send(test_pid(), {:speak, language})
 
+      samples = max(1, round(length(String.split(text)) / 2.5 * 24_000))
+
       pcm =
-        for i <- 0..23_999, into: <<>> do
+        for i <- 0..(samples - 1), into: <<>> do
           <<round(8000 * :math.sin(i * 2 * :math.pi() * 440 / 24_000))::little-signed-16>>
         end
 
@@ -109,6 +156,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
 
     Application.put_env(:mave_core, :audio_description,
       chat_provider: ChatStub,
+      writer_provider: ChatStub,
       speech_provider: SpeechStub
     )
 
@@ -270,6 +318,111 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
     refute changed["clips"] == first["clips"]
   end
 
+  test "visible instructions survive a wrong kind label while spoken captions are omitted" do
+    document = %{
+      "duration" => 20,
+      "scenes" => [%{"start" => 0, "end" => 20}],
+      "stills" => [%{"scene" => 0, "time" => 10, "key" => "still.jpg"}]
+    }
+
+    Storage.put(@bucket, "scenes.json", Jason.encode!(document), "application/json", nil)
+    Storage.put(@bucket, "still.jpg", "image", "image/jpeg", nil)
+
+    Storage.put(
+      @bucket,
+      "transcript.json",
+      Jason.encode!(%{
+        "segments" => [
+          %{"start" => 0, "end" => 12, "text" => "My name is Alex."}
+        ]
+      }),
+      "application/json",
+      nil
+    )
+
+    Process.put(:ad_cues, [
+      %{
+        "start" => 2,
+        "end" => 5,
+        "shot" => 0,
+        "text" => "My name is Alex.",
+        "kind" => "text",
+        "priority" => 3,
+        "on_screen_text" => "My name is Alex."
+      },
+      %{
+        "start" => 9,
+        "end" => 20,
+        "shot" => 0,
+        "text" => "A card reads: Read the guide at example.org.",
+        "kind" => "action",
+        "priority" => 3,
+        "on_screen_text" => "Read the guide at example.org."
+      },
+      %{
+        "start" => 14,
+        "end" => 15,
+        "shot" => 0,
+        "text" => "Close-up of the same speaker.",
+        "priority" => 1
+      }
+    ])
+
+    Process.put(:ad_keep, [0, 1])
+
+    context = %{
+      run_input: Map.put(base_input(), "audio_description", @requested),
+      dependency_outputs: %{
+        "detect_scenes" => %{"status" => "ok", "scenes_key" => "scenes.json"},
+        "transcribe_audio" => %{"status" => "ok", "subtitle_json_key" => "transcript.json"}
+      }
+    }
+
+    assert {:ok, output, []} = AiDescribeVideoStep.run(%{"id" => "describe_video"}, context)
+    assert {:ok, json} = Storage.get(@bucket, output["cues_key"], nil)
+    assert [instruction] = Jason.decode!(json)
+    assert instruction["kind"] == "text"
+    assert instruction["text"] == "A card reads: Read the guide at example.org."
+    assert instruction["on_screen_text"] == "Read the guide at example.org."
+    assert instruction["window"]["start"] >= 12
+
+    Process.put(:ad_cues, [
+      %{
+        "start" => 1,
+        "end" => 8,
+        "shot" => 0,
+        "text" => "An illustrated poster about Alex.",
+        "on_screen_text" => "Alex",
+        "kind" => "setting",
+        "priority" => 2
+      }
+    ])
+
+    Process.put(:ad_keep, [0])
+
+    quiet_context =
+      put_in(context, [:dependency_outputs, "transcribe_audio"], %{
+        "status" => "ok",
+        "subtitle_json_key" => "earlier-speech.json"
+      })
+
+    Storage.put(
+      @bucket,
+      "earlier-speech.json",
+      Jason.encode!(%{"segments" => [%{"start" => 0, "end" => 0.1, "text" => "Alex"}]}),
+      "application/json",
+      nil
+    )
+
+    assert {:ok, poster_output, []} =
+             AiDescribeVideoStep.run(%{"id" => "describe_video"}, quiet_context)
+
+    assert {:ok, poster_json} = Storage.get(@bucket, poster_output["cues_key"], nil)
+
+    assert [%{"text" => "An illustrated poster about Alex.", "on_screen_text" => ""}] =
+             Jason.decode!(poster_json)
+  end
+
   @tag :integration
   test "original-language preset describes and packages just the detected language" do
     Process.put(:ad_test_pid, self())
@@ -335,11 +488,16 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
     assert outputs["describe_video"]["language"] == "nl"
     assert outputs["speak_descriptions_original"]["language"] == "nl"
     assert outputs["mix_audio_description_original"]["audio_description"]["language"] == "nl"
+    assert_received {:chat, overview_instruction, overview_content}
+    assert Enum.count(overview_content, &(&1["type"] == "image_url")) >= 4
+    assert overview_instruction =~ "Dutch (nl)"
     assert_received {:chat, instruction, content}
+    refute Enum.any?(content, &(&1["type"] == "image_url"))
     assert instruction =~ "Dutch (nl)"
-    request = List.last(content)["text"]
-    assert request =~ "Dutch (nl)"
-    refute request =~ "English"
+    request = Jason.decode!(List.last(content)["text"])
+    assert request["language"] == "nl"
+    assert length(request["observations"]) >= 4
+    assert {:ok, _} = Storage.get(@bucket, outputs["describe_video"]["observations_key"], nil)
     assert_received {:speak, "nl"}
     refute_received {:speak, "en"}
     assert {:ok, _} = Storage.get(@bucket, "#{@embed}/audio_description_nl.mp3", nil)
@@ -347,7 +505,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
   end
 
   @tag :integration
-  test "turns a video into a ducked full mix and descriptions VTT per language" do
+  test "fits descriptions to real speech pauses and packages a full mix per language" do
     if System.find_executable("ffmpeg") == nil, do: flunk("ffmpeg is required")
     Process.put(:ad_test_pid, self())
 
@@ -387,7 +545,8 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
                dependency_outputs: base_outputs
              })
 
-    assert %{"status" => "ok", "scene_count" => 2, "still_count" => 2, "cut_count" => 1} = scenes
+    assert %{"status" => "ok", "scene_count" => 2, "cut_count" => 1} = scenes
+    assert scenes["still_count"] >= 4
 
     # 2. English cues, pinned to their scenes around the measured speech.
     outputs = Map.put(base_outputs, "detect_scenes", scenes)
@@ -398,10 +557,16 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
                dependency_outputs: outputs
              })
 
-    assert %{"status" => "ok", "cue_count" => 2, "language" => "en"} = english
-    assert_received {:chat, system, _content}
-    assert system =~ "S1: 4."
-    assert system =~ "Speech (seconds): 0.85-3.15, 4.35-7.65"
+    assert %{"status" => "ok", "cue_count" => 1, "language" => "en", "unplaced_cue_count" => 1} =
+             english
+
+    assert_received {:chat, _overview, _images}
+    assert_received {:chat, _system, [%{"text" => json}]}
+
+    assert Jason.decode!(json)["protected_speech"] == [
+             %{"start" => 0.85, "end" => 3.15},
+             %{"start" => 4.35, "end" => 7.65}
+           ]
 
     # 3. Dutch from the English cues.
     outputs = Map.put(outputs, "describe_video", english)
@@ -412,7 +577,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
                %{run_input: input, dependency_outputs: outputs}
              )
 
-    assert %{"status" => "ok", "language" => "nl", "cue_count" => 2} = dutch
+    assert %{"status" => "ok", "language" => "nl", "cue_count" => 1} = dutch
 
     # 4. Speech per language, then the mix.
     outputs = Map.put(outputs, "translate_descriptions_nl", dutch)
@@ -427,7 +592,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
                  %{run_input: input, dependency_outputs: outputs}
                )
 
-      assert %{"status" => "ok", "clips" => [_, _]} = speech
+      assert %{"status" => "ok", "clips" => [_], "adjusted_cue_count" => 1} = speech
 
       assert {:ok, mix, [mp3_artifact, vtt_artifact]} =
                MediaMixAudioDescriptionStep.run(
@@ -441,7 +606,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
                  }
                )
 
-      assert %{"status" => "ok", "cue_count" => 2, "ducked_cue_count" => 2} = mix
+      assert %{"status" => "ok", "cue_count" => 1, "ducked_cue_count" => 0} = mix
       assert mix["audio_track"]["characteristics"] == "public.accessibility.describes-video"
 
       assert mix["audio_track"]["hls_playlist"] ==
@@ -456,7 +621,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
 
       {:ok, vtt} = Storage.get(@bucket, "#{@embed}/descriptions_#{language}.vtt", nil)
       assert vtt =~ "WEBVTT\nKind: descriptions\nLanguage: #{language}\n"
-      assert vtt =~ if(language == "nl", do: "NL A red screen.", else: "A red screen.")
+      assert vtt =~ "Red."
 
       assert {:ok, _} =
                Storage.get(
@@ -485,6 +650,82 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
     after
       0 -> :ok
     end
+  end
+
+  @tag :integration
+  test "essential descriptions with no pause survive storage and use ducking in the final mix" do
+    {_video, audio} = media_fixtures()
+    input = Map.put(base_input(), "audio_description", %{"languages" => ["original"]})
+    audio_key = "#{@embed}/audio.mp3"
+    cues_key = "#{@embed}/audio_description/en/cues.json"
+    speech_key = "#{@embed}/audio_description/speech.json"
+    Storage.put_public(@bucket, audio_key, audio, "audio/mpeg", nil)
+
+    Storage.put(
+      @bucket,
+      cues_key,
+      Jason.encode!([
+        %{
+          "start" => 1.0,
+          "end" => 3.0,
+          "text" => "Call 112.",
+          "priority" => 3,
+          "on_screen_text" => "112",
+          "window" => nil,
+          "duck_window" => %{"start" => 1.0, "end" => 3.0}
+        }
+      ]),
+      "application/json",
+      nil
+    )
+
+    Storage.put(
+      @bucket,
+      speech_key,
+      Jason.encode!([%{"start" => 0.0, "end" => 8.0}]),
+      "application/json",
+      nil
+    )
+
+    outputs = %{
+      "source" => %{"space_hash" => @space, "embed_hash" => @embed, "version" => 0},
+      "transcode_audio" => %{"status" => "ok", "key" => audio_key},
+      "describe_video" => %{
+        "status" => "ok",
+        "cues_key" => cues_key,
+        "speech_key" => speech_key,
+        "duration" => 8.0
+      }
+    }
+
+    assert {:ok, speech, []} =
+             AiSpeakDescriptionsStep.run(
+               %{
+                 "id" => "speak_descriptions_original",
+                 "params" => %{"language" => "original", "source_step_id" => "describe_video"}
+               },
+               %{run_input: input, dependency_outputs: outputs}
+             )
+
+    assert {:ok, mix, _} =
+             MediaMixAudioDescriptionStep.run(
+               %{
+                 "id" => "mix_audio_description_original",
+                 "params" => %{
+                   "language" => "original",
+                   "source_step_id" => "speak_descriptions_original"
+                 }
+               },
+               %{
+                 run_input: input,
+                 dependency_outputs: Map.put(outputs, "speak_descriptions_original", speech)
+               }
+             )
+
+    assert mix["cue_count"] == 1
+    assert mix["ducked_cue_count"] == 1
+    assert mix["speech_overlap_seconds"] > 0
+    assert mix["ending_room_seconds"] >= 0.3
   end
 
   # An 8 s video that cuts from red to blue at 4 s, with a tone, and its audio as MP3.

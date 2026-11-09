@@ -185,7 +185,7 @@ defmodule MaveCore.Flow.StepRegistry do
       name: "Describe Video",
       category: "ai",
       description:
-        "Writes English audio description cues for the scenes, placed in the pauses of the speech.",
+        "Plans original-language audio descriptions and relevant on-screen text within speech pauses.",
       handler: AiDescribeVideoStep,
       options: [@strict_option],
       executor: :inline
