@@ -10,7 +10,16 @@ defmodule MaveCore.Embeds do
   alias MaveCore.Assets.{Asset, AudioDescription, AudioTrack, Video}
   alias MaveCore.Collections.{Collection, CollectionEmbed}
   alias MaveCore.EmbedId
-  alias MaveCore.Embeds.{Embed, EmbedSettings, Events, ManifestPublisher, SettingsSerializer}
+
+  alias MaveCore.Embeds.{
+    Embed,
+    EmbedSettings,
+    Events,
+    ManifestPublisher,
+    PendingMedia,
+    SettingsSerializer
+  }
+
   alias MaveCore.Flow.{Definition, Run, StepRun}
   alias MaveCore.Languages
   alias MaveCore.LegacyShortUUID
@@ -541,6 +550,19 @@ defmodule MaveCore.Embeds do
     current_version = current_video_version(current_video)
     flow_run = latest_flow_run(space.hash, video_embed.hash)
     audio_tracks = audio_tracks_for(current_video)
+
+    audio_descriptions =
+      audio_descriptions_for(space, video_embed, current_video, current_version)
+
+    subtitles = subtitles_for(space, video_embed, current_video, current_version)
+
+    pending_media =
+      PendingMedia.for_run(flow_run, current_version, %{
+        audio_tracks: audio_tracks,
+        audio_descriptions: audio_descriptions,
+        subtitles: subtitles
+      })
+
     audio_only? = audio_only_source?(current_video, flow_run, current_version, audio_tracks)
     effective_settings = effective_settings(video_embed, settings_override)
     thumbnail_cache_buster = thumbnail_cache_buster(current_video && current_video.id)
@@ -598,9 +620,9 @@ defmodule MaveCore.Embeds do
           audio_only?
         ),
       audio_tracks: audio_tracks,
-      audio_descriptions:
-        audio_descriptions_for(space, video_embed, current_video, current_version),
-      subtitles: subtitles_for(space, video_embed, current_video, current_version),
+      audio_descriptions: audio_descriptions,
+      subtitles: subtitles,
+      pending_media: pending_media,
       renditions: renditions_for(current_video, flow_run),
       flow: flow_summary_for(flow_run)
     }

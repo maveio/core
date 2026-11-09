@@ -82,6 +82,19 @@ defmodule MaveCore.AudioDescription.TimelineTest do
     end
   end
 
+  test "explicit essential fallback ducks original audio without passing the final deadline" do
+    item =
+      cue(8, 10, "Call 112.") |> Map.merge(%{priority: 3, allow_ducking: true, window: i(8, 9.7)})
+
+    result = Timeline.plan_timeline([item], [1500], [i(0, 10)], 10, @sr)
+    assert result.ducks == [i(8, 9.5)]
+    assert result.cues == [cue(8, 9.5, "Call 112.")]
+    assert Timeline.plan_timeline([item], [1800], [i(0, 10)], 10, @sr).placements == []
+
+    assert Timeline.plan_timeline([%{item | priority: 1}], [1500], [i(0, 10)], 10, @sr).placements ==
+             []
+  end
+
   describe "plan_timeline/5 with scenes" do
     @speech [
       %{start: 4.35, end: 8.91},

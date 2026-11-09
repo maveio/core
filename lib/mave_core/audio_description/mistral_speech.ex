@@ -9,6 +9,8 @@ defmodule MaveCore.AudioDescription.MistralSpeech do
   videos.
   """
 
+  alias MaveCore.AudioDescription.Pronunciation
+
   @endpoint "https://api.mistral.ai/v1/audio/speech"
   @default_model "voxtral-mini-tts-3-0"
   @default_voices "en:gb_jane_neutral,nl:voice_3145"
@@ -17,11 +19,13 @@ defmodule MaveCore.AudioDescription.MistralSpeech do
   @receive_timeout_ms 2 * 60 * 1000
 
   @doc "Speaks `text` in `language` and returns WAV bytes."
-  def speak(text, language) when is_binary(text) and is_binary(language) do
+  def speak(text, language), do: speak(text, language, [])
+
+  def speak(text, language, opts) when is_binary(text) and is_binary(language) do
     with {:ok, api_key} <- fetch_api_key() do
       body = %{
         "model" => env("MAVE_AUDIO_DESCRIPTION_TTS_MODEL", @default_model),
-        "input" => text,
+        "input" => delivery_text(text, language, Keyword.get(opts, :pace)),
         "voice_id" => voice(language),
         "response_format" => "wav"
       }
@@ -48,6 +52,14 @@ defmodule MaveCore.AudioDescription.MistralSpeech do
           {:error, reason}
       end
     end
+  end
+
+  # Keep the voice's natural rate unless fitting explicitly requests faster speech.
+  defp delivery_text(text, language, pace) do
+    clean = Regex.replace(~r/\[(?:pace|emotion)=[^\]]*\]/u, text, "")
+    clean = Pronunciation.for_speech(clean, language)
+    tempo = if pace == :fast, do: "[pace=fast]", else: ""
+    "[emotion=warm]#{tempo}#{clean}"
   end
 
   defp decode_audio(audio) do

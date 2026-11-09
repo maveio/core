@@ -1682,6 +1682,74 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     stop_live_view(view)
   end
 
+  test "settings show generated media while the active run is preparing it", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+
+    embed =
+      video_embed_fixture(space, %{name: "Pending media"})
+      |> Repo.preload(asset: [:current_video])
+
+    {:ok, template} =
+      Flow.create_template(%{
+        "slug" => "pending-media-#{System.unique_integer([:positive])}",
+        "name" => "Pending media"
+      })
+
+    steps = [
+      %{"id" => "audio", "type" => "media.transcode_audio", "name" => "Audio"},
+      %{"id" => "ad", "type" => "media.mix_audio_description", "name" => "Description"},
+      %{"id" => "sub", "type" => "ai.transcribe_audio", "name" => "Subtitles"}
+    ]
+
+    {:ok, version} = Flow.create_version(template.id, %{"definition" => %{"steps" => steps}})
+
+    run =
+      Repo.insert!(
+        Run.changeset(%Run{}, %{
+          flow_template_id: template.id,
+          flow_version_id: version.id,
+          status: "running",
+          input: %{
+            "space_hash" => space.hash,
+            "embed_hash" => embed.hash,
+            "version" => 0,
+            "language" => "nl",
+            "audio_description" => %{"languages" => ["original"]}
+          }
+        })
+      )
+
+    step_runs =
+      Enum.map(steps, fn step ->
+        Repo.insert!(
+          StepRun.changeset(%StepRun{}, %{
+            flow_run_id: run.id,
+            step_id: step["id"],
+            step_type: step["type"],
+            status: "executing"
+          })
+        )
+      end)
+
+    {:ok, view, _} = live(conn, "/videos/#{embed.id}")
+
+    for step <- step_runs do
+      assert has_element?(
+               view,
+               "#generated-#{step.id}[aria-busy=true] input:disabled, #generated-#{step.id}[aria-busy=true] select:disabled"
+             )
+
+      refute has_element?(view, "#generated-#{step.id} [role=menuitem]")
+    end
+
+    assert has_element?(view, "#audio-description-settings input[value='Dutch (AD)']")
+
+    for step <- step_runs, do: step |> StepRun.changeset(%{status: "skipped"}) |> Repo.update!()
+    send(view.pid, {:embed_updated, %{"space_id" => space.id, "embed_id" => embed.id}})
+    refute has_element?(view, "[id^=generated-]")
+    stop_live_view(view)
+  end
+
   test "audio descriptions have their own editable settings and appear under Audio in Info", %{
     conn: conn
   } do

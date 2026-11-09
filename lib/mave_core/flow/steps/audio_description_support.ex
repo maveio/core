@@ -144,6 +144,10 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionSupport do
     AudioDescription.config(:chat_provider, MaveCore.AudioDescription.Scaleway)
   end
 
+  def writer_provider do
+    AudioDescription.config(:writer_provider, MaveCore.AudioDescription.MistralWriter)
+  end
+
   def speech_provider do
     AudioDescription.config(:speech_provider, MaveCore.AudioDescription.MistralSpeech)
   end

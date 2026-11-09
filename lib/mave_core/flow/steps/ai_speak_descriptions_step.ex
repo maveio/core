@@ -6,7 +6,7 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
   """
   @behaviour MaveCore.Flow.Step
 
-  alias MaveCore.AudioDescription.{Cues, Wav}
+  alias MaveCore.AudioDescription.{Budget, Cues, Prompts, SpeechFit, Wav}
   alias MaveCore.Flow.Steps.AudioDescriptionSupport, as: AD
 
   @step_type "ai.speak_descriptions"
@@ -30,47 +30,130 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
   defp speak(ctx, source, language) do
     with {:ok, json} <- AD.get_json(ctx, source["cues_key"]),
          cues = Cues.from_json(json),
-         {:ok, clips} <- speak_cues(ctx, cues, language) do
+         {:ok, results} <- speak_cues(ctx, cues, language),
+         accepted =
+           Enum.flat_map(results, fn
+             {:ok, cue, clip, adjustment} -> [{cue, clip, adjustment}]
+             _ -> []
+           end)
+           |> Enum.sort_by(&fitted_cue_start/1),
+         rejected =
+           Enum.flat_map(results, fn
+             {:skip, cue, reason} -> [Budget.rejection(cue, reason)]
+             _ -> []
+           end),
+         {:ok, missing} <- missing_text(ctx, source, accepted),
+         {:ok, _} <-
+           AD.put_json(ctx, AD.work_key(ctx, "#{language}/uncovered-text.json"), missing),
+         {:ok, cues_key} <-
+           AD.put_json(
+             ctx,
+             AD.work_key(ctx, "#{language}/fitted-cues.json"),
+             Cues.to_json(Enum.map(accepted, &elem(&1, 0)))
+           ),
+         {:ok, _} <-
+           AD.put_json(ctx, AD.work_key(ctx, "#{language}/unfitted-cues.json"), rejected) do
       {:ok,
        source
-       |> Map.take(["speech_key", "duration", "cues_key"])
+       |> Map.take(["speech_key", "duration", "category", "word_limit"])
        |> Map.merge(%{
          "status" => "ok",
          "step_type" => @step_type,
          "step_id" => ctx.step_id,
          "language" => language,
+         "cues_key" => cues_key,
          "sample_rate" => Wav.sample_rate(),
-         "clips" => clips
+         "clips" => Enum.map(accepted, &elem(&1, 1)),
+         "uncovered_text_count" => length(missing),
+         "faster_cue_count" => Enum.count(accepted, &(elem(&1, 2) == "shortened_faster")),
+         "adjusted_cue_count" =>
+           Enum.count(accepted, &(elem(&1, 2) in ["shortened", "shortened_faster"])),
+         "unplaced_cue_count" => Map.get(source, "unplaced_cue_count", 0) + length(rejected),
+         "review_required" =>
+           Map.get(source, "review_required", false) or missing != [] or
+             Enum.any?(rejected, &(&1["priority"] == 3))
        }), []}
     else
       {:error, reason} -> AD.failure(@step_type, ctx, reason)
     end
   end
 
+  defp fitted_cue_start({%{window: %{start: start}}, _, _}), do: start
+  defp fitted_cue_start({cue, _, _}), do: cue.start
+
+  defp missing_text(ctx, %{"plan_key" => key}, accepted) do
+    with {:ok, plan} <- AD.get_json(ctx, key) do
+      narration = Enum.map_join(accepted, " ", fn {cue, _, _} -> cue.text end)
+
+      {:ok,
+       SpeechFit.missing_text(plan["essential_text"] || [], narration, plan["spoken_text"] || "")}
+    end
+  end
+
+  defp missing_text(_ctx, _source, _accepted), do: {:ok, []}
+
   defp speak_cues(ctx, cues, language) do
     cues
     |> Enum.with_index()
-    |> Task.async_stream(fn {cue, index} -> speak_cue(ctx, cue, index, language) end,
+    |> Task.async_stream(fn {cue, index} -> fit_cue(ctx, cue, index, language) end,
       max_concurrency: @concurrency,
       timeout: @timeout_ms,
       ordered: true
     )
     |> Enum.reduce_while({:ok, []}, fn
-      {:ok, {:ok, clip}}, {:ok, clips} -> {:cont, {:ok, [clip | clips]}}
       {:ok, {:error, reason}}, _acc -> {:halt, {:error, reason}}
+      {:ok, result}, {:ok, results} -> {:cont, {:ok, [result | results]}}
       {:exit, reason}, _acc -> {:halt, {:error, {:speech_task_exit, reason}}}
     end)
     |> case do
-      {:ok, clips} -> {:ok, Enum.reverse(clips)}
+      {:ok, results} -> {:ok, Enum.reverse(results)}
       error -> error
     end
   end
 
-  defp speak_cue(ctx, cue, index, language) do
+  defp fit_cue(ctx, cue, index, language) do
+    speak = fn text, pace ->
+      case speak_cue(ctx, %{cue | text: text}, index, language, pace) do
+        {:ok, clip} -> ctx.storage.get(ctx.bucket, clip["key"], ctx.region)
+        error -> error
+      end
+    end
+
+    rewrite = &rewrite_cue(language, &1, &2, &3)
+
+    case SpeechFit.fit(cue, speak, rewrite) do
+      {:ok, fitted, _pcm, adjustment} ->
+        pace = if adjustment == "shortened_faster", do: :fast, else: :moderate
+
+        with {:ok, clip} <- speak_cue(ctx, fitted, index, language, pace),
+             do: {:ok, fitted, clip, adjustment}
+
+      {:skip, reason} ->
+        {:skip, cue, reason}
+
+      error ->
+        error
+    end
+  end
+
+  defp rewrite_cue(language, text, seconds, max_words) do
+    case AD.chat_provider().chat_json(
+           Prompts.rewrite_instruction(language, Float.round(seconds, 3), max_words),
+           [%{"type" => "text", "text" => text}],
+           schema: Prompts.rewrite_schema(),
+           max_tokens: 500
+         ) do
+      {:ok, %{"text" => shortened}} when is_binary(shortened) -> {:ok, shortened}
+      {:ok, _} -> {:error, :invalid_description_rewrite}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp speak_cue(ctx, cue, index, language, pace) do
     # Retrying a description run can change its text or voice at the same index.
     # Reuse a clip only while all inputs to speech generation stay the same.
     fingerprint =
-      {cue.text, language, AD.speech_provider(),
+      {4, cue.text, language, pace, AD.speech_provider(),
        System.get_env("MAVE_AUDIO_DESCRIPTION_TTS_MODEL"),
        System.get_env("MAVE_AUDIO_DESCRIPTION_VOICES"),
        System.get_env("MAVE_AUDIO_DESCRIPTION_VOICE")}
@@ -89,11 +172,19 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
         {:ok, %{"key" => key, "samples" => div(byte_size(pcm), 2)}}
 
       {:error, _not_found} ->
-        with {:ok, audio} <- AD.speech_provider().speak(cue.text, language),
+        with {:ok, audio} <- generate_speech(cue.text, language, pace),
              {:ok, pcm} <- Wav.clip(audio),
              {:ok, _} <- AD.put_private(ctx, key, pcm, "application/octet-stream") do
           {:ok, %{"key" => key, "samples" => div(byte_size(pcm), 2)}}
         end
     end
+  end
+
+  defp generate_speech(text, language, pace) do
+    provider = AD.speech_provider()
+
+    if Code.ensure_loaded?(provider) and function_exported?(provider, :speak, 3),
+      do: provider.speak(text, language, pace: pace),
+      else: provider.speak(text, language)
   end
 end

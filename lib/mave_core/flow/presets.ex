@@ -112,32 +112,48 @@ defmodule MaveCore.Flow.Presets do
   # A single original-language track is generated in the background.
   defp with_audio_description(definition) do
     steps = [
-      background_step("detect_scenes", "media.detect_scenes", "Detect Scenes", ["inspect_media"]),
-      background_step("describe_video", "ai.describe_video", "Describe Video", [
+      background_step(
         "detect_scenes",
-        "transcribe_audio",
-        "transcode_audio"
-      ]),
+        "media.detect_scenes",
+        "Detect Scenes",
+        ["inspect_media"],
+        %{"policy_version" => 3}
+      ),
+      background_step(
+        "describe_video",
+        "ai.describe_video",
+        "Describe Video",
+        [
+          "detect_scenes",
+          "transcribe_audio",
+          "transcode_audio"
+        ],
+        %{"policy_version" => 3}
+      ),
       background_step(
         "speak_descriptions_original",
         "ai.speak_descriptions",
         "Speak Descriptions",
         ["describe_video"],
-        %{"language" => "original", "source_step_id" => "describe_video"}
+        %{"language" => "original", "source_step_id" => "describe_video", "policy_version" => 3}
       ),
       background_step(
         "mix_audio_description_original",
         "media.mix_audio_description",
         "Mix Audio Description",
         ["speak_descriptions_original", "transcode_audio"],
-        %{"language" => "original", "source_step_id" => "speak_descriptions_original"}
+        %{
+          "language" => "original",
+          "source_step_id" => "speak_descriptions_original",
+          "policy_version" => 3
+        }
       )
     ]
 
     Map.update!(definition, "steps", &(&1 ++ steps))
   end
 
-  defp background_step(id, type, name, depends_on, params \\ nil) do
+  defp background_step(id, type, name, depends_on, params) do
     %{
       "id" => id,
       "type" => type,
