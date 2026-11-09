@@ -1203,40 +1203,47 @@ defmodule MaveCore.Media.Storage do
         hotlink_protection_enabled,
         storage_profile \\ nil
       ) do
-    if hotlink_protection_enabled do
-      body = build_bucket_policy_json(bucket, allowed_domains)
+    cond do
+      hotlink_protection_enabled ->
+        body = build_bucket_policy_json(bucket, allowed_domains)
 
-      case Req.put(build_service_req(storage_profile, bucket),
-             url: "/#{bucket}?policy",
-             body: body,
-             headers: [{"content-type", "application/json"}]
-           ) do
-        {:ok, %{status: status}} when status in 200..299 ->
-          :ok
+        case Req.put(build_service_req(storage_profile, bucket),
+               url: "/#{bucket}?policy",
+               body: body,
+               headers: [{"content-type", "application/json"}]
+             ) do
+          {:ok, %{status: status}} when status in 200..299 ->
+            :ok
 
-        {:ok, %{status: status}} ->
-          {:error, {:bucket_policy_failed, status}}
+          {:ok, %{status: status}} ->
+            {:error, {:bucket_policy_failed, status}}
 
-        {:error, reason} ->
-          {:error, reason}
-      end
-    else
-      body = build_public_bucket_policy_json(bucket)
+          {:error, reason} ->
+            {:error, reason}
+        end
 
-      case Req.put(build_service_req(storage_profile, bucket),
-             url: "/#{bucket}?policy",
-             body: body,
-             headers: [{"content-type", "application/json"}]
-           ) do
-        {:ok, %{status: status}} when status in 200..299 ->
-          :ok
+      bucket_policy_dialect(storage_profile) == :scaleway ->
+        # Public objects use their ACLs. A bucket-wide allow would also expose
+        # objects that were deliberately made private, and replace custom policies.
+        :ok
 
-        {:ok, %{status: status}} ->
-          {:error, {:bucket_policy_failed, status}}
+      true ->
+        body = build_public_bucket_policy_json(bucket)
 
-        {:error, reason} ->
-          {:error, reason}
-      end
+        case Req.put(build_service_req(storage_profile, bucket),
+               url: "/#{bucket}?policy",
+               body: body,
+               headers: [{"content-type", "application/json"}]
+             ) do
+          {:ok, %{status: status}} when status in 200..299 ->
+            :ok
+
+          {:ok, %{status: status}} ->
+            {:error, {:bucket_policy_failed, status}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
   end
 

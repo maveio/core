@@ -43,6 +43,11 @@ cached public copies and verify access before reporting success. Domain/CORS
 synchronization must preserve these policies. The optional `token_endpoint/0`
 callback selects the Phoenix endpoint used to sign dashboard tokens.
 
+Ordinary Scaleway bucket synchronization updates CORS without installing a
+bucket-wide public-read policy when hotlink protection is disabled. Object ACLs
+and existing bucket policies remain in effect. Private-playback adapters still
+maintain their explicit access policies for protected media.
+
 Development includes a MinIO adapter without a CDN. The standalone development
 Compose stack exposes its API on loopback port 9000 (`MAVE_MINIO_API_PORT` can
 change this). For other local setups, set `MAVE_PLAYBACK_STORAGE_ENDPOINT` to the
