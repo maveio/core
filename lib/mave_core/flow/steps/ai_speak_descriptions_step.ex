@@ -6,7 +6,7 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
   """
   @behaviour MaveCore.Flow.Step
 
-  alias MaveCore.AudioDescription.{Budget, Cues, Prompts, SpeechFit, Wav}
+  alias MaveCore.AudioDescription.{Budget, Cues, Prompts, SpeechFit, SpeechTiming, Wav}
   alias MaveCore.Flow.Steps.AudioDescriptionSupport, as: AD
 
   @step_type "ai.speak_descriptions"
@@ -71,12 +71,15 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
          "unplaced_cue_count" => Map.get(source, "unplaced_cue_count", 0) + length(rejected),
          "review_required" =>
            Map.get(source, "review_required", false) or missing != [] or
-             Enum.any?(rejected, &(&1["priority"] == 3))
+             Enum.any?(rejected, &needs_review?/1)
        }), []}
     else
       {:error, reason} -> AD.failure(@step_type, ctx, reason)
     end
   end
+
+  defp needs_review?(rejection),
+    do: rejection["priority"] == 3 or String.starts_with?(rejection["reason"], "rewrite_")
 
   defp fitted_cue_start({%{window: %{start: start}}, _, _}), do: start
   defp fitted_cue_start({cue, _, _}), do: cue.start
@@ -119,9 +122,11 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
       end
     end
 
-    rewrite = &rewrite_cue(language, &1, &2, &3)
+    rewrite = fn text, seconds, max_words, feedback ->
+      rewrite_cue(language, cue, text, seconds, max_words, feedback)
+    end
 
-    case SpeechFit.fit(cue, speak, rewrite) do
+    case SpeechFit.fit(cue, speak, rewrite, estimate: &SpeechTiming.estimate(&1, language)) do
       {:ok, fitted, _pcm, adjustment} ->
         pace = if adjustment == "shortened_faster", do: :fast, else: :moderate
 
@@ -136,12 +141,21 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
     end
   end
 
-  defp rewrite_cue(language, text, seconds, max_words) do
-    case AD.chat_provider().chat_json(
-           Prompts.rewrite_instruction(language, Float.round(seconds, 3), max_words),
-           [%{"type" => "text", "text" => text}],
+  defp rewrite_cue(language, cue, text, seconds, max_words, feedback) do
+    input = %{
+      "original_event_text" => cue.text,
+      "text" => text,
+      "required_on_screen_text" => cue[:on_screen_text] || "",
+      "event_window" => cue[:visual_window] || cue[:scene],
+      "speech_measurement" => feedback
+    }
+
+    case AD.writer_provider().chat_json(
+           Prompts.rewrite_instruction(language, Float.round(seconds * 1.0, 3), max_words),
+           [%{"type" => "text", "text" => Jason.encode!(input)}],
            schema: Prompts.rewrite_schema(),
-           max_tokens: 500
+           max_tokens: 4_000,
+           reasoning_effort: "low"
          ) do
       {:ok, %{"text" => shortened}} when is_binary(shortened) -> {:ok, shortened}
       {:ok, _} -> {:error, :invalid_description_rewrite}

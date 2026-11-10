@@ -77,6 +77,8 @@ defmodule MaveCore.AudioDescription.Prompts do
 
   def rewrite_instruction(language, seconds, max_words) do
     "Shorten this audio description in #{language} to fit #{seconds} seconds and at most #{max_words} words. " <>
+      "The input includes the original event and speech_measurement feedback. duration_source distinguishes a heuristic_estimate made before synthesis from measured_audio. estimated_seconds is a prediction, not a recording; measured_seconds is the actual duration when available. A previous rewrite can still be too slow even when its word count seemed reasonable. Aim below the available duration at that measured natural pace. Preserve the original event rather than merely deleting a word from the last attempt. " <>
+      "Keep required_on_screen_text exactly. Never add a direction of motion, destination or event not established by original_event_text. Use a short complete phrase without introductions or framing. " <>
       "Return only the revised text in the JSON text field. Keep the essential visual meaning and necessary identifiers and numbers; incidental brand names may be omitted. " <>
       "do not invent or add information. Preserve the main subject and action, including distinctive equipment when it explains the action. Omit incidental brands, setting and appearance before the main action. Preserve the exact required on-screen wording for text cues; omit framing and decorative visual detail first. " <>
       "Prefer a concise visual phrase to a generic activity: for example, shorten a person wearing a VR headset while gaming to 'person with VR headset', not 'plays a game'. " <>
