@@ -23,16 +23,29 @@ preferred fallback in the flow input without coupling the pipeline to space sett
 
 - **Visual observations first.** Scaleway records the setting, people and objects,
   actions, readable text, changes and uncertainties for every sampled frame. The
-  vision request contains no transcript or narration word limit. Samples cover
+  vision request includes nearby timed speech as context, without a narration word limit. Samples cover
   at least two positions in shots lasting one second or longer, and approximately
   every two seconds in longer shots. Observations retain server-owned frame IDs
-  and timestamps; partial or fabricated frame coverage is rejected.
+  and timestamps; partial or fabricated frame coverage is rejected. Text roles and
+  prominence distinguish independent messages from subtitles and incidental interface
+  details. Spoken context never counts as proof of unseen visual facts.
 - **Whole-video writing.** Mistral Large 4 receives the complete observations,
   shot boundaries, timed transcript, measured speech intervals and available
   pauses. It writes the original-language script, referencing observation IDs.
   Names become available only after their introduction. Repeated angles are not
   new events, while successive meaningful actions and locations remain distinct.
-  The writer must not invent missing transitions or complete uncertain text.
+  The writer must not invent missing transitions or complete uncertain text. It
+  omits illustrative footage and repeated settings when the explanation already
+  supplies their meaning. Readable counters and background notes are not essential
+  merely because they are unspoken. Primary closing messages receive separate,
+  concise cues rather than being combined with subsequent logos or addresses.
+  Each distinct meaningful event gets its own short cue, evidence references and
+  observed `event_start`/`event_end`. Successive steps stay separate even within
+  one camera shot; multiple angles of one continuing action may share a cue.
+  The scheduler intersects event boundaries with measured shot evidence, so later
+  actions cannot borrow an earlier event's pause. Independent cues are not merged
+  merely because their proposed speaking times coincide. Legacy script responses
+  without event boundaries retain their evidence-based windows.
   The configured writer provider is independent of vision and speech synthesis.
 - **Traceable intermediate results.** Private `observations.json` is persisted
   before writing begins, so a writing failure does not discard the image analysis.
@@ -43,7 +56,9 @@ preferred fallback in the flow input without coupling the pipeline to space sett
   text and actions take priority over optional visual detail. The model must not
   invent unreadable text or identities. Initial speech estimates use 2.5 words/s;
   these are planning limits, not guarantees of synthesized duration.
-- **Protected speech and ending.** New cues reserve non-overlapping windows in
+- **Protected speech and ending.** Narration begins no earlier than 500 ms into
+  the video, leaving a short natural lead-in. Later events keep their own timing;
+  the delay is not added to each cue. New cues reserve non-overlapping windows in
   measured speech pauses, within the relevant scene and before the video end
   minus 300 ms. Event windows also prevent a cue from displacing the next equally
   important action, even when cut detection groups both into one scene. A cue's
@@ -58,9 +73,30 @@ preferred fallback in the flow input without coupling the pipeline to space sett
   rate. A fast pace is requested only by the measured fitting fallback. Dutch
   URLs are expanded to Dutch letter names and separators for synthesis only;
   the VTT retains the original spelling.
+- **Local speech estimates.** Before synthesis, a local heuristic estimates duration
+  from vowel groups, word count, numeric groups, abbreviations, punctuation and
+  the existing spoken URL expansion. Clearly oversized text is rewritten before
+  calling the speech provider; borderline estimates proceed to synthesis. These
+  coefficients are not calibrated voice measurements and do not establish timing
+  accuracy for every language. A failed content-preserving preflight rewrite falls
+  back to measuring the original text rather than dropping it on an estimate.
+  Preflight and measured repair share the two-rewrite allowance per window.
 - **Measured speech and repair.** After synthesis, the complete clip must fit its
   reserved window. Oversized text is rewritten with a measured word budget
-  and synthesized again. A measured overrun allows one further shorter rewrite.
+  and synthesized again. For text cues, the required literal message is measured
+  on its own before rewriting framing or decorative detail. Extra numeric
+  instructions may not disappear in that fallback. The rewriter receives the
+  original event, required text, measured speaking time and available seconds.
+  Revisions use the same configured writer as script generation (Mistral by
+  default), rather than the vision provider. Short Mistral revisions use low
+  reasoning effort; full script generation retains medium effort. Truncated or
+  malformed revision responses never cancel other descriptions. Preflight falls
+  back to measuring the original; an unusable measured revision is recorded per
+  cue and sets `review_required`. Transport and service errors remain retryable.
+  If a rewritten phrase still overruns, one further rewrite uses its newly measured
+  speaking rate to choose a smaller target. This keeps the existing two-attempt
+  rewrite limit. Planning word counts remain estimates: complete audio that fits
+  naturally is retained even when the initial word estimate was conservative.
   An only slightly oversized rewrite can try a faster
   delivery, capped at a measured 15% speed increase and 3.5 words/s. If it still
   does not fit, it is omitted and recorded for review. Required on-screen text

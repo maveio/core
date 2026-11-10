@@ -11,7 +11,7 @@ defmodule MaveCore.AudioDescription.MistralWriter do
   defp request(system, content, opts, key) do
     body = %{
       "model" => model(),
-      "reasoning_effort" => "medium",
+      "reasoning_effort" => Keyword.get(opts, :reasoning_effort, "medium"),
       "temperature" => 0.2,
       "max_tokens" => Keyword.get(opts, :max_tokens, 12_000),
       "messages" => [

@@ -12,6 +12,27 @@ defmodule MaveCore.AudioDescription.BudgetTest do
       scene: %{start: 0.0, end: 10.0}
     }
 
+  test "opening narration has a short lead-in without shifting later events" do
+    opening =
+      cue(0, 4, "A cyclist arrives.", 2) |> Map.put(:visual_window, %{start: 0.0, end: 4.0})
+
+    later = cue(5, 8, "A door opens.", 2) |> Map.put(:visual_window, %{start: 5.0, end: 8.0})
+    plan = Budget.allocate([opening, later], [], 10, "story")
+    assert [first, second] = plan.cues
+    assert first.window.start == Budget.start_margin()
+    assert first.window.end <= 4
+    assert second.window.start == 5.0
+    assert [%{start: 0.5, end: 9.7}] = Budget.available_gaps([], 10)
+  end
+
+  test "essential ducking fallback also respects the opening lead-in" do
+    plan =
+      Budget.allocate([cue(0, 4, "Press Save.", 3)], [%{start: 0.0, end: 10.0}], 10, "tutorial")
+
+    assert [%{window: nil, duck_window: window}] = plan.cues
+    assert window.start >= 0.5
+  end
+
   test "reserves end room and prioritizes essential visible text over optional detail" do
     low = cue(8.5, 9.5, "The background is blue.", 1)
     essential = cue(8, 10, "Call 112.", 3)

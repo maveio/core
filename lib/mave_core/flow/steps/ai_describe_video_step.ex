@@ -34,7 +34,7 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
          speech = transcript.intervals,
          scenes = intervals(document["scenes"]),
          {:ok, observations} <-
-           Observations.collect(ctx, document, AD.chat_provider(), AD.language(ctx)),
+           Observations.collect(ctx, document, AD.chat_provider(), AD.language(ctx), transcript),
          {:ok, observations_key} <-
            AD.put_json(ctx, AD.work_key(ctx, "observations.json"), %{
              "schema_version" => 1,
@@ -103,7 +103,8 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
     raw_cues
     |> Enum.flat_map(&clean_cue(&1, scenes, transcript))
     |> Timeline.snap_cues(gaps, scenes)
-    |> Cues.normalize(duration)
+    |> Enum.flat_map(&Cues.normalize([&1], duration))
+    |> Enum.sort_by(& &1.start)
   end
 
   defp clean_cue(%{"text" => text} = cue, scenes, transcript) when is_binary(text) do
@@ -135,7 +136,7 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
       on_screen_text: required || "",
       observation_ids: Map.get(cue, "observation_ids", []),
       visual_window: cue["visual_window"],
-      priority: if(required, do: 3, else: cue_priority(cue)),
+      priority: cue_priority(cue),
       kind: if(required, do: "text", else: cue_kind(cue))
     }
   end
@@ -215,10 +216,24 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
         "#{segment[:start] || segment["start"]}-#{segment[:end] || segment["end"]}: #{segment[:text] || segment["text"] || ""}"
       end)
 
-    %{intervals: speech_from_segments(segments, duration), text: String.slice(text, 0, 40_000)}
+    %{
+      intervals: speech_from_segments(segments, duration),
+      text: String.slice(text, 0, 40_000),
+      segments: Enum.flat_map(segments, &timed_segment/1)
+    }
   end
 
   defp transcript_data(_segments, _duration), do: %{intervals: [], text: "No spoken words."}
+
+  defp timed_segment(segment) do
+    start = number(segment[:start] || segment["start"])
+    stop = number(segment[:end] || segment["end"])
+    text = segment[:text] || segment["text"]
+
+    if start && stop && is_binary(text) && stop > start,
+      do: [%{"start" => start, "end" => stop, "text" => text}],
+      else: []
+  end
 
   defp speech_from_segments(segments, duration) when is_list(segments) do
     segments

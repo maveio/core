@@ -3,17 +3,26 @@ defmodule MaveCore.AudioDescription.Budget do
 
   alias MaveCore.AudioDescription.{Cues, Timeline}
 
+  @start_margin 0.5
   @end_margin 0.3
   @breath 0.15
   @minimum_slot 0.8
   @max_slot 8.0
 
+  def start_margin, do: @start_margin
   def end_margin, do: @end_margin
+
+  @doc "Speech-free time with a short opening lead-in and the existing ending margin."
+  def available_gaps(speech, duration) do
+    speech
+    |> Timeline.free_gaps(max(0.0, duration - @end_margin))
+    |> Enum.map(&%{start: max(@start_margin, &1.start), end: &1.end})
+    |> Enum.filter(&(&1.end > &1.start))
+  end
 
   def word_limit(speech, duration, category) do
     available =
-      Enum.reduce(Timeline.free_gaps(speech, max(0.0, duration - @end_margin)), 0.0, fn gap,
-                                                                                        sum ->
+      Enum.reduce(available_gaps(speech, duration), 0.0, fn gap, sum ->
         sum + gap.end - gap.start
       end)
 
@@ -32,7 +41,7 @@ defmodule MaveCore.AudioDescription.Budget do
   @doc "Reserve speech pauses first and optional last-resort ducking windows for essential information."
   def allocate(cues, speech, duration, category) do
     cues = bound_events(cues, duration)
-    gaps = Timeline.free_gaps(speech, max(0.0, duration - @end_margin))
+    gaps = available_gaps(speech, duration)
     limit = word_limit(speech, duration, category)
 
     {accepted, rejected, _gaps, _remaining} =
@@ -82,7 +91,7 @@ defmodule MaveCore.AudioDescription.Budget do
     |> Enum.map(fn {cue, index} ->
       next = sorted |> Enum.drop(index + 1) |> Enum.find(&(rank(&1) >= rank(cue)))
       next_start = if next, do: max(cue.start, next.start - 0.5), else: duration
-      scene = Map.get(cue, :scene, %{start: 0.0, end: duration})
+      scene = event_bounds(cue, duration)
 
       Map.put(cue, :scene, %{
         start: if(cue[:visual_window], do: scene.start, else: max(scene.start, cue.start - 0.5)),
@@ -90,6 +99,14 @@ defmodule MaveCore.AudioDescription.Budget do
       })
     end)
   end
+
+  defp event_bounds(%{visual_window: %{"start" => start, "end" => stop}}, _duration),
+    do: %{start: start, end: stop}
+
+  defp event_bounds(%{visual_window: %{start: start, end: stop}}, _duration),
+    do: %{start: start, end: stop}
+
+  defp event_bounds(cue, duration), do: Map.get(cue, :scene, %{start: 0.0, end: duration})
 
   defp add_fallbacks(accepted, duration) do
     accepted
@@ -102,7 +119,7 @@ defmodule MaveCore.AudioDescription.Budget do
 
   defp add_fallback({index, cue}, accepted, duration, {planned, rejected, reserved}) do
     free =
-      Enum.reduce(accepted, [%{start: 0.0, end: max(0.0, duration - @end_margin)}], fn
+      Enum.reduce(accepted, [%{start: @start_margin, end: max(0.0, duration - @end_margin)}], fn
         {^index, _}, gaps -> gaps
         {_, %{window: nil}}, gaps -> gaps
         {_, other}, gaps -> subtract(gaps, other.window)

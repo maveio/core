@@ -50,6 +50,25 @@ defmodule MaveCore.AudioDescription.MistralWriterTest do
     assert body["response_format"]["type"] == "json_schema"
   end
 
+  test "short revisions can use low reasoning while script generation defaults to medium" do
+    Process.put(:writer_response, %{
+      "choices" => [
+        %{"finish_reason" => "stop", "message" => %{"content" => ~s({"text":"A door opens."})}}
+      ]
+    })
+
+    assert {:ok, %{"text" => "A door opens."}} =
+             MistralWriter.chat_json("Shorten.", [],
+               schema: %{},
+               max_tokens: 4000,
+               reasoning_effort: "low"
+             )
+
+    assert_received {:body, body}
+    assert body["reasoning_effort"] == "low"
+    assert body["max_tokens"] == 4000
+  end
+
   test "incomplete responses never become a partial script" do
     Process.put(:writer_response, %{
       "choices" => [%{"finish_reason" => "length", "message" => %{"content" => "{}"}}]

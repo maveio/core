@@ -14,6 +14,82 @@ defmodule MaveCore.AudioDescription.ObservationsTest do
       "uncertainties" => ["Motion cannot be established"]
     }
 
+  defmodule Storage do
+    def get(_, _, _), do: {:ok, "image"}
+  end
+
+  defmodule Vision do
+    def chat_json(system, _content, _opts) do
+      send(self(), {:vision_instruction, system})
+
+      {:ok,
+       %{
+         "observations" => [
+           %{
+             "frame" => 0,
+             "setting" => "Desk",
+             "people_and_objects" => [],
+             "actions" => [],
+             "visible_text" => ["23 matches"],
+             "changes" => [],
+             "uncertainties" => [],
+             "text_elements" => [
+               %{"text" => "23 matches", "role" => "interface", "prominence" => "incidental"}
+             ]
+           }
+         ]
+       }}
+    end
+  end
+
+  test "visual interpretation receives nearby speech without treating speech as visual proof" do
+    document = %{"stills" => [%{"key" => "image", "scene" => 0, "time" => 10.0}]}
+
+    transcript = %{
+      segments: [
+        %{"start" => 8.0, "end" => 12.0, "text" => "Everyone can consult the archive."},
+        %{"start" => 50.0, "end" => 54.0, "text" => "A later reveal."}
+      ]
+    }
+
+    assert {:ok, [observation]} =
+             Observations.collect(
+               %{storage: Storage, bucket: "synthetic", region: nil},
+               document,
+               Vision,
+               "en",
+               transcript
+             )
+
+    assert_received {:vision_instruction, instruction}
+    assert instruction =~ "Everyone can consult the archive"
+    refute instruction =~ "A later reveal"
+    assert observation["spoken_context"] == [hd(transcript.segments)]
+    assert [%{"prominence" => "incidental", "role" => "interface"}] = observation["text_elements"]
+    assert instruction =~ "never use spoken words as proof"
+  end
+
+  test "text prominence is retained and unsupported classifications are rejected" do
+    batch = [{%{"time" => 3.0, "scene" => 0}, 7}]
+
+    element = %{
+      "text" => "Read more at example.org",
+      "role" => "title_card",
+      "prominence" => "primary"
+    }
+
+    assert {:ok, [anchored]} =
+             Observations.anchor([Map.put(row(7), "text_elements", [element])], batch)
+
+    assert anchored["text_elements"] == [element]
+
+    assert {:error, _} =
+             Observations.anchor(
+               [Map.put(row(7), "text_elements", [%{element | "prominence" => "unknown"}])],
+               batch
+             )
+  end
+
   test "observations preserve detail but cannot change their source timestamps" do
     batch = [{%{"time" => 2.0, "scene" => 0}, 7}, {%{"time" => 4.0, "scene" => 1}, 8}]
     assert {:ok, [first, second]} = Observations.anchor([row(8), row(7)], batch)

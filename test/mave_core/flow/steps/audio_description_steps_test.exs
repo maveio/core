@@ -118,6 +118,27 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
       }
   end
 
+  defmodule RewriteWriter do
+    def chat_json(_system, [%{"text" => json}], opts) do
+      pid = List.last(Process.get(:"$callers", [self()]))
+
+      send(
+        pid,
+        {:writer_rewrite, Jason.decode!(json), opts[:max_tokens], opts[:reasoning_effort]}
+      )
+
+      {:ok, %{"text" => "Red."}}
+    end
+  end
+
+  defmodule TruncatedRewriteWriter do
+    def chat_json(_, _, _), do: {:error, :model_output_truncated}
+  end
+
+  defmodule NoRewriteVision do
+    def chat_json(_, _, _), do: raise("vision must not rewrite narration")
+  end
+
   defmodule SpeechStub do
     @moduledoc false
 
@@ -279,6 +300,112 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
              ~s|NAME="English (original)",LANGUAGE="en",DEFAULT=YES,AUTOSELECT=YES,CHANNELS="2"|
   end
 
+  test "speech revisions use the configured script writer rather than the vision provider" do
+    Application.put_env(:mave_core, :audio_description,
+      chat_provider: NoRewriteVision,
+      writer_provider: RewriteWriter,
+      speech_provider: SpeechStub
+    )
+
+    key = "#{@embed}/audio_description/en/cues.json"
+
+    cue = %{
+      "start" => 1,
+      "end" => 3,
+      "text" => "A large screen slowly changes into a bright red color.",
+      "window" => %{"start" => 1, "end" => 3},
+      "priority" => 2,
+      "kind" => "action",
+      "max_words" => 4
+    }
+
+    Storage.put(@bucket, key, Jason.encode!([cue]), "application/json", nil)
+
+    context = %{
+      run_input: Map.put(base_input(), "audio_description", @requested),
+      dependency_outputs: %{
+        "describe_video" => %{
+          "status" => "ok",
+          "cues_key" => key,
+          "speech_key" => "speech.json",
+          "duration" => 8
+        }
+      }
+    }
+
+    assert {:ok, %{"status" => "ok"}, []} =
+             AiSpeakDescriptionsStep.run(
+               %{"id" => "speak_descriptions_en", "params" => %{"language" => "en"}},
+               context
+             )
+
+    assert_received {:writer_rewrite, input, 4000, "low"}
+    assert input["original_event_text"] == cue["text"]
+  end
+
+  test "one truncated revision cannot discard other successfully spoken descriptions" do
+    Application.put_env(:mave_core, :audio_description,
+      chat_provider: NoRewriteVision,
+      writer_provider: TruncatedRewriteWriter,
+      speech_provider: SpeechStub
+    )
+
+    key = "#{@embed}/audio_description/en/cues.json"
+
+    cues = [
+      %{
+        "start" => 1,
+        "end" => 3,
+        "text" => "A large screen slowly changes into a bright red color.",
+        "window" => %{"start" => 1, "end" => 3},
+        "priority" => 2,
+        "kind" => "action",
+        "max_words" => 4
+      },
+      %{
+        "start" => 4,
+        "end" => 6,
+        "text" => "Blue.",
+        "window" => %{"start" => 4, "end" => 6},
+        "priority" => 2,
+        "kind" => "action",
+        "max_words" => 4
+      }
+    ]
+
+    Storage.put(@bucket, key, Jason.encode!(cues), "application/json", nil)
+
+    context = %{
+      run_input: Map.put(base_input(), "audio_description", @requested),
+      dependency_outputs: %{
+        "describe_video" => %{
+          "status" => "ok",
+          "cues_key" => key,
+          "speech_key" => "speech.json",
+          "duration" => 8
+        }
+      }
+    }
+
+    assert {:ok, output, []} =
+             AiSpeakDescriptionsStep.run(
+               %{"id" => "speak_descriptions_en", "params" => %{"language" => "en"}},
+               context
+             )
+
+    assert output["status"] == "ok"
+    assert length(output["clips"]) == 1
+    assert output["unplaced_cue_count"] == 1
+    assert output["review_required"]
+    assert {:ok, fitted} = Storage.get(@bucket, output["cues_key"], nil)
+    assert [%{"text" => "Blue."}] = Jason.decode!(fitted)
+
+    assert {:ok, rejected} =
+             Storage.get(@bucket, "#{@embed}/audio_description/en/unfitted-cues.json", nil)
+
+    assert [%{"reason" => "rewrite_model_output_truncated"}] = Jason.decode!(rejected)
+  end
+
   test "speech retries reuse unchanged cues but regenerate changed text" do
     key = "#{@embed}/audio_description/en/cues.json"
     step = %{"id" => "speak_descriptions_en", "params" => %{"language" => "en"}}
@@ -385,6 +512,24 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
     assert instruction["text"] == "A card reads: Read the guide at example.org."
     assert instruction["on_screen_text"] == "Read the guide at example.org."
     assert instruction["window"]["start"] >= 12
+
+    # Literal text is not automatically essential: incidental labels keep their priority.
+    Process.put(:ad_cues, [
+      %{
+        "start" => 14,
+        "end" => 18,
+        "shot" => 0,
+        "text" => "23 matches",
+        "on_screen_text" => "23 matches",
+        "kind" => "text",
+        "priority" => 1
+      }
+    ])
+
+    Process.put(:ad_keep, [0])
+    assert {:ok, label_output, []} = AiDescribeVideoStep.run(%{"id" => "describe_video"}, context)
+    assert {:ok, label_json} = Storage.get(@bucket, label_output["cues_key"], nil)
+    assert [%{"priority" => 1, "on_screen_text" => "23 matches"}] = Jason.decode!(label_json)
 
     Process.put(:ad_cues, [
       %{
@@ -514,7 +659,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
     Storage.put_public(@bucket, "#{@embed}/audio.mp3", audio, "audio/mpeg", nil)
 
     transcript = %{
-      "segments" => [%{"start" => 1.0, "end" => 3.0}, %{"start" => 4.5, "end" => 7.5}]
+      "segments" => [%{"start" => 1.5, "end" => 3.0}, %{"start" => 4.5, "end" => 7.5}]
     }
 
     Storage.put_public(
@@ -564,7 +709,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
     assert_received {:chat, _system, [%{"text" => json}]}
 
     assert Jason.decode!(json)["protected_speech"] == [
-             %{"start" => 0.85, "end" => 3.15},
+             %{"start" => 1.35, "end" => 3.15},
              %{"start" => 4.35, "end" => 7.65}
            ]
 
