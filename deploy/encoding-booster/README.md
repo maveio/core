@@ -40,7 +40,10 @@ that allowance per concurrent clip. This trades clip upload/encode overlap for
 a seekable MP4 without buffering full-length videos.
 
 Full-length video requests and explicit time-range chunks keep streaming
-fragmented MP4 output to storage while encoding, with bounded memory. Long
+fragmented MP4 output to storage while encoding, with bounded memory. Video
+encoding and concatenation use a two-second fragment-duration threshold so
+continuous audio is flushed even during long pauses between video frames.
+This bounds fragment sample tables for sparse video with continuous audio. Long
 renditions use durable, deterministic chunk objects and the `/concat` endpoint
 downloads complete chunks to private booster scratch before streaming the joined
 output into a remote multipart destination. Downloads use the trusted source

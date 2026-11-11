@@ -1483,6 +1483,10 @@ func ffmpegSourceHeaders(inputReferer string, inputBasicAuth string) string {
 	return headers.String()
 }
 
+// A long VFR pause can otherwise collect enough audio samples for a moof
+// header to exceed the non-seekable muxer's buffer and corrupt later packets.
+const videoFragmentDurationMicros = "2000000"
+
 func videoFFmpegArgs(request encodeRequest, backend string) []string {
 	args := append(ffmpegBaseArgs(request),
 		// Never publish a partial rendition after a source/demux/decode error.
@@ -1544,6 +1548,7 @@ func videoFFmpegArgs(request encodeRequest, backend string) []string {
 	}
 	return append(args,
 		"-movflags", "frag_keyframe+empty_moov+default_base_moof",
+		"-frag_duration", videoFragmentDurationMicros,
 		"-f", "mp4", "pipe:1",
 	)
 }
@@ -1768,6 +1773,7 @@ func concatFFmpegArgs(request concatRequest) []string {
 		"-f", "concat", "-safe", "0", "-i", "pipe:0",
 		"-map", "0:v:0", "-map", "0:a?", "-c", "copy",
 		"-movflags", "frag_keyframe+empty_moov+default_base_moof",
+		"-frag_duration", videoFragmentDurationMicros,
 		"-f", "mp4", "pipe:1",
 	)
 }

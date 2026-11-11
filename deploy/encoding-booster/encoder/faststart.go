@@ -135,7 +135,15 @@ encoding:
 }
 
 func faststartOutputArgs(args []string, path string) []string {
-	result := append([]string{"-xerror", "-abort_on", "empty_output"}, args...)
+	result := []string{"-xerror", "-abort_on", "empty_output"}
+	for index := 0; index < len(args); index++ {
+		// The duration limit itself enables fragmentation, even with +faststart.
+		if args[index] == "-frag_duration" && index+1 < len(args) {
+			index++
+			continue
+		}
+		result = append(result, args[index])
+	}
 	for index := 0; index+1 < len(result); index++ {
 		if result[index] == "-movflags" {
 			result[index+1] = "+faststart"
