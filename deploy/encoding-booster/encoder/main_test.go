@@ -517,7 +517,9 @@ func TestEncodeHandlerFlushesStartedEventBeforeFFmpegProducesOutput(t *testing.T
 	ffmpegPath := filepath.Join(ffmpegDir, "ffmpeg")
 	ffmpegScript := `#!/bin/sh
 sleep 1
-printf encoded-media
+for arg do output="$arg"; done
+printf encoded-media > "$output"
+printf 'frame=1\nprogress=end\n' >&2
 `
 	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0o700); err != nil {
 		t.Fatal(err)
@@ -544,7 +546,8 @@ printf encoded-media
 	defer func() { http.DefaultClient = oldClient }()
 
 	payload, err := json.Marshal(encodeRequest{
-		InputURL: "https://example.com/input.mp4",
+		InputURL:           "https://example.com/input.mp4",
+		MaxDurationSeconds: 60,
 		OutputUpload: &multipartUpload{
 			PartSizeBytes: 5 * 1024 * 1024,
 			PartURLs:      []string{storage.URL + "/object?partNumber=1&uploadId=test"},

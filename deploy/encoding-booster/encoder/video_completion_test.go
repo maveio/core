@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -84,10 +85,12 @@ func TestVideoUploadsRejectIncompleteInputs(t *testing.T) {
 				}
 				t.Setenv("PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 				var uploaded, completed, aborted atomic.Bool
+				var published bytes.Buffer
 				storage := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					switch r.Method {
 					case http.MethodPut:
 						uploaded.Store(true)
+						_, _ = io.Copy(&published, r.Body)
 						w.Header().Set("ETag", `"part-1"`)
 					case http.MethodPost:
 						completed.Store(true)
@@ -115,7 +118,7 @@ func TestVideoUploadsRejectIncompleteInputs(t *testing.T) {
 					payload, err = json.Marshal(concatRequest{InputURLs: []string{first, source.URL + "/broken.mp4"}, OutputUpload: upload})
 					handler = concatHandler(10*time.Second, "test", "", nil, newActivityTracker())
 				} else {
-					payload, err = json.Marshal(encodeRequest{InputURL: source.URL + "/broken.mp4", Operation: "video", Codec: "h264", Width: 320, OutputUpload: &upload})
+					payload, err = json.Marshal(encodeRequest{InputURL: source.URL + "/broken.mp4", Operation: "video", Codec: "h264", Width: 320, MaxDurationSeconds: 60, OutputUpload: &upload})
 					handler = encodeHandler(10*time.Second, "test", "cpu", "", nil, newActivityTracker())
 				}
 				if err != nil {
@@ -127,6 +130,9 @@ func TestVideoUploadsRejectIncompleteInputs(t *testing.T) {
 				if failure == "none" {
 					if !completed.Load() || aborted.Load() || !strings.Contains(body, `"status":"completed"`) {
 						t.Fatalf("complete video must succeed: %s", body)
+					}
+					if operation == "video" {
+						assertFaststartMP4(t, published.Bytes())
 					}
 					if operation == "concat" && (reads.Load() != 2 || ranged.Load() != 0 || !strings.Contains(body, `"frame":"40"`)) {
 						t.Fatalf("concat must download each source once and retain all packets: %s", body)

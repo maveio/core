@@ -1436,6 +1436,14 @@ func requiresSeekableFrameOutput(request encodeRequest) bool {
 	return request.Operation == "frame" && request.FrameCodec == "avif"
 }
 
+func requiresFaststartVideoOutput(request encodeRequest) bool {
+	// Finalize bounded preview clips here. Full-length videos and
+	// explicit time-range chunks retain streaming output for HLS and concatenation.
+	return request.Operation == "video" && request.OutputUpload != nil &&
+		!request.PackageHLS && request.MaxDurationSeconds > 0 && request.MaxDurationSeconds <= 60 &&
+		request.StartSeconds == 0 && request.DurationSeconds == 0
+}
+
 func ffmpegBaseArgs(request encodeRequest) []string {
 	inputFormats := safeInputFormats
 	if request.Operation == "frame" {
@@ -3133,6 +3141,11 @@ func encodeHandler(timeout time.Duration, instanceID string, backend string, bea
 		}
 		if requiresSeekableFrameOutput(request) {
 			encodeSeekableFrame(writer, encodeContext, cancel, request, backend)
+			return
+		}
+		if requiresFaststartVideoOutput(request) {
+			uploadFaststartVideo(encodeContext, writer, ffmpegArgs(request, backend), *request.OutputUpload,
+				ffmpegSourceRedactions(request.InputURL, request.InputBasicAuth))
 			return
 		}
 		command := mediaCommand(encodeContext, ffmpegExecutable, ffmpegArgs(request, backend)...)
