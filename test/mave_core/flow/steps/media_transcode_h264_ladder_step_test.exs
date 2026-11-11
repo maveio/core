@@ -1,7 +1,7 @@
 defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStepTest do
   use ExUnit.Case, async: false
 
-  alias MaveCore.Flow.StepRegistry
+  alias MaveCore.Flow.{RetryPolicy, StepRegistry}
   alias MaveCore.Flow.Steps.MediaTranscodeH264LadderStep
   alias MaveCore.Media.Storage
   alias MaveCore.TestSupport.FlowStorageAdapterStub
@@ -320,8 +320,8 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStepTest do
                 {:media_transcode_h264_ladder_failed,
                  {:encoding_booster_chunk_failed, ^index, ^reason}}} = result
 
-        assert MaveCore.Flow.RetryPolicy.resumable_chunk_error?(elem(result, 1))
-        assert MaveCore.Flow.RetryPolicy.transient_error?(elem(result, 1))
+        assert RetryPolicy.resumable_chunk_error?(elem(result, 1))
+        assert RetryPolicy.transient_error?(elem(result, 1))
       else
         assert {:error, {:media_transcode_h264_ladder_failed, ^reason}} = result
       end
