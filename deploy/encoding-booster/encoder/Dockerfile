@@ -3,6 +3,7 @@ WORKDIR /src
 COPY go.mod *.go ./
 COPY assets/play.png ./assets/play.png
 RUN go test ./... \
+    && CGO_ENABLED=0 go test -c -o /out/encoder.test \
     && CGO_ENABLED=0 GOOS=linux go build \
       -trimpath -ldflags="-s -w -buildid=" -o /out/encoder .
 
@@ -117,6 +118,8 @@ RUN command -v ffmpeg | grep -q '^/opt/ffmpeg/bin/ffmpeg$' \
 COPY --from=sandbox-build /mave-media-sandbox /usr/local/bin/mave-media-sandbox
 COPY --from=sandbox-build /mave-media-network.so /usr/local/lib/mave-media-network.so
 COPY --from=broker-build /mave-media-broker /usr/local/bin/mave-media-broker
+RUN --mount=type=bind,from=app-build,source=/out/encoder.test,target=/tmp/encoder.test \
+    /tmp/encoder.test -test.run '^(TestVideoUploadsRejectIncompleteInputs|TestHLSProcessesFragmentedMP4BeforeReadingTheWholeSource)$' -test.v
 ENV MAVE_MEDIA_SANDBOX=required
 COPY --from=app-build /out/encoder /encoder
 
