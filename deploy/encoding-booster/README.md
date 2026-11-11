@@ -26,6 +26,10 @@ source through FFmpeg. Requests receive short-lived, object-scoped multipart
 URLs from Core and return newline-delimited progress and completion metadata;
 the Core worker never receives or stages the media bytes.
 
+Each multipart upload part owns its bytes until the HTTP transport releases
+the request body. This requires a part-sized copy in addition to the reusable
+streaming buffer, without buffering the complete video.
+
 Short preview clips with `max_duration_seconds` between 1 and 60, and no
 explicit time range, are finalized on private booster scratch with `+faststart`
 before upload. This puts the complete sample index before the media data for

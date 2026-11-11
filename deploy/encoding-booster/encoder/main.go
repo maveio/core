@@ -1287,6 +1287,9 @@ func writeUploadEvent(encoder *json.Encoder, flusher http.Flusher, event uploadE
 }
 
 func uploadMultipartPart(ctx context.Context, partURL string, body []byte) (string, error) {
+	// The transport may still hold the request body after returning a response.
+	// Keep each part immutable when the caller refills its streaming buffer.
+	body = bytes.Clone(body)
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodPut, partURL, bytes.NewReader(body))
