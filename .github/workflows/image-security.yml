@@ -7,6 +7,7 @@ on:
     paths:
       - Dockerfile
       - deploy/encoding-booster/encoder/**
+      - .github/scripts/prepare-runner-network.sh
       - .github/workflows/image-security.yml
   schedule:
     - cron: "41 6 * * 1"
@@ -35,8 +36,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check runner DNS
-        run: timeout 15 getent ahostsv4 archive.ubuntu.com security.ubuntu.com || true
+      - name: Prepare runner DNS
+        run: bash .github/scripts/prepare-runner-network.sh
       - name: Build local image without publishing
         env:
           IMAGE_NAME: ${{ matrix.name }}
