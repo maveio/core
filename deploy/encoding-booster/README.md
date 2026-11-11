@@ -91,7 +91,9 @@ official release tarball with its SHA-256 pinned in the Dockerfile, so changing
 the version or source bytes is explicit and reviewable. The image build verifies
 the release version and all required external codecs, including actual WebP
 frame encoding and AV1-to-JPEG/H.264 decoding and transcoding in the final
-runtime image.
+runtime image. Both encoder image builds also run the complete Go encoder test
+suite against their bundled FFmpeg. The test executable is mounted only for
+the build check and is not included in the published image.
 
 Normal video uploads asynchronously hit the CPU booster's `/warmup` endpoint
 and the GPU booster's `/health` endpoint from the authorized tusd `pre-create`

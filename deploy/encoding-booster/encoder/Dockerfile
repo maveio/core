@@ -119,7 +119,7 @@ COPY --from=sandbox-build /mave-media-sandbox /usr/local/bin/mave-media-sandbox
 COPY --from=sandbox-build /mave-media-network.so /usr/local/lib/mave-media-network.so
 COPY --from=broker-build /mave-media-broker /usr/local/bin/mave-media-broker
 RUN --mount=type=bind,from=app-build,source=/out/encoder.test,target=/tmp/encoder.test \
-    /tmp/encoder.test -test.run '^(TestVideoUploadsRejectIncompleteInputs|TestHLSProcessesFragmentedMP4BeforeReadingTheWholeSource)$' -test.v
+    /tmp/encoder.test -test.v
 ENV MAVE_MEDIA_SANDBOX=required
 COPY --from=app-build /out/encoder /encoder
 

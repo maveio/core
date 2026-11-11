@@ -1,25 +1,11 @@
 *
 !Dockerfile
 !go.mod
-!main.go
-!main_test.go
-!faststart.go
-!faststart_test.go
-!hls_progress.go
-!hls_progress_test.go
-!hls_streaming_test.go
-!video_completion_test.go
-!concat_source.go
-!segment_source.go
-!segment_source_test.go
+# Keep the complete encoder source and test set in the build context.
+!*.go
 !assets/
 !assets/play.png
 
-!media_command.go
-!media_command_test.go
-!media_output.go
-!media_output_test.go
-!admission_test.go
 !sandbox/
 !sandbox/media_sandbox.c
 
