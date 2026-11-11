@@ -39,8 +39,20 @@ func TestVideoUploadsRejectIncompleteInputs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Keep the container and packet lengths intact, but corrupt a NAL length
+	// in a later fragment. A stream-copy probe can still exit successfully.
+	fixtures["invalid_nal"] = bytes.Clone(fixtures["complete"])
+	mdat := bytes.LastIndex(fixtures["invalid_nal"], []byte("mdat"))
+	if mdat < 0 || mdat+8 > len(fixtures["invalid_nal"]) {
+		t.Fatal("fixture has no media payload")
+	}
+	copy(fixtures["invalid_nal"][mdat+4:mdat+8], []byte{0x7f, 0xff, 0xff, 0xff})
 	for _, operation := range []string{"concat", "video"} {
-		for _, failure := range []string{"none", "http502", "truncated", "empty", "empty_middle"} {
+		failures := []string{"none", "http502", "truncated", "empty", "empty_middle"}
+		if operation == "concat" {
+			failures = append(failures, "invalid_nal")
+		}
+		for _, failure := range failures {
 			t.Run(operation+"/"+failure, func(t *testing.T) {
 				scratch := t.TempDir()
 				t.Setenv("BUNDLE_TEMP_DIR", scratch)
@@ -58,6 +70,8 @@ func TestVideoUploadsRejectIncompleteInputs(t *testing.T) {
 							return
 						case "empty", "empty_middle":
 							data = fixtures["empty"]
+						case "invalid_nal":
+							data = fixtures["invalid_nal"]
 						case "truncated":
 							w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 							_, _ = w.Write(data[:len(data)/2])
@@ -141,6 +155,9 @@ func TestVideoUploadsRejectIncompleteInputs(t *testing.T) {
 					}
 				} else if completed.Load() || (uploaded.Load() && !aborted.Load()) || !strings.Contains(body, `"status":"failed"`) {
 					t.Fatalf("incomplete video must abort: completed=%v aborted=%v response=%s", completed.Load(), aborted.Load(), body)
+				}
+				if failure == "invalid_nal" && (uploaded.Load() || !strings.Contains(body, "concat chunk 1 contains invalid video packets")) {
+					t.Fatalf("invalid bitstream must identify its chunk before uploading: %s", body)
 				}
 				entries, _ := os.ReadDir(scratch)
 				if len(entries) != 0 {

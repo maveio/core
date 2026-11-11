@@ -43,6 +43,11 @@ output into a remote multipart destination. Downloads use the trusted source
 client with bounded retries and a combined 16 GiB source limit per request.
 Each chunk must contain valid video packets, and the final packet count must
 equal the sum of the input counts before the multipart upload can complete.
+Chunk validation uses the concat demuxer and rejects FFmpeg error diagnostics
+even when the process exits successfully. An invalid chunk is identified by
+index so Core can discard just that cached object and regenerate it on the
+next bounded flow retry, retaining the other completed chunks. Deploy the
+updated Core client and booster together to enable this recovery behavior.
 Preparation emits heartbeats and all scratch is removed on every exit path.
 Provision at least that source allowance per concurrent concat request, plus
 space for other work. These full-length MP4s remain fragmented; the player uses

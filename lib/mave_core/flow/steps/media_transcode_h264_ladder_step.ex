@@ -512,8 +512,35 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStep do
        aggregate_booster_chunk_timings(timings, concat_timing, chunks)
        |> Map.put(:size_bytes, uploaded["file_size"])
        |> Map.put(:output_bytes, uploaded["file_size"]), uploaded}
+    else
+      {:error, reason} -> invalidate_booster_chunk(context, chunk_keys, reason)
     end
   end
+
+  defp invalidate_booster_chunk(
+         context,
+         chunk_keys,
+         {:encoding_booster_remote_failed, detail} = reason
+       )
+       when is_binary(detail) do
+    # Keep every other completed chunk. The next bounded flow retry
+    # regenerates this object instead of reusing the same bad bytes.
+    with [_, raw_index] <-
+           Regex.run(
+             ~r/\Aconcat chunk (\d+) contains (?:no valid|invalid) video packets\z/,
+             detail
+           ),
+         {index, ""} <- Integer.parse(raw_index),
+         {:ok, key} <- Enum.fetch(chunk_keys, index),
+         :ok <- context.storage_adapter.delete_object(context.bucket, key, context.region) do
+      {:error, {:encoding_booster_chunk_failed, index, reason}}
+    else
+      _ ->
+        {:error, reason}
+    end
+  end
+
+  defp invalidate_booster_chunk(_context, _chunk_keys, reason), do: {:error, reason}
 
   defp encode_booster_storage_chunks(
          context,
