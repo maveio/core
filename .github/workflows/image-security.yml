@@ -35,12 +35,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Check runner DNS
+        run: timeout 15 getent ahostsv4 archive.ubuntu.com security.ubuntu.com || true
       - name: Build local image without publishing
         env:
           IMAGE_NAME: ${{ matrix.name }}
           DOCKERFILE: ${{ matrix.dockerfile }}
           BUILD_CONTEXT: ${{ matrix.context }}
-        run: docker build --pull --file "$DOCKERFILE" --tag "mave-scan:$IMAGE_NAME" "$BUILD_CONTEXT"
+        # Use the disposable runner's network rather than Docker's DNS bridge.
+        run: docker build --network host --pull --file "$DOCKERFILE" --tag "mave-scan:$IMAGE_NAME" "$BUILD_CONTEXT"
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.75.0
