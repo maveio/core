@@ -62,6 +62,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+      apt libapt-pkg6.0t64 \
       ca-certificates libdav1d7 libgnutls30t64 libmp3lame0 libopus0 libseccomp2 \
       libsvtav1enc1d1 libwebp7 libwebpmux3 libx264-164 libx265-199 zlib1g \
     && sed -i -e '/^mozilla\/emSign_ECC_Root_CA_-_G3.crt$/s/^/!/' \
