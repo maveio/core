@@ -139,7 +139,7 @@ func TestDirectVideoUploadsPublishFaststartMP4(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := filepath.Join(t.TempDir(), "source.mp4")
-	if output, err := exec.Command(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25", "-f", "lavfi", "-i", "sine=frequency=440", "-t", "2", "-c:v", "libx264", "-threads", "1", "-c:a", "aac", source).CombinedOutput(); err != nil {
+	if output, err := exec.Command(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25", "-f", "lavfi", "-i", "sine=frequency=440", "-t", "3", "-c:v", "libx264", "-threads", "1", "-c:a", "aac", source).CombinedOutput(); err != nil {
 		t.Fatalf("generate source: %v: %s", err, output)
 	}
 	for _, codec := range []struct{ name, encoder string }{{"h264", "libx264"}, {"hevc", "libx265"}, {"av1", "libsvtav1"}} {
@@ -194,8 +194,8 @@ func TestDirectVideoUploadsPublishFaststartMP4(t *testing.T) {
 			}
 			if ffprobe, err := exec.LookPath("ffprobe"); err == nil {
 				frames, err := exec.Command(ffprobe, "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "default=nw=1:nk=1", outputPath).Output()
-				if err != nil || strings.TrimSpace(string(frames)) != "50" {
-					t.Fatalf("published video must preserve all 50 frames: %s (%v)", frames, err)
+				if err != nil || strings.TrimSpace(string(frames)) != "75" {
+					t.Fatalf("published video must preserve all 75 frames: %s (%v)", frames, err)
 				}
 			}
 			entries, _ := os.ReadDir(scratch)
