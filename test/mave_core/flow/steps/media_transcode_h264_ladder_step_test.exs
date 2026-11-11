@@ -86,18 +86,23 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStepTest do
       fixture_path = Keyword.fetch!(config, :fixture_path)
       owner = Keyword.fetch!(config, :owner)
       send(owner, {:encoding_booster_concat, input_urls})
-      {:ok, body} = File.read(fixture_path)
 
-      {:ok, _body} =
-        FlowStorageAdapterStub.put_public(
-          output_upload["test_bucket"],
-          output_upload["test_path"],
-          body,
-          output_upload["test_content_type"],
-          output_upload["test_region"]
-        )
+      if error = Keyword.get(config, :concat_error) do
+        {:error, error}
+      else
+        {:ok, body} = File.read(fixture_path)
 
-      {:ok, %{elapsed_ms: 5, size_bytes: byte_size(body), instance_id: "instance-test"}}
+        {:ok, _body} =
+          FlowStorageAdapterStub.put_public(
+            output_upload["test_bucket"],
+            output_upload["test_path"],
+            body,
+            output_upload["test_content_type"],
+            output_upload["test_region"]
+          )
+
+        {:ok, %{elapsed_ms: 5, size_bytes: byte_size(body), instance_id: "instance-test"}}
+      end
     end
   end
 
@@ -246,6 +251,95 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStepTest do
       assert length(input_paths) == 3
 
       _ = File.rm_rf(tmp_dir)
+    end
+  end
+
+  test "recovery replaces only the invalid cached chunk and reuses the remaining chunks" do
+    fixture_path =
+      Path.join(System.tmp_dir!(), "chunk-recovery-#{System.unique_integer([:positive])}")
+
+    File.write!(fixture_path, "synthetic encoded chunk")
+    on_exit(fn -> File.rm(fixture_path) end)
+
+    Application.put_env(:mave_core, :encoding_booster,
+      enabled: true,
+      fallback_enabled: true,
+      chunking_threshold_seconds: 2,
+      chunk_duration_seconds: 2
+    )
+
+    Application.put_env(:mave_core, :encoding_booster_adapter, EncodingBoosterAdapterStub)
+
+    step = %{
+      "id" => "video_h264_sd",
+      "type" => "media.transcode_h264_ladder",
+      "params" => %{"sizes" => ["sd"], "strict" => true}
+    }
+
+    context = %{
+      run_input: %{
+        "space_hash" => "tests",
+        "embed_hash" => "chunk-recovery",
+        "media_transcode_h264_ladder_mode" => "ffmpeg"
+      },
+      dependency_outputs: %{
+        "source" => %{"source_url" => "https://source.example/video.mp4"},
+        "inspect_media" => %{
+          "status" => "ok",
+          "duration" => 5.0,
+          "width" => 640,
+          "height" => 360,
+          "has_audio" => false
+        }
+      },
+      encoding_booster_dispatch: :direct
+    }
+
+    for {index, detail} <- [
+          {0, "concat chunk 0 contains invalid video packets"},
+          {1, "concat chunk 1 contains no valid video packets"},
+          {2, "concat chunk 2 contains invalid video packets"},
+          {nil, "concat chunk 3 contains invalid video packets"},
+          {nil, "concat chunk -1 contains invalid video packets"},
+          {nil, "ffmpeg concat failed"}
+        ] do
+      FlowStorageAdapterStub.reset!()
+      reason = {:encoding_booster_remote_failed, detail}
+      config = [fixture_path: fixture_path, owner: self()]
+
+      Application.put_env(
+        :mave_core,
+        :encoding_booster_adapter_stub,
+        Keyword.put(config, :concat_error, reason)
+      )
+
+      result = MediaTranscodeH264LadderStep.run(step, context)
+
+      if is_integer(index) do
+        assert {:error,
+                {:media_transcode_h264_ladder_failed,
+                 {:encoding_booster_chunk_failed, ^index, ^reason}}} = result
+
+        assert MaveCore.Flow.RetryPolicy.resumable_chunk_error?(elem(result, 1))
+        assert MaveCore.Flow.RetryPolicy.transient_error?(elem(result, 1))
+      else
+        assert {:error, {:media_transcode_h264_ladder_failed, ^reason}} = result
+      end
+
+      for _ <- 0..2, do: assert_receive({:encoding_booster_request, _, _})
+      assert_receive {:encoding_booster_concat, urls}
+      assert length(urls) == 3
+
+      Application.put_env(:mave_core, :encoding_booster_adapter_stub, config)
+      assert {:ok, _, _} = MediaTranscodeH264LadderStep.run(step, context)
+
+      if is_integer(index) do
+        assert_receive {:encoding_booster_request, _, options}
+        assert options[:start_seconds] == index * 2.0
+      end
+
+      refute_receive {:encoding_booster_request, _, _}
+      assert_receive {:encoding_booster_concat, ^urls}
     end
   end
 
@@ -898,7 +992,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStepTest do
     step_definition = %{
       "id" => "video_h264_ladder",
       "type" => "media.transcode_h264_ladder",
-      "params" => %{"sizes" => ["sd"]}
+      "params" => %{"sizes" => ["sd"], "strict" => true}
     }
 
     context = %{
@@ -938,7 +1032,7 @@ defmodule MaveCore.Flow.Steps.MediaTranscodeH264LadderStepTest do
     step_definition = %{
       "id" => "video_h264_ladder",
       "type" => "media.transcode_h264_ladder",
-      "params" => %{"sizes" => ["sd"]}
+      "params" => %{"sizes" => ["sd"], "strict" => true}
     }
 
     context = %{
