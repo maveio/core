@@ -70,16 +70,18 @@ func TestVideoUploadsRejectIncompleteInputs(t *testing.T) {
 				if operation == "concat" {
 					segmentTestSourceClient(t, source.Client())
 				}
-				// Trust only this fixture certificate in FFmpeg's OpenSSL build.
+				// Trust only this fixture certificate in both TLS backends.
 				certificate := filepath.Join(t.TempDir(), "source.pem")
 				if err := os.WriteFile(certificate, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: source.Certificate().Raw}), 0600); err != nil {
 					t.Fatal(err)
 				}
-				// mediaCommand deliberately strips environment variables. Set this
-				// test-only CA after that boundary without changing production TLS.
+				// mediaCommand deliberately strips environment variables. Pass the
+				// test CA explicitly for HTTPS inputs; GnuTLS does not use SSL_CERT_FILE.
 				wrapperDir := t.TempDir()
 				quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
-				wrapper := "#!/bin/sh\nexport SSL_CERT_FILE=" + quote(certificate) + "\nexec " + quote(ffmpeg) + " \"$@\"\n"
+				wrapper := "#!/bin/sh\nfor arg do\ncase \"$arg\" in\nhttps://*) exec " +
+					quote(ffmpeg) + " -tls_verify 1 -ca_file " + quote(certificate) + " \"$@\" ;;\nesac\ndone\nexec " +
+					quote(ffmpeg) + " \"$@\"\n"
 				if err := os.WriteFile(filepath.Join(wrapperDir, "ffmpeg"), []byte(wrapper), 0700); err != nil {
 					t.Fatal(err)
 				}
