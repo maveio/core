@@ -598,11 +598,42 @@ defmodule MaveCore.Embeds do
           audio_only?
         ),
       audio_tracks: audio_tracks,
+      audio_descriptions:
+        audio_descriptions_for(space, video_embed, current_video, current_version),
       subtitles: subtitles_for(space, video_embed, current_video, current_version),
       renditions: renditions_for(current_video, flow_run),
       flow: flow_summary_for(flow_run)
     }
   end
+
+  defp audio_descriptions_for(_space, _embed, nil, _version), do: []
+
+  defp audio_descriptions_for(%Space{} = space, %Embed{} = embed, %Video{id: video_id}, version) do
+    bucket = Storage.bucket_for_space(space.hash, space.region)
+
+    video_id
+    |> MaveCore.Assets.list_audio_descriptions()
+    |> Enum.map(fn description ->
+      serialized =
+        ManifestPublisher.serialize_audio_description(description, bucket, embed.hash, version)
+
+      %{
+        id: description.id,
+        language: description.language,
+        label:
+          description.label || Languages.spoken_language(description.language) ||
+            String.upcase(description.language),
+        default: false,
+        codec: "mp3",
+        mp3_url: get_in(serialized, ["audio", "path"]),
+        hls_playlist: get_in(serialized, ["audio", "hls_playlist"]),
+        vtt_url: get_in(serialized, ["vtt", "path"]),
+        cue_count: description.cue_count
+      }
+    end)
+  end
+
+  defp audio_descriptions_for(_space, _embed, _video, _version), do: []
 
   defp dashboard_payload_analytics(payload) do
     %{

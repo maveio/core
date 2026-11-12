@@ -31,7 +31,8 @@ defmodule MaveCore.Flow.Presets do
        "name" => "Publish Default",
        "description" =>
          "Encoder-compatible default publish flow with upload, transcode, manifest, and webhook steps.",
-       "definition" => publish_default_definition() |> with_audio_peaks()
+       "definition" =>
+         publish_default_definition() |> with_audio_peaks() |> with_audio_description()
      }
      |> maybe_override_preset("publish_default")}
   end
@@ -43,7 +44,8 @@ defmodule MaveCore.Flow.Presets do
        "name" => "Publish Local",
        "description" =>
          "Lighter local-development publish flow that skips heavy codec variants while still producing a manifest.",
-       "definition" => publish_local_definition() |> with_audio_peaks()
+       "definition" =>
+         publish_local_definition() |> with_audio_peaks() |> with_audio_description()
      }
      |> maybe_override_preset("publish_local")}
   end
@@ -83,7 +85,10 @@ defmodule MaveCore.Flow.Presets do
         step -> step
       end)
 
-    definition |> Map.put("steps", durable_steps) |> with_audio_peaks()
+    definition
+    |> Map.put("steps", durable_steps)
+    |> with_audio_peaks()
+    |> with_audio_description()
   end
 
   defp with_audio_peaks(definition) do
@@ -102,6 +107,46 @@ defmodule MaveCore.Flow.Presets do
             }
           ])
     )
+  end
+
+  # A single original-language track is generated in the background.
+  defp with_audio_description(definition) do
+    steps = [
+      background_step("detect_scenes", "media.detect_scenes", "Detect Scenes", ["inspect_media"]),
+      background_step("describe_video", "ai.describe_video", "Describe Video", [
+        "detect_scenes",
+        "transcribe_audio",
+        "transcode_audio"
+      ]),
+      background_step(
+        "speak_descriptions_original",
+        "ai.speak_descriptions",
+        "Speak Descriptions",
+        ["describe_video"],
+        %{"language" => "original", "source_step_id" => "describe_video"}
+      ),
+      background_step(
+        "mix_audio_description_original",
+        "media.mix_audio_description",
+        "Mix Audio Description",
+        ["speak_descriptions_original", "transcode_audio"],
+        %{"language" => "original", "source_step_id" => "speak_descriptions_original"}
+      )
+    ]
+
+    Map.update!(definition, "steps", &(&1 ++ steps))
+  end
+
+  defp background_step(id, type, name, depends_on, params \\ nil) do
+    %{
+      "id" => id,
+      "type" => type,
+      "name" => name,
+      "depends_on" => depends_on,
+      "lane" => "background",
+      "required" => false
+    }
+    |> then(fn step -> if params, do: Map.put(step, "params", params), else: step end)
   end
 
   defp maybe_override_preset(preset, slug) do

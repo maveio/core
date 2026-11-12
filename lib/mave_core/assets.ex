@@ -5,7 +5,7 @@ defmodule MaveCore.Assets do
 
   import Ecto.Query, warn: false
 
-  alias MaveCore.Assets.{AudioTrack, Subtitle, Video}
+  alias MaveCore.Assets.{AudioDescription, AudioTrack, Subtitle, Video}
   alias MaveCore.Embeds
   alias MaveCore.Embeds.{Embed, ManifestPublisher, SettingsSerializer}
   alias MaveCore.EncodingBooster
@@ -13,6 +13,7 @@ defmodule MaveCore.Assets do
   alias MaveCore.Flow.Steps.{
     MediaBuildHlsMasterStep,
     MediaExtractFrameStep,
+    MediaMixAudioDescriptionStep,
     MediaPackageHlsAudioStep
   }
 
@@ -170,6 +171,148 @@ defmodule MaveCore.Assets do
 
   def delete_audio_track(%AudioTrack{} = track) do
     Repo.delete(track)
+  end
+
+  def get_audio_description_for_embed(id, %Embed{} = embed) when is_binary(id) do
+    embed = Repo.preload(embed, :asset)
+    video_id = embed.asset && embed.asset.current_video_id
+
+    if is_binary(video_id) do
+      AudioDescription
+      |> where([description], is_nil(description.deleted_at))
+      |> Repo.get_by(id: id, video_id: video_id)
+    end
+  end
+
+  def get_audio_description_for_embed(_, _), do: nil
+
+  def update_audio_description_outputs(%Embed{} = embed, id, attrs) do
+    case get_audio_description_for_embed(id, embed) do
+      nil ->
+        {:error, :audio_description_not_found}
+
+      description ->
+        attrs = Map.take(attrs, [:label, :language]) |> Map.put(:user_managed, true)
+
+        with {:ok, updated} <- description |> AudioDescription.changeset(attrs) |> Repo.update(),
+             :ok <- refresh_audio_outputs(embed) do
+          {:ok, updated}
+        end
+    end
+  end
+
+  def delete_audio_description_outputs(%Embed{} = embed, id) do
+    case get_audio_description_for_embed(id, embed) do
+      nil ->
+        {:error, :audio_description_not_found}
+
+      description ->
+        with {:ok, deleted} <-
+               description
+               |> AudioDescription.changeset(%{
+                 deleted_at: DateTime.utc_now(),
+                 user_managed: true
+               })
+               |> Repo.update(),
+             :ok <- refresh_audio_outputs(embed) do
+          {:ok, deleted}
+        end
+    end
+  end
+
+  def ingest_uploaded_audio_description(%Embed{} = embed, attrs, source_bucket, source_key) do
+    embed = Repo.preload(embed, [:space, asset: [:current_video]])
+    id = Map.get(attrs, "audio_track_id")
+
+    target =
+      if id in [nil, ""],
+        do: %AudioDescription{},
+        else: get_audio_description_for_embed(id, embed)
+
+    with %Video{} = video <- embed.asset && embed.asset.current_video,
+         %AudioDescription{} = description <- target,
+         {:ok, original_name} <- require_binary(attrs["filename"], :filename),
+         filename =
+           "audio_description_upload_#{Ecto.UUID.generate()}_#{Path.rootname(Path.basename(original_name))}.mp3",
+         region = embed.space.region || "default",
+         changeset =
+           AudioDescription.changeset(description, %{
+             video_id: video.id,
+             language: attrs["language"],
+             label: blank_to_nil(attrs["label"]),
+             audio_filename: filename,
+             audio_file_size: attrs["file_size"],
+             vtt_filename: nil,
+             vtt_file_size: nil,
+             cue_count: nil,
+             ducked_cue_count: nil,
+             user_managed: true
+           }),
+         {:ok, candidate} <- Ecto.Changeset.apply_action(changeset, :insert),
+         {:ok, copied} <-
+           copy_audio_source(
+             embed,
+             filename,
+             source_bucket,
+             source_key,
+             attrs,
+             region,
+             upload_source_storage_profile()
+           ),
+         {:ok, %{"status" => "ok"}} <-
+           package_audio_track(
+             embed,
+             %AudioTrack{
+               id: candidate.id || Ecto.UUID.generate(),
+               label: AudioDescription.display_label(candidate),
+               language: candidate.language,
+               default: false,
+               filename: filename,
+               codec: "mp3"
+             },
+             copied,
+             region
+           ),
+         {:ok, saved} <- Repo.insert_or_update(changeset),
+         :ok <- refresh_audio_outputs(embed) do
+      {:ok, saved}
+    else
+      nil -> {:error, :audio_description_not_found}
+      {:error, _} = error -> error
+      {:ok, output} -> {:error, {:audio_description_packaging_failed, output["status"]}}
+    end
+  end
+
+  def ingest_uploaded_audio_description_vtt(%Embed{} = embed, attrs, source_bucket, source_key) do
+    embed = Repo.preload(embed, [:space, asset: [:current_video]])
+    storage = storage_adapter()
+    region = embed.space.region || "default"
+    filename = "descriptions_upload_#{Ecto.UUID.generate()}.vtt"
+    key = audio_source_key(embed.hash, Embeds.current_video_version(embed), filename)
+    bucket = Storage.bucket_for_space(embed.space.hash, region)
+
+    with %AudioDescription{} = description <-
+           get_audio_description_for_embed(attrs["subtitle_id"], embed),
+         {:ok, body} <- storage.get(source_bucket, source_key, upload_source_storage_profile()),
+         true <-
+           is_binary(body) and String.valid?(body) and
+             String.starts_with?(String.trim_leading(body, "\uFEFF"), "WEBVTT"),
+         {:ok, _} <- storage.put_public(bucket, key, body, "text/vtt", region),
+         {:ok, saved} <-
+           description
+           |> AudioDescription.changeset(%{
+             vtt_filename: filename,
+             vtt_file_size: byte_size(body),
+             user_managed: true
+           })
+           |> Repo.update(),
+         :ok <- refresh_audio_outputs(embed) do
+      {:ok, saved}
+    else
+      nil -> {:error, :audio_description_not_found}
+      false -> {:error, :invalid_vtt}
+      {:error, _} = error -> error
+    end
   end
 
   def ingest_uploaded_thumbnail(%Embed{} = embed, source_bucket, source_key, attrs \\ %{})
@@ -1036,6 +1179,12 @@ defmodule MaveCore.Assets do
               "status" => "ok",
               "audio_tracks" => audio_tracks
             }},
+           {"hls_audio_descriptions",
+            %{
+              "step_type" => "media.mix_audio_description",
+              "status" => "ok",
+              "audio_tracks" => hls_audio_descriptions(embed)
+            }},
            {"hls_subtitles",
             %{
               "step_type" => "subtitle.collect",
@@ -1222,6 +1371,33 @@ defmodule MaveCore.Assets do
       }
     end)
   end
+
+  defp hls_audio_descriptions(%Embed{} = embed) do
+    embed.asset.current_video.id
+    |> list_audio_descriptions()
+    |> Enum.map(fn description ->
+      %{
+        "id" => "audio_description_#{description.id}",
+        "label" => AudioDescription.display_label(description),
+        "language" => description.language,
+        "default" => false,
+        "hls_playlist" => AudioDescription.hls_playlist(description),
+        "hls_bandwidth" => @audio_hls_bandwidth,
+        "hls_channels" => @audio_hls_channels,
+        "characteristics" => MediaMixAudioDescriptionStep.characteristics()
+      }
+    end)
+  end
+
+  @doc "Audio descriptions of a video version, by language."
+  def list_audio_descriptions(video_id) when is_binary(video_id) do
+    AudioDescription
+    |> where([description], description.video_id == ^video_id and is_nil(description.deleted_at))
+    |> order_by([description], asc: description.language)
+    |> Repo.all()
+  end
+
+  def list_audio_descriptions(_video_id), do: []
 
   defp hls_subtitles(%Embed{} = embed) do
     version = Embeds.current_video_version(embed)

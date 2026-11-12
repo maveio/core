@@ -4,10 +4,11 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
 
   alias MaveCore.Accounts
   alias MaveCore.Assets
-  alias MaveCore.Assets.{Asset, AudioTrack, Subtitle, Video}
+  alias MaveCore.Assets.{Asset, AudioDescription, AudioTrack, Rendition, Subtitle, Video}
   alias MaveCore.Collections.CollectionEmbed
   alias MaveCore.Embeds
   alias MaveCore.Embeds.Embed
+  alias MaveCore.Embeds.ManifestPublisher
   alias MaveCore.Embeds.SettingsSerializer
   alias MaveCore.Flow
   alias MaveCore.Flow.Run
@@ -1461,6 +1462,185 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
       assert {:ok, []} =
                FlowStorageAdapterStub.list_prefix_keys("space-#{space.hash}", "", space.region)
     end
+  end
+
+  @tag :tmp_dir
+  test "audio description uploads support duplicate languages and replacement", %{
+    conn: conn,
+    tmp_dir: tmp_dir
+  } do
+    space = space_fixture()
+    embed = video_embed_fixture(space, %{name: "Uploaded descriptions"})
+    asset = Repo.get!(Asset, embed.asset_id)
+
+    Repo.insert!(%Rendition{
+      video_id: asset.current_video_id,
+      rendition_key: "#{embed.hash}/h264_hd_hls/playlist.m3u8",
+      type: :video,
+      codec: :h264,
+      container: :hls,
+      size: :hd,
+      progress: 100.0
+    })
+
+    path = Path.join(tmp_dir, "description.mp3")
+
+    {_, 0} =
+      System.cmd(
+        "ffmpeg",
+        ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=duration=1", "-c:a", "libmp3lame", path],
+        stderr_to_stdout: true
+      )
+
+    body = File.read!(path)
+
+    upload = fn name, extra ->
+      key = "uploads/#{name}.mp3"
+
+      {:ok, _} =
+        FlowStorageAdapterStub.put("mave-upload", key, body, "audio/mpeg", @upload_source_region)
+
+      response =
+        post(recycle(conn), ~p"/internal/upload-hooks/tusd?secret=hook_secret", %{
+          "Type" => "post-finish",
+          "Event" => %{
+            "Upload" => %{
+              "ID" => name,
+              "Size" => byte_size(body),
+              "MetaData" =>
+                upload_metadata(
+                  embed,
+                  Map.merge(
+                    %{
+                      "custom_audio_track" => "true",
+                      "audio_description" => "true",
+                      "label" => name,
+                      "language" => "en",
+                      "filetype" => "audio/mpeg"
+                    },
+                    extra
+                  )
+                ),
+              "Storage" => %{"Bucket" => "mave-upload", "Key" => key}
+            }
+          }
+        })
+
+      json_response(response, 200)["audio_track_id"]
+    end
+
+    first_id = upload.("first-description", %{})
+    second_id = upload.("second-description", %{})
+    assert first_id != second_id
+    first = Repo.get!(AudioDescription, first_id)
+    assert first.language == "en"
+    assert first.user_managed
+    assert first.vtt_filename == nil
+    assert first.generation_language == nil
+
+    first |> Ecto.Changeset.change(vtt_filename: "old.vtt") |> Repo.update!()
+    assert upload.("replacement", %{"audio_track_id" => first_id, "language" => "nl"}) == first_id
+    replaced = Repo.get!(AudioDescription, first_id)
+    assert replaced.language == "nl"
+    assert replaced.label == "replacement"
+    assert replaced.vtt_filename == nil
+    {:ok, manifest} = ManifestPublisher.current(embed)
+
+    assert Enum.any?(
+             manifest["audio_descriptions"],
+             &(&1["label"] == "replacement (audio description)")
+           )
+
+    {:ok, playlist} =
+      FlowStorageAdapterStub.get(
+        "space-#{space.hash}",
+        "#{embed.hash}/playlist.m3u8",
+        space.region
+      )
+
+    assert playlist =~ "public.accessibility.describes-video"
+
+    vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nA blue square appears.\n"
+
+    {:ok, _} =
+      FlowStorageAdapterStub.put(
+        "mave-upload",
+        "description.vtt",
+        vtt,
+        "text/vtt",
+        @upload_source_region
+      )
+
+    response =
+      post(recycle(conn), ~p"/internal/upload-hooks/tusd?secret=hook_secret", %{
+        "Type" => "post-finish",
+        "Event" => %{
+          "Upload" => %{
+            "ID" => "description-vtt",
+            "Size" => byte_size(vtt),
+            "MetaData" =>
+              upload_metadata(embed, %{
+                "custom_subtitle" => "true",
+                "audio_description" => "true",
+                "subtitle_id" => first_id,
+                "filetype" => "text/vtt"
+              }),
+            "Storage" => %{"Bucket" => "mave-upload", "Key" => "description.vtt"}
+          }
+        }
+      })
+
+    assert json_response(response, 200)["subtitle_id"] == first_id
+    with_vtt = Repo.get!(AudioDescription, first_id)
+    assert with_vtt.vtt_file_size == byte_size(vtt)
+
+    assert {:ok, ^vtt} =
+             FlowStorageAdapterStub.get(
+               "space-#{space.hash}",
+               "#{embed.hash}/#{with_vtt.vtt_filename}",
+               space.region
+             )
+
+    assert {:ok, replaced_vtt} =
+             Assets.ingest_uploaded_audio_description_vtt(
+               embed,
+               %{"subtitle_id" => first_id},
+               "mave-upload",
+               "description.vtt"
+             )
+
+    refute replaced_vtt.vtt_filename == with_vtt.vtt_filename
+
+    {:ok, _} =
+      FlowStorageAdapterStub.put(
+        "mave-upload",
+        "invalid.vtt",
+        "not VTT",
+        "text/vtt",
+        @upload_source_region
+      )
+
+    assert {:error, :invalid_vtt} =
+             Assets.ingest_uploaded_audio_description_vtt(
+               embed,
+               %{"subtitle_id" => first_id},
+               "mave-upload",
+               "invalid.vtt"
+             )
+
+    other = video_embed_fixture(space, %{name: "Other description video"})
+
+    assert {:error, :audio_description_not_found} =
+             Assets.ingest_uploaded_audio_description_vtt(
+               other,
+               %{"subtitle_id" => first_id},
+               "mave-upload",
+               "description.vtt"
+             )
+
+    assert {:ok, _} = Assets.delete_audio_description_outputs(embed, first_id)
+    assert Repo.get!(AudioDescription, first_id).deleted_at
+    assert Assets.get_audio_description_for_embed(first_id, embed) == nil
   end
 
   test "custom audio track uploads create an audio track and package hls audio", %{conn: conn} do
