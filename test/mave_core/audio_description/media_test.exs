@@ -136,6 +136,59 @@ defmodule MaveCore.AudioDescription.MediaTest do
       refute "orig.mp3" in args
       assert Enum.any?(args, &(&1 =~ "apad=whole_dur=12.500"))
     end
+
+    @tag :integration
+    test "background audio fades down and back up around narration in a speech pause" do
+      dir = Path.join(System.tmp_dir!(), "ad-mix-fades-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf(dir) end)
+      original = Path.join(dir, "background.wav")
+      description = Path.join(dir, "description.pcm")
+      output = Path.join(dir, "mixed.mp3")
+
+      {_, 0} =
+        System.cmd("ffmpeg", [
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=frequency=330:duration=3",
+          original
+        ])
+
+      File.write!(description, :binary.copy(<<0, 0>>, 3 * Wav.sample_rate()))
+
+      {_, 0} =
+        System.cmd(
+          "ffmpeg",
+          Mix.ffmpeg_args(original, description, output, [%{start: 1.0, end: 2.0}], 3.0)
+        )
+
+      {pcm, 0} =
+        System.cmd("ffmpeg", [
+          "-v",
+          "error",
+          "-i",
+          output,
+          "-f",
+          "s16le",
+          "-ac",
+          "1",
+          "-ar",
+          "24000",
+          "pipe:1"
+        ])
+
+      reference = rms(pcm, 0.4, 0.1)
+      assert_in_delta rms(pcm, 1.4, 0.1) / reference, Mix.duck_volume(), 0.03
+      fade_down = rms(pcm, 0.84, 0.02) / reference
+      fade_up = rms(pcm, 2.14, 0.02) / reference
+      assert fade_down > 0.4 and fade_down < 0.8
+      assert fade_up > 0.4 and fade_up < 0.8
+      assert_in_delta rms(pcm, 2.5, 0.1) / reference, 1.0, 0.03
+      assert_in_delta byte_size(pcm) / (2 * Wav.sample_rate()), 3.0, 0.03
+    end
   end
 
   describe "Prompts" do
@@ -166,5 +219,11 @@ defmodule MaveCore.AudioDescription.MediaTest do
         byte_size(data)::little-32, data::binary>>
 
     <<"RIFF", byte_size(body)::little-32, body::binary>>
+  end
+
+  defp rms(pcm, start, duration) do
+    bytes = binary_part(pcm, round(start * 24_000) * 2, round(duration * 24_000) * 2)
+    squares = for <<sample::little-signed-16 <- bytes>>, do: sample * sample
+    :math.sqrt(Enum.sum(squares) / length(squares))
   end
 end

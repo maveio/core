@@ -2,9 +2,9 @@ defmodule MaveCore.AudioDescription.Mix do
   @moduledoc """
   FFmpeg arguments that mix the video's own audio with the description track.
 
-  The original audio fades to `duck_volume` (20%) under every description that
-  plays over speech, with `fade` (0.3 s) ramps; descriptions in pauses leave it
-  untouched. The result is a 48 kHz stereo MP3 as long as the original audio.
+  The original audio fades to `duck_volume` (20%) under every description,
+  including background music in speech pauses, with `fade` (0.3 s) ramps.
+  The result is a 48 kHz stereo MP3 as long as the original audio.
   """
 
   alias MaveCore.AudioDescription.Wav

@@ -1,7 +1,7 @@
 defmodule MaveCore.Flow.Steps.MediaMixAudioDescriptionStep do
   @moduledoc """
   Builds the audio description of one language: places the spoken clips on the
-  timeline (in a pause, or over speech with the original ducked to 20%), mixes
+  timeline, lowers the original audio to 20% during each description with fades, mixes
   them with the video's own audio into `audio_description_<lang>.mp3`, writes
   `descriptions_<lang>.vtt` timed to when each description is spoken, and
   packages the MP3 as an HLS audio rendition marked
@@ -101,7 +101,7 @@ defmodule MaveCore.Flow.Steps.MediaMixAudioDescriptionStep do
            {:ok, output_path} <- StepSupport.tmp_file_path(dir, "mix", "mp3"),
            pcm = Wav.render(timeline.placements, timeline.total_samples, &elem(clips, &1)),
            :ok <- StepSupport.write_tmp_file(description_path, pcm),
-           build = &Mix.ffmpeg_args(&1, description_path, output_path, timeline.ducks, duration),
+           build = &Mix.ffmpeg_args(&1, description_path, output_path, timeline.cues, duration),
            :ok <- run_mix(ctx, dir, build, progress),
            {:ok, %{size: size}} <- MaveCore.SafeFile.stat_regular(output_path),
            {:ok, _} <-

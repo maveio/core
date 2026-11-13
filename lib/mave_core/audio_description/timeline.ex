@@ -325,7 +325,7 @@ defmodule MaveCore.AudioDescription.Timeline do
     stop = start + seconds
     overlaps? = Enum.any?(speech, &(start < &1.end and &1.start < stop))
 
-    allow_ducking? = cue[:allow_ducking] == true and cue[:priority] == 3
+    allow_ducking? = allowed_ducking?(cue, speech, start, stop)
 
     if stop <= min(window.end, duration - 0.3) + @epsilon and (not overlaps? or allow_ducking?) do
       put_placement(state, cue, index, length, start, seconds, sample_rate, overlaps?)
@@ -345,6 +345,19 @@ defmodule MaveCore.AudioDescription.Timeline do
       start -> put_placement(state, cue, index, length, start, seconds, sample_rate, false)
     end
   end
+
+  defp allowed_ducking?(%{allow_ducking: true, priority: 3}, _speech, _start, _stop), do: true
+
+  defp allowed_ducking?(%{allow_ducking: true, priority: 2}, speech, start, stop) do
+    overlap =
+      Enum.reduce(speech, 0.0, fn interval, total ->
+        total + max(0.0, min(stop, interval.end) - max(start, interval.start))
+      end)
+
+    overlap <= min(0.8, (stop - start) / 4) + @epsilon
+  end
+
+  defp allowed_ducking?(_cue, _speech, _start, _stop), do: false
 
   # 1. A pause near the cue, within its scene, that holds the whole clip.
   defp pause_start(cue, seconds, gaps, cursor, scene_start, latest_start) do

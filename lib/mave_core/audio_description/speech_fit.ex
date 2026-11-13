@@ -9,7 +9,6 @@ defmodule MaveCore.AudioDescription.SpeechFit do
     :invalid_description_rewrite
   ]
   @max_speedup 1.15
-  @max_words_per_second 3.5
 
   def fit(cue, speak, rewrite, opts \\ [])
 
@@ -30,7 +29,8 @@ defmodule MaveCore.AudioDescription.SpeechFit do
     budget = window.end - window.start
 
     with true <- required_text_present?(cue, cue.text),
-         {:ok, prepared, remaining} <- prepare(cue, budget, rewrite, opts[:estimate], 2),
+         {:ok, prepared, remaining} <-
+           prepare(cue, preparation_budget(cue, budget), rewrite, opts[:estimate], 2),
          {:ok, clip} <- speak.(prepared.text, :moderate) do
       accept_or_shorten(cue, prepared, clip, budget, speak, rewrite, remaining)
     else
@@ -40,16 +40,45 @@ defmodule MaveCore.AudioDescription.SpeechFit do
   end
 
   defp accept_or_shorten(cue, prepared, clip, budget, speak, rewrite, remaining) do
-    if fits?(prepared.text, clip, budget) do
-      adjustment = if prepared.text == cue.text, do: "original", else: "shortened"
-      {:ok, prepared, clip, adjustment}
-    else
-      shorten(prepared, clip, budget, speak, rewrite, remaining)
+    adjustment = if prepared.text == cue.text, do: "original", else: "shortened"
+
+    cond do
+      fits?(prepared.text, clip, budget) ->
+        {:ok, prepared, clip, adjustment}
+
+      fits_extension?(prepared, clip) ->
+        fitted =
+          prepared |> Map.put(:window, prepared.duck_window) |> Map.put(:allow_ducking, true)
+
+        {:ok, fitted, clip, adjustment}
+
+      true ->
+        shorten(prepared, clip, budget, speak, rewrite, remaining)
     end
   end
 
-  defp ducking_fallback(%{priority: 3, duck_window: window} = cue, speak, rewrite, reason, opts)
-       when reason in ["no_safe_time", "no_fitting_rewrite", "speech_too_long"] do
+  # Useful descriptions may finish across a short pause boundary. Use their
+  # reserved extension before rewriting a complete, naturally spoken sentence.
+  defp preparation_budget(%{priority: 2, window: window, duck_window: extra}, budget)
+       when extra.start == window.start,
+       do: max(budget, extra.end - extra.start)
+
+  defp preparation_budget(_cue, budget), do: budget
+
+  defp fits_extension?(%{priority: 2, window: window, duck_window: extra} = cue, clip),
+    do: extra.start == window.start and fits?(cue.text, clip, extra.end - extra.start)
+
+  defp fits_extension?(_cue, _clip), do: false
+
+  defp ducking_fallback(
+         %{priority: priority, duck_window: window} = cue,
+         speak,
+         rewrite,
+         reason,
+         opts
+       )
+       when priority in [2, 3] and
+              reason in ["no_safe_time", "no_fitting_rewrite", "speech_too_long"] do
     fallback =
       cue
       |> Map.put(:window, window)
@@ -212,7 +241,9 @@ defmodule MaveCore.AudioDescription.SpeechFit do
   end
 
   defp valid_rewrite?(cue, text, max_words) do
-    text != "" and word_count(text) <= max_words and
+    # The word target estimates timing, not grammar. Let a complete phrase keep
+    # its articles/prepositions; synthesized duration remains the hard limit.
+    text != "" and word_count(text) <= max(max_words, word_count(cue.text)) and
       MapSet.subset?(numbers(cue.text), numbers(text)) and required_text_present?(cue, text)
   end
 
@@ -276,9 +307,11 @@ defmodule MaveCore.AudioDescription.SpeechFit do
     end
   end
 
-  defp fits?(text, clip, budget) do
+  defp fits?(_text, clip, budget) do
     duration = seconds(clip)
-    duration > 0 and duration <= budget and word_count(text) / duration <= @max_words_per_second
+    # Written word counts vary by language and do not measure delivery speed.
+    # Natural synthesis is accepted on duration; requested speedups stay capped.
+    duration > 0 and duration <= budget
   end
 
   defp seconds(clip), do: byte_size(clip) / (2 * Wav.sample_rate())

@@ -38,7 +38,7 @@ defmodule MaveCore.AudioDescription.Budget do
     floor(min(available, duration * density) * 2.5)
   end
 
-  @doc "Reserve speech pauses first and optional last-resort ducking windows for essential information."
+  @doc "Reserve pauses, bounded extensions for useful cues, and essential ducking fallbacks."
   def allocate(cues, speech, duration, category) do
     cues = bound_events(cues, duration)
     gaps = available_gaps(speech, duration)
@@ -48,7 +48,7 @@ defmodule MaveCore.AudioDescription.Budget do
       cues
       |> Enum.with_index()
       |> Enum.sort_by(fn {cue, index} ->
-        {-priority(cue), if(cue[:kind] == "text", do: 0, else: 1), index}
+        allocation_order(cue, index)
       end)
       |> Enum.reduce({[], [], gaps, limit}, fn {cue, index},
                                                {accepted, rejected, free, remaining} ->
@@ -72,7 +72,7 @@ defmodule MaveCore.AudioDescription.Budget do
         end
       end)
 
-    {planned, fallback_rejected} = add_fallbacks(accepted, duration)
+    {planned, fallback_rejected} = add_fallbacks(accepted, speech, duration)
 
     %{
       cues: Enum.sort_by(planned, fn cue -> (cue[:window] || cue[:duck_window]).start end),
@@ -90,7 +90,7 @@ defmodule MaveCore.AudioDescription.Budget do
     |> Enum.with_index()
     |> Enum.map(fn {cue, index} ->
       next = sorted |> Enum.drop(index + 1) |> Enum.find(&(rank(&1) >= rank(cue)))
-      next_start = if next, do: max(cue.start, next.start - 0.5), else: duration
+      next_start = if next, do: max(cue.start, next.start - @breath), else: duration
       scene = event_bounds(cue, duration)
 
       Map.put(cue, :scene, %{
@@ -108,16 +108,16 @@ defmodule MaveCore.AudioDescription.Budget do
 
   defp event_bounds(cue, duration), do: Map.get(cue, :scene, %{start: 0.0, end: duration})
 
-  defp add_fallbacks(accepted, duration) do
+  defp add_fallbacks(accepted, speech, duration) do
     accepted
     |> Enum.sort_by(fn {index, cue} ->
-      {-priority(cue), if(cue[:kind] == "text", do: 0, else: 1), index}
+      allocation_order(cue, index)
     end)
-    |> Enum.reduce({[], [], []}, &add_fallback(&1, accepted, duration, &2))
+    |> Enum.reduce({[], [], []}, &add_fallback(&1, accepted, speech, duration, &2))
     |> then(fn {planned, rejected, _} -> {planned, Enum.reverse(rejected)} end)
   end
 
-  defp add_fallback({index, cue}, accepted, duration, {planned, rejected, reserved}) do
+  defp add_fallback({index, cue}, accepted, speech, duration, {planned, rejected, reserved}) do
     free =
       Enum.reduce(accepted, [%{start: @start_margin, end: max(0.0, duration - @end_margin)}], fn
         {^index, _}, gaps -> gaps
@@ -127,14 +127,7 @@ defmodule MaveCore.AudioDescription.Budget do
 
     free = Enum.reduce(reserved, free, &subtract(&2, &1))
 
-    fallback =
-      if priority(cue) == 3,
-        do:
-          reserve_window(
-            cue,
-            free,
-            min(4.0, max(1.2, Cues.estimate_speech_seconds(cue.text) * 1.5))
-          )
+    fallback = fallback_window(cue, free, speech)
 
     cue = if fallback, do: Map.put(cue, :duck_window, fallback), else: cue
 
@@ -146,10 +139,62 @@ defmodule MaveCore.AudioDescription.Budget do
     end
   end
 
+  defp fallback_window(%{priority: 3} = cue, free, _speech),
+    do:
+      reserve_window(cue, free, min(4.0, max(1.2, Cues.estimate_speech_seconds(cue.text) * 1.5)))
+
+  defp fallback_window(%{priority: 2, window: %{start: start, end: stop}} = cue, free, speech) do
+    # Start in the existing pause and borrow at most 0.8 seconds of dialogue,
+    # with at least three times that much speech-free room. Never cross events.
+    allowance = min(0.8, (stop - start) / 3)
+    ceiling = min(cue.scene.end, start + @max_slot)
+    ceiling = overlap_deadline(speech, start, ceiling, allowance)
+    candidate = %{cue | start: start, scene: %{start: start, end: ceiling}}
+
+    case reserve_window(candidate, free, @max_slot) do
+      %{start: ^start, end: extended_end} = window when extended_end > stop -> window
+      _ -> nil
+    end
+  end
+
+  defp fallback_window(_cue, _free, _speech), do: nil
+
+  defp overlap_deadline(speech, start, stop, allowance) do
+    Enum.reduce_while(speech, allowance, fn interval, remaining ->
+      overlap_start = max(start, interval.start)
+      overlap = max(0.0, min(stop, interval.end) - overlap_start)
+
+      if overlap > remaining,
+        do: {:halt, {:deadline, overlap_start + remaining}},
+        else: {:cont, remaining - overlap}
+    end)
+    |> case do
+      {:deadline, deadline} -> deadline
+      _remaining -> stop
+    end
+  end
+
   def rejection(cue, reason),
     do: %{"text" => cue.text, "reason" => reason, "priority" => Map.get(cue, :priority, 2)}
 
-  defp rank(cue), do: {priority(cue), if(cue[:kind] == "text", do: 1, else: 0)}
+  defp allocation_order(cue, index) do
+    {importance, kind} = rank(cue)
+    {-importance, -kind, index}
+  end
+
+  # Essential messages still lead; otherwise a meaningful action must not lose
+  # its event window to a competing label or a description of the background.
+  defp rank(cue) do
+    kind =
+      case {priority(cue), cue[:kind]} do
+        {3, "text"} -> 3
+        {_, "action"} -> 2
+        {_, "text"} -> 1
+        _ -> 0
+      end
+
+    {priority(cue), kind}
+  end
 
   defp priority(cue) do
     case Map.get(cue, :priority) do

@@ -43,6 +43,28 @@ defmodule MaveCore.AudioDescription.BudgetTest do
     assert [%{"priority" => 1, "reason" => "no_safe_time"}] = plan.rejected
   end
 
+  test "the focal action keeps its time when background cues compete at the same instant" do
+    action = %{cue(2, 4, "A visitor pushes a trolley.", 2) | kind: "action"}
+    background = %{cue(2, 4, "Shelves line the wall.", 2) | kind: "setting"}
+    label = cue(2, 4, "Storage room.", 2)
+
+    for cues <- [[background, label, action], [action, label, background]] do
+      cues = Enum.map(cues, &Map.put(&1, :visual_window, %{start: 2.0, end: 4.0}))
+      plan = Budget.allocate(cues, [%{start: 4.0, end: 10.0}], 10, "story")
+      assert [%{text: "A visitor pushes a trolley.", window: window}] = plan.cues
+      assert window == %{start: 2.0, end: 4.0}
+      assert length(plan.rejected) == 2
+    end
+  end
+
+  test "essential instructions still take precedence over a competing action" do
+    action = %{cue(2, 4, "A visitor pushes a trolley.", 2) | kind: "action"}
+    instruction = cue(2, 4, "Use the emergency exit.", 3)
+    cues = Enum.map([action, instruction], &Map.put(&1, :visual_window, %{start: 2.0, end: 4.0}))
+    plan = Budget.allocate(cues, [%{start: 4.0, end: 10.0}], 10, "story")
+    assert [%{text: "Use the emergency exit.", window: %{start: 2.0, end: 4.0}}] = plan.cues
+  end
+
   test "coarse scenes cannot let setup displace later main actions" do
     cues = [
       cue(0.1, 1, "Setup.", 1),
@@ -54,7 +76,7 @@ defmodule MaveCore.AudioDescription.BudgetTest do
     plan = Budget.allocate(cues, [%{start: 0.0, end: 3.0}], 8, "montage")
     toast = Enum.find(plan.cues, &(&1.text == "Two people toast."))
     assert toast
-    assert toast.scene.end == 3.0
+    assert toast.scene.end == 3.35
     assert toast.duck_window.end <= 3.5
 
     for item <- plan.cues do
@@ -117,6 +139,53 @@ defmodule MaveCore.AudioDescription.BudgetTest do
 
     assert fallback.end <= 9.7
     assert [%{"priority" => 1}] = plan.rejected
+  end
+
+  test "useful narration can borrow a bounded amount of speech after a pause" do
+    item =
+      cue(2, 8, "A cyclist crosses the bridge.", 2)
+      |> Map.put(:visual_window, %{start: 2.0, end: 8.0})
+
+    speech = [%{start: 0.0, end: 2.0}, %{start: 5.0, end: 12.0}]
+    assert [planned] = Budget.allocate([item], speech, 12, "story").cues
+    assert planned.window == %{start: 2.0, end: 5.0}
+    assert planned.duck_window == %{start: 2.0, end: 5.8}
+
+    timeline =
+      Timeline.plan_timeline(
+        [Map.merge(planned, %{window: planned.duck_window, allow_ducking: true})],
+        [3600],
+        speech,
+        12,
+        1000
+      )
+
+    assert length(timeline.cues) == 1
+    assert Timeline.quality_metrics(timeline.cues, speech, 12)["speech_overlap_seconds"] == 0.6
+  end
+
+  test "continuous dialogue cannot be covered by useful or optional detail" do
+    for priority <- [1, 2] do
+      plan =
+        Budget.allocate(
+          [cue(2, 4, "A cyclist passes.", priority)],
+          [%{start: 0.0, end: 10.0}],
+          10,
+          "story"
+        )
+
+      assert plan.cues == []
+      assert [%{"reason" => "no_safe_time"}] = plan.rejected
+    end
+  end
+
+  test "extensions do not cross the next event or another description reservation" do
+    first = cue(2, 6, "A cyclist passes.", 2) |> Map.put(:visual_window, %{start: 2.0, end: 6.0})
+    next = cue(6, 8, "A gate closes.", 2) |> Map.put(:visual_window, %{start: 6.0, end: 8.0})
+    speech = [%{start: 4.5, end: 5.0}]
+    assert [a, b] = Budget.allocate([first, next], speech, 16, "story").cues
+    assert a.duck_window.end <= b.window.start - 0.15
+    assert a.duck_window.end <= a.scene.end
   end
 
   test "short clips and music have a smaller total word budget" do

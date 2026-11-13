@@ -42,6 +42,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionSupport do
       region: region,
       bucket: Storage.bucket_for_space(space_hash, region),
       storage: Application.get_env(:mave_core, :flow_storage_adapter, Storage),
+      progress_reporter: context[:progress_reporter],
       languages: AudioDescription.requested_languages(run_input),
       strict?: StepSupport.strict_enabled?(params, run_input, "audio_description_strict")
     }
