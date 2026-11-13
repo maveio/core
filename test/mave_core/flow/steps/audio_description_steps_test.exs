@@ -144,6 +144,11 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
     @moduledoc false
 
     # One second of a 440 Hz tone as a 24 kHz WAV.
+    def speak(text, language, opts) do
+      if opts[:model], do: send(test_pid(), {:speech_options, opts})
+      speak(text, language)
+    end
+
     def speak(text, language) do
       send(test_pid(), {:speak, language})
 
@@ -164,6 +169,12 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
 
     # Speech runs in tasks; report to the test process that started them.
     defp test_pid, do: Process.get(:ad_test_pid) || List.last(Process.get(:"$callers", [self()]))
+  end
+
+  defmodule SpeechBackend do
+    def speech_config(input) do
+      {SpeechStub, [model: input["speech_model"], voice: input["speech_voice"]]}
+    end
   end
 
   setup do
@@ -444,6 +455,38 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
     assert {:ok, changed, []} = AiSpeakDescriptionsStep.run(step, context)
     assert_received {:speak, "en"}
     refute changed["clips"] == first["clips"]
+
+    config = Application.get_env(:mave_core, :audio_description)
+
+    Application.put_env(
+      :mave_core,
+      :audio_description,
+      Keyword.put(config, :backend, SpeechBackend)
+    )
+
+    selected =
+      context
+      |> put_in([:run_input, "speech_model"], "model-a")
+      |> put_in([:run_input, "speech_voice"], "voice-a")
+
+    assert {:ok, custom, []} = AiSpeakDescriptionsStep.run(step, selected)
+    assert_received {:speech_options, options}
+    assert options[:model] == "model-a"
+    assert options[:voice] == "voice-a"
+    refute custom["clips"] == changed["clips"]
+    assert {:ok, cached, []} = AiSpeakDescriptionsStep.run(step, selected)
+    assert cached["clips"] == custom["clips"]
+    refute_received {:speech_options, _}
+
+    assert {:ok, different_voice, []} =
+             AiSpeakDescriptionsStep.run(
+               step,
+               put_in(selected, [:run_input, "speech_voice"], "voice-b")
+             )
+
+    assert_received {:speech_options, options}
+    assert options[:voice] == "voice-b"
+    refute different_voice["clips"] == custom["clips"]
   end
 
   test "visible instructions survive a wrong kind label while spoken captions are omitted" do

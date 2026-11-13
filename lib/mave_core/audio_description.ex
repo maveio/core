@@ -22,9 +22,14 @@ defmodule MaveCore.AudioDescription do
   the space doesn't get audio descriptions.
   """
   def run_input(%Space{} = space) do
-    if Spaces.audio_description_active?(space),
-      do: %{"languages" => ["original"], "fallback_language" => "en"},
-      else: nil
+    if Spaces.audio_description_active?(space) do
+      input = %{"languages" => ["original"], "fallback_language" => "en"}
+
+      case config(:backend) do
+        nil -> input
+        backend -> backend.run_input(space, input)
+      end
+    end
   end
 
   def run_input(_space), do: nil

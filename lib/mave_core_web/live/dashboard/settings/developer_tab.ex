@@ -15,6 +15,10 @@ defmodule MaveCoreWeb.Dashboard.Settings.DeveloperTab do
      socket
      |> assign(assigns)
      |> MaveCoreWeb.SpaceLiveAuth.attach_component()
+     |> assign(
+       :extra_sections,
+       Application.get_env(:mave_core, :extra_developer_settings_sections, [])
+     )
      |> assign(:show_recent_deliveries, @show_recent_deliveries)
      |> assign_new(:show_api_key_modal, fn -> false end)
      |> assign_new(:show_create_webhook, fn -> false end)
@@ -307,6 +311,16 @@ defmodule MaveCoreWeb.Dashboard.Settings.DeveloperTab do
           <div class="text-sm text-stone-300 text-center mt-8">{gettext("no deliveries yet")}</div>
         <% end %>
       <% end %>
+
+      <.live_component
+        :for={section <- @extra_sections}
+        module={section.module}
+        id={section.id}
+        current_space={@current_space}
+        current_user={@current_user}
+        space_access_context={@space_access_context}
+        refresh_key={assigns[:refresh_key]}
+      />
 
       <%!-- Create or edit API key modal --%>
       <.modal

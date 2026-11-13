@@ -35,8 +35,8 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
          {:ok, transcript} <- speech(ctx, duration),
          speech = transcript.intervals,
          scenes = intervals(document["scenes"]),
-         {:ok, observations, observations_key, reused?} <- observations(ctx, document, transcript),
-         {:ok, script} <- write_script(ctx, observations, document, transcript),
+         {:ok, narration} <- narration(ctx, document, transcript),
+         script = narration.script,
          alignment = script["alignment_report"],
          raw_cues = script["cues"],
          plan = Map.take(script, ["category", "summary", "essential_text"]),
@@ -60,37 +60,54 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
          {:ok, _} <- AD.put_json(ctx, AD.work_key(ctx, "unplaced-cues.json"), rejected) do
       report_progress(ctx, "script_ready", 100, 1)
 
-      {:ok,
-       %{
-         "status" => "ok",
-         "step_type" => @step_type,
-         "step_id" => ctx.step_id,
-         "language" => language,
-         "cues_key" => cues_key,
-         "plan_key" => plan_key,
-         "observations_key" => observations_key,
-         "observations_reused" => reused?,
-         "script_reused" => option?(ctx, "reuse_script"),
-         "alignment_repaired_count" => alignment["repaired_count"],
-         "alignment_rejected_count" => length(alignment["rejected"]),
-         "speech_key" => speech_key,
-         "duration" => duration,
-         "cue_count" => length(cues),
-         "unplaced_cue_count" => length(rejected),
-         "review_required" =>
-           alignment["rejected"] != [] or Enum.any?(rejected, &(&1["priority"] == 3)),
-         "category" => plan["category"],
-         "word_limit" => allocation.word_limit,
-         "scene_count" => length(scenes),
-         "speech_seconds" =>
-           speech |> Enum.reduce(0.0, &(&2 + &1.end - &1.start)) |> Float.round(1)
-       }, []}
+      output = %{
+        "status" => "ok",
+        "step_type" => @step_type,
+        "step_id" => ctx.step_id,
+        "language" => language,
+        "cues_key" => cues_key,
+        "plan_key" => plan_key,
+        "observations_key" => narration.observations_key,
+        "observations_reused" => narration.observations_reused,
+        "script_reused" => option?(ctx, "reuse_script"),
+        "alignment_repaired_count" => alignment["repaired_count"],
+        "alignment_rejected_count" => length(alignment["rejected"]),
+        "speech_key" => speech_key,
+        "duration" => duration,
+        "cue_count" => length(cues),
+        "unplaced_cue_count" => length(rejected),
+        "review_required" =>
+          alignment["rejected"] != [] or Enum.any?(rejected, &(&1["priority"] == 3)),
+        "category" => plan["category"],
+        "word_limit" => allocation.word_limit,
+        "scene_count" => length(scenes),
+        "speech_seconds" =>
+          speech |> Enum.reduce(0.0, &(&2 + &1.end - &1.start)) |> Float.round(1)
+      }
+
+      {:ok, Map.merge(output, narration.metadata), []}
     else
       {:error, :no_descriptions} ->
         {:ok, AD.skipped(@step_type, ctx, "no_descriptions"), []}
 
       {:error, reason} ->
         AD.failure(@step_type, ctx, reason)
+    end
+  end
+
+  defp narration(ctx, document, transcript) do
+    backend = MaveCore.AudioDescription.config(:backend)
+
+    case backend && backend.describe(ctx, document, transcript) do
+      result when result in [nil, :default] -> default_narration(ctx, document, transcript)
+      result -> result
+    end
+  end
+
+  defp default_narration(ctx, document, transcript) do
+    with {:ok, rows, key, reused?} <- observations(ctx, document, transcript),
+         {:ok, script} <- write_script(ctx, rows, document, transcript) do
+      {:ok, %{script: script, observations_key: key, observations_reused: reused?, metadata: %{}}}
     end
   end
 

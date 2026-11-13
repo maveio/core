@@ -145,12 +145,32 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionSupport do
     AudioDescription.config(:chat_provider, MaveCore.AudioDescription.Scaleway)
   end
 
-  def writer_provider do
+  def writer_provider(ctx \\ nil) do
+    backend = AudioDescription.config(:backend)
+
+    if backend && ctx do
+      backend.writer_provider(ctx.run_input) || default_writer_provider()
+    else
+      default_writer_provider()
+    end
+  end
+
+  defp default_writer_provider do
     AudioDescription.config(:writer_provider, MaveCore.AudioDescription.MistralWriter)
   end
 
   def speech_provider do
     AudioDescription.config(:speech_provider, MaveCore.AudioDescription.MistralSpeech)
+  end
+
+  def speech_config(ctx) do
+    backend = AudioDescription.config(:backend)
+
+    custom =
+      if backend && Code.ensure_loaded?(backend) && function_exported?(backend, :speech_config, 1),
+        do: backend.speech_config(ctx.run_input)
+
+    custom || {speech_provider(), []}
   end
 
   def skipped(step_type, ctx, reason, extra \\ %{}) do
