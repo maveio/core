@@ -125,6 +125,80 @@ defmodule MaveCore.AudioDescription.SpeechFitTest do
              end)
   end
 
+  test "naturally quick speech that fits is not rejected by a written word-rate heuristic" do
+    item = %{
+      text: "A visitor walks outside and towards a door.",
+      window: %{start: 4.0, end: 8.0},
+      max_words: 9
+    }
+
+    assert {:ok, ^item, _, "original"} =
+             SpeechFit.fit(item, fn _, :moderate -> {:ok, pcm(2.0)} end, fn _, _, _ ->
+               flunk("a complete two-second clip fits in four seconds")
+             end)
+  end
+
+  test "a grammatical rewrite may exceed the estimated word target when its audio fits" do
+    original = "A visitor with a coat goes inside."
+    natural = "The visitor goes inside."
+    item = %{cue(original) | max_words: 2}
+
+    speak = fn
+      ^original, _ -> {:ok, pcm(5.0)}
+      ^natural, _ -> {:ok, pcm(1.7)}
+    end
+
+    rewrite = fn _, _, target ->
+      assert target == 2
+      {:ok, natural}
+    end
+
+    assert {:ok, %{text: ^natural}, _, "shortened"} = SpeechFit.fit(item, speak, rewrite)
+  end
+
+  test "preflight also preserves a complete phrase above the estimated word target" do
+    original = "A visitor with a coat goes inside."
+    natural = "The visitor goes inside."
+    estimate = fn text -> prediction(text, if(text == original, do: 8.0, else: 1.7)) end
+
+    rewrite = fn _, _, target ->
+      assert target < 4
+      {:ok, natural}
+    end
+
+    assert {:ok, %{text: ^natural}, _, "shortened"} =
+             SpeechFit.fit(cue(original), fn ^natural, _ -> {:ok, pcm(1.7)} end, rewrite,
+               estimate: estimate
+             )
+  end
+
+  test "a rewrite above the word target still cannot exceed its audio window" do
+    item = %{cue("A visitor with a coat goes inside.") | max_words: 2}
+
+    assert {:skip, "speech_too_long"} =
+             SpeechFit.fit(item, fn _, _ -> {:ok, pcm(4.0)} end, fn _, _, _ ->
+               {:ok, "The visitor goes inside."}
+             end)
+  end
+
+  test "a useful cue uses its bounded extension before a preflight rewrite" do
+    item =
+      cue("A cyclist rides across the old bridge.")
+      |> Map.merge(%{priority: 2, duck_window: %{start: 2.0, end: 4.6}})
+
+    assert {:ok, fitted, _, "original"} =
+             SpeechFit.fit(
+               item,
+               fn _, :moderate -> {:ok, pcm(2.5)} end,
+               fn _, _, _ -> flunk("the natural sentence fits the reserved extension") end,
+               estimate: &prediction(&1, 3.0)
+             )
+
+    assert fitted.text == item.text
+    assert fitted.window == item.duck_window
+    assert fitted.allow_ducking
+  end
+
   test "each rewrite receives measured speech feedback and retains the original event" do
     original = "A person in a bright coat walks through a hall."
     item = %{text: original, window: %{start: 0.0, end: 3.0}, max_words: 8}

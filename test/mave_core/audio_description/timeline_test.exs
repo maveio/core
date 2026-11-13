@@ -95,6 +95,23 @@ defmodule MaveCore.AudioDescription.TimelineTest do
              []
   end
 
+  test "useful cues only overlap a small part of dialogue and retain the final deadline" do
+    item =
+      cue(2, 6, "A cyclist passes.")
+      |> Map.merge(%{priority: 2, allow_ducking: true, window: i(2, 6)})
+
+    speech = [i(5, 10)]
+    assert length(Timeline.plan_timeline([item], [3600], speech, 10, @sr).cues) == 1
+    assert Timeline.plan_timeline([item], [3900], speech, 10, @sr).placements == []
+
+    # Even less than 0.8 seconds is rejected when it dominates a very short cue.
+    assert Timeline.plan_timeline([%{item | window: i(4.5, 6)}], [1000], speech, 10, @sr).placements ==
+             []
+
+    assert Timeline.plan_timeline([%{item | window: i(9, 10)}], [1000], [], 10, @sr).placements ==
+             []
+  end
+
   describe "plan_timeline/5 with scenes" do
     @speech [
       %{start: 4.35, end: 8.91},

@@ -1201,7 +1201,7 @@ defmodule MaveCore.Flow do
   end
 
   defp maybe_start_progress_reporter(%{step_run: %{step_type: step_type}} = execution)
-       when step_type in @media_step_types do
+       when step_type in @media_step_types or step_type == "ai.describe_video" do
     case ProgressReporter.start_link(
            flow_run_id: execution.run.id,
            step_run_id: execution.step_run.id,

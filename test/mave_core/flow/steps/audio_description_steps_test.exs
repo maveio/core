@@ -1,4 +1,5 @@
 defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
+  alias MaveCore.AudioDescription.Cues
   use ExUnit.Case, async: false
 
   alias MaveCore.Flow.{Definition, Presets, StepRegistry}
@@ -713,6 +714,52 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
              %{"start" => 4.35, "end" => 7.65}
            ]
 
+    # Retrying writing must not send any images back to the vision provider.
+    Application.put_env(:mave_core, :audio_description,
+      chat_provider: NoRewriteVision,
+      writer_provider: ChatStub,
+      speech_provider: SpeechStub
+    )
+
+    assert {:ok, repeated, []} =
+             AiDescribeVideoStep.run(%{"id" => "describe_video"}, %{
+               run_input: input,
+               dependency_outputs: outputs,
+               progress_reporter: self()
+             })
+
+    assert repeated["observations_reused"]
+    assert repeated["cue_count"] == english["cue_count"]
+    assert_received {:"$gen_cast", {:progress, %{"stage" => "reusing_observations"}}}
+    assert_received {:"$gen_cast", {:progress, %{"stage" => "writing_script"}}}
+
+    Application.put_env(:mave_core, :audio_description,
+      chat_provider: NoRewriteVision,
+      writer_provider: NoRewriteVision,
+      speech_provider: SpeechStub
+    )
+
+    reused_input =
+      Map.update!(
+        input,
+        "audio_description",
+        &Map.merge(&1, %{"reuse_script" => true, "reuse_observations_only" => true})
+      )
+
+    assert {:ok, reused, []} =
+             AiDescribeVideoStep.run(%{"id" => "describe_video"}, %{
+               run_input: reused_input,
+               dependency_outputs: outputs
+             })
+
+    assert reused["script_reused"] and reused["observations_reused"]
+
+    Application.put_env(:mave_core, :audio_description,
+      chat_provider: ChatStub,
+      writer_provider: ChatStub,
+      speech_provider: SpeechStub
+    )
+
     # 3. Dutch from the English cues.
     outputs = Map.put(outputs, "describe_video", english)
 
@@ -767,6 +814,11 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
       {:ok, vtt} = Storage.get(@bucket, "#{@embed}/descriptions_#{language}.vtt", nil)
       assert vtt =~ "WEBVTT\nKind: descriptions\nLanguage: #{language}\n"
       assert vtt =~ "Red."
+
+      [_, from, to] = Regex.run(~r/\n1\n([\d:.]+) --> ([\d:.]+)/, vtt)
+      midpoint = (Cues.parse_timestamp(from) + Cues.parse_timestamp(to)) / 2
+      [before, during] = background_levels(mp3, [0.05, midpoint - 0.05])
+      assert_in_delta during / before, 0.2, 0.03
 
       assert {:ok, _} =
                Storage.get(
@@ -871,6 +923,47 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
     assert mix["ducked_cue_count"] == 1
     assert mix["speech_overlap_seconds"] > 0
     assert mix["ending_room_seconds"] >= 0.3
+  end
+
+  # Measure the original 330 Hz tone separately from the synthetic 440 Hz AD
+  # voice, proving that the complete pipeline also ducks music during pauses.
+  defp background_levels(mp3, starts) do
+    path = Path.join(System.tmp_dir!(), "ad-level-#{System.unique_integer([:positive])}.mp3")
+    File.write!(path, mp3)
+
+    try do
+      {pcm, 0} =
+        System.cmd("ffmpeg", [
+          "-v",
+          "error",
+          "-i",
+          path,
+          "-f",
+          "s16le",
+          "-ar",
+          "24000",
+          "-ac",
+          "1",
+          "pipe:1"
+        ])
+
+      Enum.map(starts, fn start ->
+        bytes = binary_part(pcm, round(start * 24_000) * 2, 2400 * 2)
+        samples = for <<sample::little-signed-16 <- bytes>>, do: sample
+
+        {sin, cos} =
+          samples
+          |> Enum.with_index()
+          |> Enum.reduce({0.0, 0.0}, fn {sample, index}, {sin, cos} ->
+            phase = 2 * :math.pi() * 330 * index / 24_000
+            {sin + sample * :math.sin(phase), cos + sample * :math.cos(phase)}
+          end)
+
+        :math.sqrt(sin * sin + cos * cos) / 2400
+      end)
+    after
+      File.rm!(path)
+    end
   end
 
   # An 8 s video that cuts from red to blue at 4 s, with a tone, and its audio as MP3.

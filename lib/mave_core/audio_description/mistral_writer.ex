@@ -9,6 +9,8 @@ defmodule MaveCore.AudioDescription.MistralWriter do
   end
 
   defp request(system, content, opts, key) do
+    started = System.monotonic_time(:millisecond)
+
     body = %{
       "model" => model(),
       "reasoning_effort" => Keyword.get(opts, :reasoning_effort, "medium"),
@@ -27,16 +29,50 @@ defmodule MaveCore.AudioDescription.MistralWriter do
       }
     }
 
-    case Req.post("https://api.mistral.ai/v1/chat/completions",
-           json: body,
-           headers: [{"authorization", "Bearer #{key}"}],
-           receive_timeout: 300_000,
-           retry: :transient,
-           max_retries: 2
-         ) do
+    response =
+      Req.post("https://api.mistral.ai/v1/chat/completions",
+        json: body,
+        headers: [{"authorization", "Bearer #{key}"}],
+        receive_timeout: 300_000,
+        retry: :transient,
+        max_retries: 2
+      )
+
+    if callback = opts[:on_response], do: callback.(metrics(response, body, started))
+
+    case response do
       {:ok, %{status: status, body: response}} when status in 200..299 -> decode(response)
       {:ok, %{status: status}} -> {:error, {:http_error, status}}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp metrics(response, request, started) do
+    base = %{
+      "model" => request["model"],
+      "reasoning_effort" => request["reasoning_effort"],
+      "max_tokens" => request["max_tokens"],
+      "elapsed_ms" => System.monotonic_time(:millisecond) - started
+    }
+
+    case response do
+      {:ok, %{status: status, body: body}} when is_map(body) ->
+        usage = Map.take(body["usage"] || %{}, ~w(prompt_tokens completion_tokens total_tokens))
+        details = get_in(body, ["usage", "completion_tokens_details"]) || %{}
+        usage = Map.merge(usage, Map.take(details, ~w(reasoning_tokens)))
+        first = List.first(body["choices"] || []) || %{}
+
+        Map.merge(base, %{
+          "http_status" => status,
+          "finish_reason" => first["finish_reason"],
+          "usage" => usage
+        })
+
+      {:ok, %{status: status}} ->
+        Map.put(base, "http_status", status)
+
+      {:error, _} ->
+        Map.put(base, "transport_error", true)
     end
   end
 

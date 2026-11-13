@@ -76,4 +76,30 @@ defmodule MaveCore.AudioDescription.MistralWriterTest do
 
     assert {:error, :model_output_truncated} = MistralWriter.chat_json("Write.", [], schema: %{})
   end
+
+  test "request metrics retain token counts and truncation without storing model content" do
+    Process.put(:writer_response, %{
+      "choices" => [
+        %{"finish_reason" => "length", "message" => %{"content" => "sensitive content"}}
+      ],
+      "usage" => %{
+        "prompt_tokens" => 1200,
+        "completion_tokens" => 16_000,
+        "total_tokens" => 17_200,
+        "completion_tokens_details" => %{"reasoning_tokens" => 15_990}
+      }
+    })
+
+    assert {:error, :model_output_truncated} =
+             MistralWriter.chat_json("Write.", [],
+               schema: %{},
+               on_response: &send(self(), {:metrics, &1})
+             )
+
+    assert_received {:metrics, metrics}
+    assert metrics["finish_reason"] == "length"
+    assert metrics["usage"]["reasoning_tokens"] == 15_990
+    assert metrics["elapsed_ms"] >= 0
+    refute inspect(metrics) =~ "sensitive content"
+  end
 end

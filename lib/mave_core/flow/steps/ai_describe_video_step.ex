@@ -8,10 +8,12 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
   cues are the source for the spoken description.
   """
   @behaviour MaveCore.Flow.Step
+  require Logger
 
   alias MaveCore.AudioDescription.{Budget, Cues, Observations, Script, Timeline}
   alias MaveCore.Embeds.SettingsSerializer
   alias MaveCore.Flow.Steps.AudioDescriptionSupport, as: AD
+  alias MaveCore.Flow.Steps.Support, as: StepSupport
 
   @step_type "ai.describe_video"
 
@@ -33,25 +35,14 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
          {:ok, transcript} <- speech(ctx, duration),
          speech = transcript.intervals,
          scenes = intervals(document["scenes"]),
-         {:ok, observations} <-
-           Observations.collect(ctx, document, AD.chat_provider(), AD.language(ctx), transcript),
-         {:ok, observations_key} <-
-           AD.put_json(ctx, AD.work_key(ctx, "observations.json"), %{
-             "schema_version" => 1,
-             "frames" => observations
-           }),
-         {:ok, script} <-
-           Script.write(
-             AD.writer_provider(),
-             observations,
-             document,
-             transcript,
-             AD.language(ctx)
-           ),
+         {:ok, observations, observations_key, reused?} <- observations(ctx, document, transcript),
+         {:ok, script} <- write_script(ctx, observations, document, transcript),
+         alignment = script["alignment_report"],
          raw_cues = script["cues"],
          plan = Map.take(script, ["category", "summary", "essential_text"]),
          candidates = clean_cues(raw_cues, speech, scenes, duration, transcript.text),
          allocation = Budget.allocate(candidates, speech, duration, plan["category"]),
+         rejected = allocation.rejected ++ alignment["rejected"],
          cues = allocation.cues,
          language = AD.language(ctx),
          {:ok, cues_key} <-
@@ -65,7 +56,10 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
              AD.work_key(ctx, "plan.json"),
              Map.put(plan, "spoken_text", transcript.text)
            ),
-         {:ok, _} <- AD.put_json(ctx, AD.work_key(ctx, "unplaced-cues.json"), allocation.rejected) do
+         {:ok, _} <- AD.put_json(ctx, AD.work_key(ctx, "alignment-report.json"), alignment),
+         {:ok, _} <- AD.put_json(ctx, AD.work_key(ctx, "unplaced-cues.json"), rejected) do
+      report_progress(ctx, "script_ready", 100, 1)
+
       {:ok,
        %{
          "status" => "ok",
@@ -75,11 +69,16 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
          "cues_key" => cues_key,
          "plan_key" => plan_key,
          "observations_key" => observations_key,
+         "observations_reused" => reused?,
+         "script_reused" => option?(ctx, "reuse_script"),
+         "alignment_repaired_count" => alignment["repaired_count"],
+         "alignment_rejected_count" => length(alignment["rejected"]),
          "speech_key" => speech_key,
          "duration" => duration,
          "cue_count" => length(cues),
-         "unplaced_cue_count" => length(allocation.rejected),
-         "review_required" => Enum.any?(allocation.rejected, &(&1["priority"] == 3)),
+         "unplaced_cue_count" => length(rejected),
+         "review_required" =>
+           alignment["rejected"] != [] or Enum.any?(rejected, &(&1["priority"] == 3)),
          "category" => plan["category"],
          "word_limit" => allocation.word_limit,
          "scene_count" => length(scenes),
@@ -92,6 +91,115 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
 
       {:error, reason} ->
         AD.failure(@step_type, ctx, reason)
+    end
+  end
+
+  defp write_script(ctx, observations, document, transcript) do
+    opts = [
+      on_attempt: fn attempt -> report_progress(ctx, "writing_script", 75, attempt) end,
+      on_alignment_attempt: fn attempt ->
+        report_progress(ctx, "repairing_alignment", 85, attempt)
+      end,
+      on_response: &store_request_metrics(ctx, &1)
+    ]
+
+    if option?(ctx, "reuse_script") do
+      with {:ok, cues} <- AD.get_json(ctx, AD.work_key(ctx, "raw-cues.json")),
+           {:ok, plan} <- AD.get_json(ctx, AD.work_key(ctx, "plan.json")) do
+        Script.repair(
+          AD.writer_provider(),
+          Map.put(plan, "cues", cues),
+          observations,
+          document,
+          AD.language(ctx),
+          opts
+        )
+      end
+    else
+      Script.write(
+        AD.writer_provider(),
+        observations,
+        document,
+        transcript,
+        AD.language(ctx),
+        opts
+      )
+    end
+  end
+
+  defp option?(ctx, name),
+    do: ctx.params[name] == true or get_in(ctx.run_input, ["audio_description", name]) == true
+
+  defp observations(ctx, document, transcript) do
+    key = AD.work_key(ctx, "observations.json")
+
+    case AD.get_json(ctx, key) do
+      {:ok, %{"schema_version" => 1, "frames" => rows} = cache} ->
+        if cache["language"] in [nil, AD.language(ctx)] and Observations.reusable?(rows, document) do
+          report_progress(ctx, "reusing_observations", 70, 0)
+          {:ok, rows, key, true}
+        else
+          missing_observations(ctx, document, transcript, key)
+        end
+
+      {:ok, _invalid} ->
+        missing_observations(ctx, document, transcript, key)
+
+      {:error, {:invalid_json, _}} ->
+        missing_observations(ctx, document, transcript, key)
+
+      {:error, {:storage_get_failed, _, :not_found}} ->
+        missing_observations(ctx, document, transcript, key)
+
+      error ->
+        error
+    end
+  end
+
+  defp missing_observations(ctx, document, transcript, key) do
+    if option?(ctx, "reuse_observations_only"),
+      do: {:error, :matching_observations_required},
+      else: collect_observations(ctx, document, transcript, key)
+  end
+
+  defp collect_observations(ctx, document, transcript, key) do
+    report_progress(ctx, "visual_observations", 0, 0)
+
+    with {:ok, rows} <-
+           Observations.collect(ctx, document, AD.chat_provider(), AD.language(ctx), transcript),
+         {:ok, ^key} <-
+           AD.put_json(ctx, key, %{
+             "schema_version" => 1,
+             "language" => AD.language(ctx),
+             "frames" => rows
+           }) do
+      {:ok, rows, key, false}
+    end
+  end
+
+  defp report_progress(ctx, stage, percent, attempt) do
+    stage =
+      if stage == "writing_script" and attempt > 1, do: "rewriting_truncated_script", else: stage
+
+    StepSupport.report_progress(ctx[:progress_reporter], %{
+      "stage" => stage,
+      "source" => "audio_description",
+      "percent" => percent,
+      "force" => true
+    })
+  end
+
+  defp store_request_metrics(ctx, metrics) do
+    name =
+      if metrics["phase"] == "alignment",
+        do: "alignment-request-#{metrics["batch"]}-#{metrics["attempt"]}.json",
+        else: "script-request-#{metrics["attempt"]}.json"
+
+    key = AD.work_key(ctx, name)
+
+    case AD.put_json(ctx, key, metrics) do
+      {:ok, _} -> :ok
+      {:error, _} -> Logger.warning("Could not store audio-description request metrics")
     end
   end
 

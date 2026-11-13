@@ -28,7 +28,10 @@ preferred fallback in the flow input without coupling the pipeline to space sett
   every two seconds in longer shots. Observations retain server-owned frame IDs
   and timestamps; partial or fabricated frame coverage is rejected. Text roles and
   prominence distinguish independent messages from subtitles and incidental interface
-  details. Spoken context never counts as proof of unseen visual facts.
+  details. Signs on physical objects are distinguished from title cards, and
+  printed depictions from real objects. A cut requires re-establishing spatial
+  relationships rather than carrying the preceding scene into the new frame.
+  Spoken context never counts as proof of unseen visual facts.
 - **Whole-video writing.** Mistral Large 4 receives the complete observations,
   shot boundaries, timed transcript, measured speech intervals and available
   pauses. It writes the original-language script, referencing observation IDs.
@@ -37,7 +40,9 @@ preferred fallback in the flow input without coupling the pipeline to space sett
   The writer must not invent missing transitions or complete uncertain text. It
   omits illustrative footage and repeated settings when the explanation already
   supplies their meaning. Readable counters and background notes are not essential
-  merely because they are unspoken. Primary closing messages receive separate,
+  merely because they are unspoken. Consecutive cues retain subject continuity
+  and avoid repeating one activity through its incidental signs or labels.
+  Primary closing messages receive separate,
   concise cues rather than being combined with subsequent logos or addresses.
   Each distinct meaningful event gets its own short cue, evidence references and
   observed `event_start`/`event_end`. Successive steps stay separate even within
@@ -46,14 +51,42 @@ preferred fallback in the flow input without coupling the pipeline to space sett
   actions cannot borrow an earlier event's pause. Independent cues are not merged
   merely because their proposed speaking times coincide. Legacy script responses
   without event boundaries retain their evidence-based windows.
+  Before scheduling, every explicit event window must contain a timestamp from
+  its cited observations. Conflicting references or times receive a targeted
+  correction using the saved observations near that event, in batches of at
+  most six cues. Valid cues are preserved. Corrected references and times are
+  checked again; unsupported events are recorded as `unsupported_visual_alignment`
+  rather than disappearing as if there were no speaking time. This temporal
+  validation does not prove that every visual claim is correct.
   The configured writer provider is independent of vision and speech synthesis.
 - **Traceable intermediate results.** Private `observations.json` is persisted
   before writing begins, so a writing failure does not discard the image analysis.
   Unknown evidence IDs and invalid cue times are rejected before scheduling.
+  On retry, saved observations are reused only when their frame IDs, timestamps,
+  scenes and recorded language match the current input. Existing observations
+  without a recorded language remain supported. Incomplete or mismatched caches
+  are regenerated; storage outages remain errors rather than triggering a new
+  paid vision request.
+  Writing receives the timed transcript once instead of repeating its passages
+  in every frame. Pause IDs and provisional per-cue word counts are computed
+  locally, so they are not requested from the writer. Script writing uses low
+  reasoning effort and a 24,000-token output allowance. Only a truncated answer
+  gets one retry with 32,000 tokens, using the same observations; an incomplete
+  script is never accepted. Private `script-request-<attempt>.json` files record
+  model, reasoning effort, elapsed time, finish reason and provider token usage
+  when available, without model text or reasoning content. Progress distinguishes
+  image analysis, reuse, script writing and a truncated-script retry.
+  Targeted alignment requests have separate private request metrics and an
+  `alignment-report.json` result. A repair-only retry can set
+  `audio_description.reuse_script` to true. Set
+  `audio_description.reuse_observations_only` to true to fail if matching saved
+  observations are unavailable, without making a new vision request.
 - **Content and duration budgets.** Short clips get a compact script. Interviews,
   tutorials, montages, music and stories receive different editorial guidance.
   Music and dialogue-heavy interviews have lower narration budgets. Essential
-  text and actions take priority over optional visual detail. The model must not
+  text and actions take priority over optional visual detail. At equal priority,
+  actions reserve time before routine text or background settings; essential
+  text keeps precedence. The model must not
   invent unreadable text or identities. Initial speech estimates use 2.5 words/s;
   these are planning limits, not guarantees of synthesized duration.
 - **Protected speech and ending.** Narration begins no earlier than 500 ms into
@@ -64,9 +97,13 @@ preferred fallback in the flow input without coupling the pipeline to space sett
   important action, even when cut detection groups both into one scene. A cue's
   visual availability is derived from the shots containing its cited observations,
   rather than treating the model's proposed speaking time as a hard lower bound.
-  Visible text gets first access to pause time and may wait for a later pause
+  Essential visible text gets first access to pause time and may wait for a later pause
   while it remains on screen. Narration does
-  not automatically cover dialogue when no pause fits. Missing essential cues
+  not automatically cover continuous dialogue for routine details. Useful
+  priority-2 cues may use a reserved extension starting in their speech pause,
+  overlapping at most 800 ms and 25% of their duration with original speech.
+  Extensions stay within the event and cannot displace another reserved cue.
+  Missing essential cues
   set `review_required` in the step output. A speech pause does not prove that
   music or sound effects there are unimportant; these still need listening review.
 - **Voice delivery.** Descriptions use a warm delivery at the voice's natural
@@ -89,7 +126,7 @@ preferred fallback in the flow input without coupling the pipeline to space sett
   original event, required text, measured speaking time and available seconds.
   Revisions use the same configured writer as script generation (Mistral by
   default), rather than the vision provider. Short Mistral revisions use low
-  reasoning effort; full script generation retains medium effort. Truncated or
+  reasoning effort, as does full script generation. Truncated or
   malformed revision responses never cancel other descriptions. Preflight falls
   back to measuring the original; an unusable measured revision is recorded per
   cue and sets `review_required`. Transport and service errors remain retryable.
@@ -97,8 +134,13 @@ preferred fallback in the flow input without coupling the pipeline to space sett
   speaking rate to choose a smaller target. This keeps the existing two-attempt
   rewrite limit. Planning word counts remain estimates: complete audio that fits
   naturally is retained even when the initial word estimate was conservative.
+  Rewrites may also exceed the estimated word target to retain natural grammar,
+  but cannot grow beyond the input's word count or exceed the actual time window.
+  Written words per second do not reject a naturally synthesized clip that fits;
+  they vary by language and are not a reliable measure of delivery speed. Useful
+  cues try their reserved extension before rewriting the original sentence.
   An only slightly oversized rewrite can try a faster
-  delivery, capped at a measured 15% speed increase and 3.5 words/s. If it still
+  delivery, capped at a measured 15% speed increase. If it still
   does not fit, it is omitted and recorded for review. Required on-screen text
   and numeric values may not silently disappear during rewriting.
 - **Matching text and sound.** The final VTT uses the actual accepted wording and
@@ -106,6 +148,11 @@ preferred fallback in the flow input without coupling the pipeline to space sett
   remain private; outputs include category, adjustment and omission counts,
   uncovered essential text, measured speech overlap and room left at the end.
   Text already spoken in the source transcript counts as covered.
+  The original audio, including background music during speech pauses, fades
+  down to 20% for every spoken description. It fades down during the preceding
+  300 ms and returns during the following 300 ms. Overlapping fades use the
+  strongest attenuation rather than multiplying gains. Speech-overlap metrics
+  still count only descriptions that actually overlap original dialogue.
 - **Readable stills.** The image model gets labelled 720p stills, approximately
   one per 3 s per shot, with explicit beginning/end samples, in batches of 12.
   Fine text between sampled frames can still be missed. This is automatic draft

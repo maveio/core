@@ -5,7 +5,16 @@ defmodule MaveCore.AudioDescription.ScriptEventsTest do
   defmodule Writer do
     def chat_json(_system, [%{"text" => json}], opts) do
       send(self(), {:writer_input, Jason.decode!(json), opts[:schema]})
-      {:ok, Process.get(:event_script)}
+      send(self(), {:writer_options, opts})
+
+      case Process.get(:writer_responses, []) do
+        [response | rest] ->
+          Process.put(:writer_responses, rest)
+          response
+
+        [] ->
+          {:ok, Process.get(:event_script)}
+      end
     end
   end
 
@@ -27,6 +36,56 @@ defmodule MaveCore.AudioDescription.ScriptEventsTest do
       "summary" => "A demonstration",
       "essential_text" => []
     }
+
+  test "writer sees each spoken passage once and leaves scheduling fields to the scheduler" do
+    frame = %{"id" => 1, "time" => 1, "spoken_context" => [%{"text" => "An explanation."}]}
+    Process.put(:event_script, script([]))
+
+    assert {:ok, _} =
+             Script.write(
+               Writer,
+               [frame],
+               %{"duration" => 5, "shots" => [%{"start" => 0, "end" => 5}]},
+               %{text: "An explanation.", intervals: []},
+               "en"
+             )
+
+    assert_received {:writer_input, input, schema}
+    assert input["transcript"] == "An explanation."
+    refute Map.has_key?(hd(input["observations"]), "spoken_context")
+    assert_received {:writer_options, opts}
+    assert opts[:reasoning_effort] == "low"
+
+    for field <- ~w(shot pause max_words) do
+      refute Map.has_key?(get_in(schema, ["properties", "cues", "items", "properties"]), field)
+    end
+  end
+
+  test "only truncated scripts receive one bounded retry without recollecting observations" do
+    document = %{"duration" => 5, "shots" => []}
+    transcript = %{text: "", intervals: []}
+    Process.put(:writer_responses, [{:error, :model_output_truncated}, {:ok, script([])}])
+    assert {:ok, _} = Script.write(Writer, [], document, transcript, "en")
+    assert_received {:writer_options, first}
+    assert_received {:writer_options, second}
+    assert first[:max_tokens] == 24_000
+    assert second[:max_tokens] == 32_000
+    refute_received {:writer_options, _}
+
+    Process.put(:writer_responses, List.duplicate({:error, :model_output_truncated}, 2))
+
+    assert {:error, :model_output_truncated} =
+             Script.write(Writer, [], document, transcript, "en")
+
+    assert_received {:writer_options, _}
+    assert_received {:writer_options, _}
+    refute_received {:writer_options, _}
+
+    Process.put(:writer_responses, [{:error, :timeout}])
+    assert {:error, :timeout} = Script.write(Writer, [], document, transcript, "en")
+    assert_received {:writer_options, _}
+    refute_received {:writer_options, _}
+  end
 
   test "successive steps in a single continuous shot retain their own speaking windows" do
     frames = [%{"id" => 1, "time" => 1}, %{"id" => 2, "time" => 5}, %{"id" => 3, "time" => 9}]

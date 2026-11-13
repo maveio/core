@@ -18,6 +18,22 @@ defmodule MaveCore.AudioDescription.ObservationsTest do
     def get(_, _, _), do: {:ok, "image"}
   end
 
+  test "cached evidence must cover the current frame IDs, times and scenes exactly" do
+    document = %{"stills" => [%{"time" => 1.5, "scene" => 0}, %{"time" => 3.5, "scene" => 1}]}
+
+    rows = [
+      row(0) |> Map.merge(%{"id" => 0, "time" => 1.5, "scene" => 0}),
+      row(1) |> Map.merge(%{"id" => 1, "time" => 3.5, "scene" => 1})
+    ]
+
+    assert Observations.reusable?(rows, document)
+    refute Observations.reusable?(tl(rows), document)
+    refute Observations.reusable?([hd(rows), hd(rows)], document)
+    refute Observations.reusable?(["invalid", hd(rows)], document)
+    refute Observations.reusable?([Map.put(hd(rows), "time", 2.0), List.last(rows)], document)
+    refute Observations.reusable?([Map.put(hd(rows), "actions", nil), List.last(rows)], document)
+  end
+
   defmodule Vision do
     def chat_json(system, _content, _opts) do
       send(self(), {:vision_instruction, system})
