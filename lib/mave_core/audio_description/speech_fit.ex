@@ -250,7 +250,7 @@ defmodule MaveCore.AudioDescription.SpeechFit do
   defp required_text_present?(cue, text) do
     case Map.get(cue, :on_screen_text) do
       required when is_binary(required) and required != "" ->
-        String.contains?(normalize_text(text), normalize_text(required))
+        contains_text?(normalize_text(text), normalize_text(required))
 
       _ ->
         true
@@ -263,14 +263,22 @@ defmodule MaveCore.AudioDescription.SpeechFit do
 
     Enum.filter(required, fn text ->
       is_binary(text) and String.trim(text) != "" and
-        not String.contains?(spoken, normalize_text(text))
+        not contains_text?(spoken, normalize_text(text))
     end)
   end
 
   defp numbers(text), do: Regex.scan(~r/\d+(?:[.,:]\d+)*/, text) |> List.flatten() |> MapSet.new()
 
-  defp normalize_text(text),
-    do: text |> String.replace(~r/\s+/u, " ") |> String.downcase() |> String.trim()
+  # Ignore sentence punctuation, but retain punctuation inside URLs and numbers.
+  # A comma after a name does not change its words; a different URL path does.
+  defp normalize_text(text) do
+    ~r/[\p{L}\p{N}]+(?:[.\/:@_-][\p{L}\p{N}]+)*/u
+    |> Regex.scan(String.downcase(text))
+    |> List.flatten()
+    |> Enum.join(" ")
+  end
+
+  defp contains_text?(text, required), do: String.contains?(" #{text} ", " #{required} ")
 
   defp fit_rewrite(cue, budget, speak) do
     case measure_rewrite(cue, budget, speak) do

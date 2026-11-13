@@ -382,6 +382,38 @@ defmodule MaveCore.AudioDescription.SpeechFitTest do
            ) == ["Call 112"]
   end
 
+  test "sentence punctuation does not reject a complete visible message" do
+    item =
+      Map.merge(cue("The library, www.example.org."), %{
+        kind: "text",
+        on_screen_text: "The library www.example.org"
+      })
+
+    assert {:ok, ^item, _, "original"} =
+             SpeechFit.fit(item, fn _, _ -> {:ok, pcm(1.5)} end, fn _, _, _ ->
+               flunk("punctuation alone must not force a rewrite")
+             end)
+
+    assert SpeechFit.missing_text(["The library www.example.org"], item.text, "") == []
+  end
+
+  test "punctuation normalization still distinguishes different URLs and numeric values" do
+    for {required, text} <- [
+          {"example.org/guide", "Visit example.org/guidebook."},
+          {"example.org/guide", "Visit example.org.guide."},
+          {"3.14", "The value is 3,14."}
+        ] do
+      item = Map.put(cue(text), :on_screen_text, required)
+
+      assert {:skip, "missing_on_screen_text"} =
+               SpeechFit.fit(item, fn _, _ -> flunk("wrong literal text") end, fn _, _, _ ->
+                 flunk("wrong literal text")
+               end)
+
+      assert SpeechFit.missing_text([required], text, "") == [required]
+    end
+  end
+
   test "tries shortening and faster speech before falling back to ducking" do
     item = %{
       text: "Please call 112 right now.",

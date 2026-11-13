@@ -21,6 +21,17 @@ preferred fallback in the flow input without coupling the pipeline to space sett
 
 ## How descriptions are planned and placed
 
+Hosts may configure an optional `MaveCore.AudioDescription.Backend` to provide
+another narration route and writer. Provider selection belongs in the run input
+so retries remain consistent. The shared fitting, mixing and publication steps
+are independent of that route; without a backend the pipeline below is used.
+
+`NarrationPolicy` supplies the shared editorial instructions. Closing calls to
+action retain their indispensable literal destination or instruction, without
+requiring decorative framing or an already-spoken topic to be repeated. Visible
+text checks ignore sentence punctuation while retaining URL paths and numeric
+punctuation, so adding a comma does not invalidate an otherwise complete cue.
+
 - **Visual observations first.** Scaleway records the setting, people and objects,
   actions, readable text, changes and uncertainties for every sampled frame. The
   vision request includes nearby timed speech as context, without a narration word limit. Samples cover
