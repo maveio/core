@@ -151,7 +151,9 @@ defmodule MaveCore.Accounts do
   end
 
   def delete_account_and_space(%User{} = user, %Space{} = space) do
-    Repo.transaction(fn -> delete_account_and_space_records(user, space) end)
+    # Hiding all media can outlast the default database checkout timeout.
+    # Keep the lock and rollback boundary until storage protection finishes.
+    Repo.transaction(fn -> delete_account_and_space_records(user, space) end, timeout: :infinity)
   end
 
   defp delete_account_and_space_records(%User{} = user, %Space{} = space) do
