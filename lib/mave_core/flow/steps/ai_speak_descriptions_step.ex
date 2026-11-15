@@ -172,7 +172,7 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
     {provider, options} = AD.speech_config(ctx)
 
     inputs =
-      {4, cue.text, language, pace, provider, System.get_env("MAVE_AUDIO_DESCRIPTION_TTS_MODEL"),
+      {5, cue.text, language, pace, provider, System.get_env("MAVE_AUDIO_DESCRIPTION_TTS_MODEL"),
        System.get_env("MAVE_AUDIO_DESCRIPTION_VOICES"),
        System.get_env("MAVE_AUDIO_DESCRIPTION_VOICE")}
 
