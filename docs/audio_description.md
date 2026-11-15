@@ -277,6 +277,12 @@ is known, and `Original` otherwise. Custom labels are preserved.
 
 ## Providers and configuration
 
+Hosts may configure `:mave_core, :usage_recorder` with a module implementing
+`MaveCore.Usage.record/1`. AD provider requests report usage metadata and separate
+HTTP attempts without prompts or media content. Core does not assign prices or
+persist billing data. Without a recorder the hook is inactive. Recorder failures
+do not interrupt media processing.
+
 The default providers are Scaleway Generative APIs and Mistral. Video stills,
 speech timings and description text are sent to the configured providers.
 

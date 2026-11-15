@@ -33,6 +33,7 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionSupport do
 
     %{
       step_id: Map.get(step, "id"),
+      usage_context: MaveCore.Usage.context(context, Map.get(step, "id")),
       params: params,
       run_input: run_input,
       outputs: outputs,

@@ -30,13 +30,22 @@ defmodule MaveCore.AudioDescription.MistralWriter do
     }
 
     response =
-      Req.post("https://api.mistral.ai/v1/chat/completions",
+      Req.new(
+        url: "https://api.mistral.ai/v1/chat/completions",
+        method: :post,
         json: body,
         headers: [{"authorization", "Bearer #{key}"}],
         receive_timeout: 300_000,
         retry: :transient,
         max_retries: 2
       )
+      |> MaveCore.Usage.attach(opts[:usage_context], %{
+        category: "audio_description",
+        provider: "mistral",
+        model: body["model"],
+        operation: opts[:usage_operation] || "script"
+      })
+      |> Req.request()
 
     if callback = opts[:on_response], do: callback.(metrics(response, body, started))
 

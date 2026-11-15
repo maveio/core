@@ -156,7 +156,9 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
            schema: Prompts.rewrite_schema(),
            max_tokens: 4_000,
            model: get_in(ctx.run_input, ["audio_description", "writer_model"]),
-           reasoning_effort: "low"
+           reasoning_effort: "low",
+           usage_context: ctx.usage_context,
+           usage_operation: "rewrite"
          ) do
       {:ok, %{"text" => shortened}} when is_binary(shortened) -> {:ok, shortened}
       {:ok, _} -> {:error, :invalid_description_rewrite}
@@ -188,6 +190,7 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
 
     case ctx.storage.get(ctx.bucket, key, ctx.region) do
       {:ok, pcm} ->
+        record_reused_speech(ctx, provider)
         {:ok, %{"key" => key, "samples" => div(byte_size(pcm), 2)}}
 
       {:error, _not_found} ->
@@ -203,7 +206,26 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
     {provider, options} = AD.speech_config(ctx)
 
     if Code.ensure_loaded?(provider) and function_exported?(provider, :speak, 3),
-      do: provider.speak(text, language, Keyword.put(options, :pace, pace)),
+      do:
+        provider.speak(
+          text,
+          language,
+          options |> Keyword.put(:pace, pace) |> Keyword.put(:usage_context, ctx.usage_context)
+        ),
       else: provider.speak(text, language)
   end
+
+  defp record_reused_speech(ctx, MaveCore.AudioDescription.MistralSpeech) do
+    MaveCore.Usage.record(ctx.usage_context, %{
+      category: "audio_description",
+      provider: "mistral",
+      model: System.get_env("MAVE_AUDIO_DESCRIPTION_TTS_MODEL", "voxtral-mini-tts-3-0"),
+      operation: "speech",
+      status: "reused",
+      usage_status: "reused",
+      quantities: %{}
+    })
+  end
+
+  defp record_reused_speech(_ctx, _provider), do: :ok
 end

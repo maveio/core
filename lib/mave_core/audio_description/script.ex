@@ -119,7 +119,9 @@ defmodule MaveCore.AudioDescription.Script do
         schema: schema(),
         max_tokens: if(attempt == 1, do: 24_000, else: 32_000),
         reasoning_effort: "low",
-        on_response: notify
+        on_response: notify,
+        usage_context: opts[:usage_context],
+        usage_operation: "script"
       )
 
     case result do
