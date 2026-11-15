@@ -5,7 +5,7 @@ defmodule MaveCore.Playback.StoragePolicyTest do
 
   alias MaveCore.{Accounts, Embeds, Playback}
   alias MaveCore.Assets.Video
-  alias MaveCore.Playback.Minio
+  alias MaveCore.Playback.{Minio, StoragePolicy}
   alias MaveCore.Workers.PlaybackVisibilityWorker
 
   setup {Req.Test, :verify_on_exit!}
@@ -101,6 +101,61 @@ defmodule MaveCore.Playback.StoragePolicyTest do
 
     assert {:error, :playback_storage_verification_failed} =
              Minio.apply_visibility(embed, :public)
+  end
+
+  test "a failed public bucket sync leaves the caller's transaction usable", %{space: space} do
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert conn.method == "HEAD"
+      send_resp(conn, 200, "")
+    end)
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert conn.query_string == "cors"
+      send_resp(conn, 200, "")
+    end)
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert conn.query_string == "policy"
+      send_resp(conn, 400, "")
+    end)
+
+    assert_sync_failure_keeps_transaction_usable(space)
+  end
+
+  test "a failed protected bucket sync preserves private prefixes and the caller's transaction",
+       %{space: space} do
+    private =
+      Repo.insert!(%MaveCore.Embeds.Embed{
+        space_id: space.id,
+        hash: "private-sync-failure",
+        playback_visibility: :private,
+        playback_status: :private
+      })
+
+    Req.Test.expect(__MODULE__, fn conn ->
+      assert conn.query_string == "policy"
+      {:ok, body, conn} = read_body(conn)
+      resources = Jason.decode!(body)["Statement"] |> hd() |> Map.fetch!("Resource")
+      refute Enum.any?(resources, &String.ends_with?(&1, "/#{private.hash}/*"))
+      send_resp(conn, 400, "")
+    end)
+
+    assert_sync_failure_keeps_transaction_usable(space)
+    assert Repo.reload!(private).playback_status == :private
+  end
+
+  defp assert_sync_failure_keeps_transaction_usable(space) do
+    assert {:ok, updated} =
+             Repo.transaction(fn ->
+               assert {:error, {:bucket_policy_failed, 400}} =
+                        StoragePolicy.sync_space_domain_cors(space, Minio)
+
+               space
+               |> Ecto.Changeset.change(default_flow_template: "sync-failure-test")
+               |> Repo.update!()
+             end)
+
+    assert Repo.reload!(updated).default_flow_template == "sync-failure-test"
   end
 
   defp expect_storage_sync(embed, visibility, manifest_status) do

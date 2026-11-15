@@ -1203,40 +1203,21 @@ defmodule MaveCore.Media.Storage do
         hotlink_protection_enabled,
         storage_profile \\ nil
       ) do
-    if hotlink_protection_enabled do
-      body = build_bucket_policy_json(bucket, allowed_domains)
+    cond do
+      hotlink_protection_enabled ->
+        put_bucket_policy_body(
+          bucket,
+          build_bucket_policy_json(bucket, allowed_domains),
+          storage_profile
+        )
 
-      case Req.put(build_service_req(storage_profile, bucket),
-             url: "/#{bucket}?policy",
-             body: body,
-             headers: [{"content-type", "application/json"}]
-           ) do
-        {:ok, %{status: status}} when status in 200..299 ->
-          :ok
+      bucket_policy_dialect(storage_profile) == :scaleway ->
+        # Public objects use their ACLs. A bucket-wide allow would also expose
+        # objects that were deliberately made private, and replace custom policies.
+        :ok
 
-        {:ok, %{status: status}} ->
-          {:error, {:bucket_policy_failed, status}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    else
-      body = build_public_bucket_policy_json(bucket)
-
-      case Req.put(build_service_req(storage_profile, bucket),
-             url: "/#{bucket}?policy",
-             body: body,
-             headers: [{"content-type", "application/json"}]
-           ) do
-        {:ok, %{status: status}} when status in 200..299 ->
-          :ok
-
-        {:ok, %{status: status}} ->
-          {:error, {:bucket_policy_failed, status}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      true ->
+        put_bucket_policy_body(bucket, build_public_bucket_policy_json(bucket), storage_profile)
     end
   end
 
@@ -1715,9 +1696,13 @@ defmodule MaveCore.Media.Storage do
 
   @doc "Writes a complete bucket policy supplied by a deployment storage adapter."
   def put_bucket_policy_document(bucket, policy, storage_profile) do
+    put_bucket_policy_body(bucket, Jason.encode_to_iodata!(policy), storage_profile)
+  end
+
+  defp put_bucket_policy_body(bucket, body, storage_profile) do
     case Req.put(build_service_req(storage_profile, bucket),
            url: "/#{bucket}?policy",
-           body: Jason.encode_to_iodata!(policy),
+           body: body,
            headers: [{"content-type", "application/json"}]
          ) do
       {:ok, %{status: status}} when status in 200..299 -> :ok

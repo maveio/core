@@ -22,19 +22,43 @@ The CPU image contains a static Go HTTP wrapper and a checksummed FFmpeg 9.0.2
 source build with `libmp3lame`, `libwebp`, `libx264`, `libx265`, and
 `libsvtav1`, plus `libdav1d` for software AV1 decoding. The GPU image
 uses Ubuntu FFmpeg with H.264/HEVC/AV1 NVENC. Both stream the external HTTPS
-source through FFmpeg. The normal H.264 CPU contract receives short-lived,
-object-scoped multipart URLs from Core and uploads FFmpeg's stdout directly to
-object storage with bounded memory. It returns newline-delimited progress and
-completion metadata; the Core worker never receives or stages the media bytes.
-Long renditions use durable, deterministic chunk objects and the `/concat`
-endpoint downloads complete chunks to private booster scratch before joining
-them into a remote multipart destination. Downloads use the trusted source
+source through FFmpeg. Requests receive short-lived, object-scoped multipart
+URLs from Core and return newline-delimited progress and completion metadata;
+the Core worker never receives or stages the media bytes.
+
+Each multipart upload part owns its bytes until the HTTP transport releases
+the request body. This requires a part-sized copy in addition to the reusable
+streaming buffer, without buffering the complete video.
+
+Short preview clips with `max_duration_seconds` between 1 and 60, and no
+explicit time range, are finalized on private booster scratch with `+faststart`
+before upload. This puts the complete sample index before the media data for
+progressive MP4 playback, including Safari. Scratch output is limited to the
+smaller of the supplied multipart capacity and 512 MiB. Encoding emits
+heartbeats and removes scratch on success, failure, or cancellation. Provision
+that allowance per concurrent clip. This trades clip upload/encode overlap for
+a seekable MP4 without buffering full-length videos.
+
+Full-length video requests and explicit time-range chunks keep streaming
+fragmented MP4 output to storage while encoding, with bounded memory. Video
+encoding and concatenation use a two-second fragment-duration threshold so
+continuous audio is flushed even during long pauses between video frames.
+This bounds fragment sample tables for sparse video with continuous audio. Long
+renditions use durable, deterministic chunk objects and the `/concat` endpoint
+downloads complete chunks to private booster scratch before streaming the joined
+output into a remote multipart destination. Downloads use the trusted source
 client with bounded retries and a combined 16 GiB source limit per request.
 Each chunk must contain valid video packets, and the final packet count must
 equal the sum of the input counts before the multipart upload can complete.
+Chunk validation uses the concat demuxer and rejects FFmpeg error diagnostics
+even when the process exits successfully. An invalid chunk is identified by
+index so Core can discard just that cached object and regenerate it on the
+next bounded flow retry, retaining the other completed chunks. Deploy the
+updated Core client and booster together to enable this recovery behavior.
 Preparation emits heartbeats and all scratch is removed on every exit path.
 Provision at least that source allowance per concurrent concat request, plus
-space for other work. HLS packaging uses streaming output: FFmpeg finalizes
+space for other work. These full-length MP4s remain fragmented; the player uses
+HLS for segmented playback. HLS packaging also keeps streaming output: FFmpeg finalizes
 each segment through an atomic temporary-file rename, then the booster exchanges
 a short-lived scoped token for that segment's signed PUT destination. Finalized
 segments are uploaded to object storage and removed from booster scratch while
@@ -79,7 +103,9 @@ official release tarball with its SHA-256 pinned in the Dockerfile, so changing
 the version or source bytes is explicit and reviewable. The image build verifies
 the release version and all required external codecs, including actual WebP
 frame encoding and AV1-to-JPEG/H.264 decoding and transcoding in the final
-runtime image.
+runtime image. Both encoder image builds also run the complete Go encoder test
+suite against their bundled FFmpeg. The test executable is mounted only for
+the build check and is not included in the published image.
 
 Normal video uploads asynchronously hit the CPU booster's `/warmup` endpoint
 and the GPU booster's `/health` endpoint from the authorized tusd `pre-create`

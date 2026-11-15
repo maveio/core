@@ -78,8 +78,8 @@ defmodule MaveCore.Flow.Steps.MediaGenerateAudioPeaksStepTest do
         do: Application.put_env(:mave_core, :encoding_booster_adapter, old_booster),
         else: Application.delete_env(:mave_core, :encoding_booster_adapter)
 
-      Application.put_env(:mave_core, :flow_storage_adapter, old)
-      Application.put_env(:mave_core, :flow_direct_storage_ffmpeg_input, old_direct)
+      restore_env(:flow_storage_adapter, old)
+      restore_env(:flow_direct_storage_ffmpeg_input, old_direct)
     end)
 
     Storage.reset!()
@@ -165,4 +165,7 @@ defmodule MaveCore.Flow.Steps.MediaGenerateAudioPeaksStepTest do
       assert boosted["audio_track"] == "audio.wav"
     end
   end
+
+  defp restore_env(key, nil), do: Application.delete_env(:mave_core, key)
+  defp restore_env(key, value), do: Application.put_env(:mave_core, key, value)
 end

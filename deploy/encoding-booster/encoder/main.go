@@ -1287,6 +1287,9 @@ func writeUploadEvent(encoder *json.Encoder, flusher http.Flusher, event uploadE
 }
 
 func uploadMultipartPart(ctx context.Context, partURL string, body []byte) (string, error) {
+	// The transport may still hold the request body after returning a response.
+	// Keep each part immutable when the caller refills its streaming buffer.
+	body = bytes.Clone(body)
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodPut, partURL, bytes.NewReader(body))
@@ -1436,6 +1439,14 @@ func requiresSeekableFrameOutput(request encodeRequest) bool {
 	return request.Operation == "frame" && request.FrameCodec == "avif"
 }
 
+func requiresFaststartVideoOutput(request encodeRequest) bool {
+	// Finalize bounded preview clips here. Full-length videos and
+	// explicit time-range chunks retain streaming output for HLS and concatenation.
+	return request.Operation == "video" && request.OutputUpload != nil &&
+		!request.PackageHLS && request.MaxDurationSeconds > 0 && request.MaxDurationSeconds <= 60 &&
+		request.StartSeconds == 0 && request.DurationSeconds == 0
+}
+
 func ffmpegBaseArgs(request encodeRequest) []string {
 	inputFormats := safeInputFormats
 	if request.Operation == "frame" {
@@ -1471,6 +1482,10 @@ func ffmpegSourceHeaders(inputReferer string, inputBasicAuth string) string {
 	}
 	return headers.String()
 }
+
+// A long VFR pause can otherwise collect enough audio samples for a moof
+// header to exceed the non-seekable muxer's buffer and corrupt later packets.
+const videoFragmentDurationMicros = "2000000"
 
 func videoFFmpegArgs(request encodeRequest, backend string) []string {
 	args := append(ffmpegBaseArgs(request),
@@ -1533,6 +1548,7 @@ func videoFFmpegArgs(request encodeRequest, backend string) []string {
 	}
 	return append(args,
 		"-movflags", "frag_keyframe+empty_moov+default_base_moof",
+		"-frag_duration", videoFragmentDurationMicros,
 		"-f", "mp4", "pipe:1",
 	)
 }
@@ -1757,6 +1773,7 @@ func concatFFmpegArgs(request concatRequest) []string {
 		"-f", "concat", "-safe", "0", "-i", "pipe:0",
 		"-map", "0:v:0", "-map", "0:a?", "-c", "copy",
 		"-movflags", "frag_keyframe+empty_moov+default_base_moof",
+		"-frag_duration", videoFragmentDurationMicros,
 		"-f", "mp4", "pipe:1",
 	)
 }
@@ -3133,6 +3150,11 @@ func encodeHandler(timeout time.Duration, instanceID string, backend string, bea
 		}
 		if requiresSeekableFrameOutput(request) {
 			encodeSeekableFrame(writer, encodeContext, cancel, request, backend)
+			return
+		}
+		if requiresFaststartVideoOutput(request) {
+			uploadFaststartVideo(encodeContext, writer, ffmpegArgs(request, backend), *request.OutputUpload,
+				ffmpegSourceRedactions(request.InputURL, request.InputBasicAuth))
 			return
 		}
 		command := mediaCommand(encodeContext, ffmpegExecutable, ffmpegArgs(request, backend)...)

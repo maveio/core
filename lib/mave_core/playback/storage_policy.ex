@@ -19,22 +19,18 @@ defmodule MaveCore.Playback.StoragePolicy do
     Repo.transaction(fn ->
       Repo.one!(from(s in Space, where: s.id == ^space.id, lock: "FOR UPDATE"))
 
-      result =
-        if Repo.exists?(
-             from(e in Embed,
-               where:
-                 e.space_id == ^space.id and
-                   (e.playback_visibility == :private or e.playback_status != :public)
-             )
-           ) do
-          write_policy(space, nil, backend)
-        else
-          Storage.sync_space_domain_cors(space)
-        end
-
-      case result do
-        :ok -> :ok
-        {:error, reason} -> Repo.rollback(reason)
+      # Storage failures are returned to callers, which may treat a sync as
+      # best-effort. Rolling back here would also abort any enclosing transaction.
+      if Repo.exists?(
+           from(e in Embed,
+             where:
+               e.space_id == ^space.id and
+                 (e.playback_visibility == :private or e.playback_status != :public)
+           )
+         ) do
+        write_policy(space, nil, backend)
+      else
+        Storage.sync_space_domain_cors(space)
       end
     end)
     |> case do

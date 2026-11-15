@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -38,8 +39,20 @@ func TestVideoUploadsRejectIncompleteInputs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Keep the container and packet lengths intact, but corrupt a NAL length
+	// in a later fragment. A stream-copy probe can still exit successfully.
+	fixtures["invalid_nal"] = bytes.Clone(fixtures["complete"])
+	mdat := bytes.LastIndex(fixtures["invalid_nal"], []byte("mdat"))
+	if mdat < 0 || mdat+8 > len(fixtures["invalid_nal"]) {
+		t.Fatal("fixture has no media payload")
+	}
+	copy(fixtures["invalid_nal"][mdat+4:mdat+8], []byte{0x7f, 0xff, 0xff, 0xff})
 	for _, operation := range []string{"concat", "video"} {
-		for _, failure := range []string{"none", "http502", "truncated", "empty", "empty_middle"} {
+		failures := []string{"none", "http502", "truncated", "empty", "empty_middle"}
+		if operation == "concat" {
+			failures = append(failures, "invalid_nal")
+		}
+		for _, failure := range failures {
 			t.Run(operation+"/"+failure, func(t *testing.T) {
 				scratch := t.TempDir()
 				t.Setenv("BUNDLE_TEMP_DIR", scratch)
@@ -57,6 +70,8 @@ func TestVideoUploadsRejectIncompleteInputs(t *testing.T) {
 							return
 						case "empty", "empty_middle":
 							data = fixtures["empty"]
+						case "invalid_nal":
+							data = fixtures["invalid_nal"]
 						case "truncated":
 							w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 							_, _ = w.Write(data[:len(data)/2])
@@ -69,25 +84,29 @@ func TestVideoUploadsRejectIncompleteInputs(t *testing.T) {
 				if operation == "concat" {
 					segmentTestSourceClient(t, source.Client())
 				}
-				// Trust only this fixture certificate in FFmpeg's OpenSSL build.
+				// Trust only this fixture certificate in both TLS backends.
 				certificate := filepath.Join(t.TempDir(), "source.pem")
 				if err := os.WriteFile(certificate, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: source.Certificate().Raw}), 0600); err != nil {
 					t.Fatal(err)
 				}
-				// mediaCommand deliberately strips environment variables. Set this
-				// test-only CA after that boundary without changing production TLS.
+				// mediaCommand deliberately strips environment variables. Pass the
+				// test CA explicitly for HTTPS inputs; GnuTLS does not use SSL_CERT_FILE.
 				wrapperDir := t.TempDir()
 				quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
-				wrapper := "#!/bin/sh\nexport SSL_CERT_FILE=" + quote(certificate) + "\nexec " + quote(ffmpeg) + " \"$@\"\n"
+				wrapper := "#!/bin/sh\nfor arg do\ncase \"$arg\" in\nhttps://*) exec " +
+					quote(ffmpeg) + " -tls_verify 1 -ca_file " + quote(certificate) + " \"$@\" ;;\nesac\ndone\nexec " +
+					quote(ffmpeg) + " \"$@\"\n"
 				if err := os.WriteFile(filepath.Join(wrapperDir, "ffmpeg"), []byte(wrapper), 0700); err != nil {
 					t.Fatal(err)
 				}
 				t.Setenv("PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 				var uploaded, completed, aborted atomic.Bool
+				var published bytes.Buffer
 				storage := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					switch r.Method {
 					case http.MethodPut:
 						uploaded.Store(true)
+						_, _ = io.Copy(&published, r.Body)
 						w.Header().Set("ETag", `"part-1"`)
 					case http.MethodPost:
 						completed.Store(true)
@@ -115,7 +134,7 @@ func TestVideoUploadsRejectIncompleteInputs(t *testing.T) {
 					payload, err = json.Marshal(concatRequest{InputURLs: []string{first, source.URL + "/broken.mp4"}, OutputUpload: upload})
 					handler = concatHandler(10*time.Second, "test", "", nil, newActivityTracker())
 				} else {
-					payload, err = json.Marshal(encodeRequest{InputURL: source.URL + "/broken.mp4", Operation: "video", Codec: "h264", Width: 320, OutputUpload: &upload})
+					payload, err = json.Marshal(encodeRequest{InputURL: source.URL + "/broken.mp4", Operation: "video", Codec: "h264", Width: 320, MaxDurationSeconds: 60, OutputUpload: &upload})
 					handler = encodeHandler(10*time.Second, "test", "cpu", "", nil, newActivityTracker())
 				}
 				if err != nil {
@@ -128,11 +147,17 @@ func TestVideoUploadsRejectIncompleteInputs(t *testing.T) {
 					if !completed.Load() || aborted.Load() || !strings.Contains(body, `"status":"completed"`) {
 						t.Fatalf("complete video must succeed: %s", body)
 					}
+					if operation == "video" {
+						assertFaststartMP4(t, published.Bytes())
+					}
 					if operation == "concat" && (reads.Load() != 2 || ranged.Load() != 0 || !strings.Contains(body, `"frame":"40"`)) {
 						t.Fatalf("concat must download each source once and retain all packets: %s", body)
 					}
 				} else if completed.Load() || (uploaded.Load() && !aborted.Load()) || !strings.Contains(body, `"status":"failed"`) {
 					t.Fatalf("incomplete video must abort: completed=%v aborted=%v response=%s", completed.Load(), aborted.Load(), body)
+				}
+				if failure == "invalid_nal" && (uploaded.Load() || !strings.Contains(body, "concat chunk 1 contains invalid video packets")) {
+					t.Fatalf("invalid bitstream must identify its chunk before uploading: %s", body)
 				}
 				entries, _ := os.ReadDir(scratch)
 				if len(entries) != 0 {

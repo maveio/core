@@ -6,6 +6,8 @@ if [[ "$#" -eq 0 ]]; then
   exit 1
 fi
 
+bash "$(dirname "$0")/prepare-runner-network.sh"
+
 # The hosted-runner mirror can stall before tests even start. Use the signed
 # public Ubuntu archive and avoid unrelated recommended desktop packages.
 if [[ -f /etc/apt/apt-mirrors.txt ]]; then

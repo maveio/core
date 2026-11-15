@@ -1995,6 +1995,46 @@ defmodule MaveCore.Media.StorageTest do
     refute xml =~ "<AllowedOrigin>https://video-dns.com</AllowedOrigin>"
   end
 
+  for hash <- ["ordinary", "trial"] do
+    test "Scaleway #{hash} bucket sync only updates CORS when hotlink protection is disabled" do
+      Req.default_options(plug: {Req.Test, __MODULE__})
+
+      Application.put_env(:mave_core, :storage_providers, %{
+        "scaleway-test" => [
+          endpoint: "https://s3.fr-par.scw.cloud",
+          region: "fr-par",
+          access_key_id: "test-key",
+          secret_access_key: "test-secret"
+        ]
+      })
+
+      bucket_path = "/space-#{unquote(hash)}"
+
+      Req.Test.expect(__MODULE__, fn conn ->
+        assert conn.method == "HEAD"
+        assert conn.request_path == bucket_path
+        send_resp(conn, 200, "")
+      end)
+
+      Req.Test.expect(__MODULE__, fn conn ->
+        assert conn.method == "PUT"
+        assert conn.request_path == bucket_path
+        assert conn.query_string == "cors"
+        assert Req.Test.raw_body(conn) =~ "<AllowedOrigin>*</AllowedOrigin>"
+        send_resp(conn, 200, "")
+      end)
+
+      # Any policy read, write or delete is an unexpected request.
+      assert :ok =
+               Storage.sync_space_domain_cors(%Space{
+                 hash: unquote(hash),
+                 region: "scaleway-test",
+                 hotlink_protection_enabled: false,
+                 domains: []
+               })
+    end
+  end
+
   test "sync_space_domain_cors keeps the shared trial bucket public" do
     Req.default_options(plug: {Req.Test, __MODULE__})
 

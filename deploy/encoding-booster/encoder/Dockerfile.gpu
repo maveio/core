@@ -4,6 +4,7 @@ WORKDIR /src
 COPY go.mod *.go ./
 COPY assets/play.png ./assets/play.png
 RUN go test ./... \
+    && CGO_ENABLED=0 go test -c -o /out/encoder.test \
     && CGO_ENABLED=0 GOOS=linux go build \
       -trimpath -ldflags="-s -w -buildid=" -o /out/encoder .
 
@@ -61,6 +62,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+      apt libapt-pkg6.0t64 \
       ca-certificates libdav1d7 libgnutls30t64 libmp3lame0 libopus0 libseccomp2 \
       libsvtav1enc1d1 libwebp7 libwebpmux3 libx264-164 libx265-199 zlib1g \
     && sed -i -e '/^mozilla\/emSign_ECC_Root_CA_-_G3.crt$/s/^/!/' \
@@ -85,6 +87,8 @@ RUN ffmpeg -version | grep 'ffmpeg version 9.0.2' \
 COPY --from=sandbox-build /mave-media-sandbox /usr/local/bin/mave-media-sandbox
 COPY --from=sandbox-build /mave-media-network.so /usr/local/lib/mave-media-network.so
 COPY --from=broker-build /mave-media-broker /usr/local/bin/mave-media-broker
+RUN --mount=type=bind,from=app-build,source=/out/encoder.test,target=/tmp/encoder.test \
+    /tmp/encoder.test -test.v
 ENV MAVE_MEDIA_SANDBOX=required MAVE_MEDIA_SANDBOX_GPU=true
 COPY --from=app-build /out/encoder /encoder
 
