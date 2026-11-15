@@ -30,14 +30,26 @@ defmodule MaveCore.AudioDescription.MistralSpeech do
         "response_format" => "wav"
       }
 
-      case Req.post(@endpoint,
-             json: body,
-             headers: [{"authorization", "Bearer #{api_key}"}, {"accept", "application/json"}],
-             finch: [pool_timeout: @pool_timeout_ms],
-             receive_timeout: @receive_timeout_ms,
-             retry: :transient,
-             max_retries: 3
-           ) do
+      request =
+        Req.new(
+          url: @endpoint,
+          method: :post,
+          json: body,
+          headers: [{"authorization", "Bearer #{api_key}"}, {"accept", "application/json"}],
+          finch: [pool_timeout: @pool_timeout_ms],
+          receive_timeout: @receive_timeout_ms,
+          retry: :transient,
+          max_retries: 3
+        )
+        |> MaveCore.Usage.attach(opts[:usage_context], %{
+          category: "audio_description",
+          provider: "mistral",
+          model: body["model"],
+          operation: "speech",
+          quantities: %{"input_characters" => String.length(body["input"])}
+        })
+
+      case Req.request(request) do
         {:ok, %{status: status, body: %{"audio_data" => audio}}}
         when status in 200..299 and is_binary(audio) ->
           decode_audio(audio)

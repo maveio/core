@@ -89,7 +89,9 @@ defmodule MaveCore.AudioDescription.Alignment do
         schema: schema(),
         max_tokens: if(attempt == 1, do: 16_000, else: 24_000),
         reasoning_effort: "low",
-        on_response: notify
+        on_response: notify,
+        usage_context: opts[:usage_context],
+        usage_operation: "alignment"
       )
 
     case result do

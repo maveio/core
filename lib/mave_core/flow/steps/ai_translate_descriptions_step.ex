@@ -32,7 +32,9 @@ defmodule MaveCore.Flow.Steps.AiTranslateDescriptionsStep do
              instruction,
              [%{"type" => "text", "text" => Jason.encode!(input)}],
              schema: Prompts.translations_schema(),
-             max_tokens: 16_000
+             max_tokens: 16_000,
+             usage_context: ctx.usage_context,
+             usage_operation: "translation"
            ),
          {:ok, texts} <- Prompts.check_translations(answer["translations"], length(cues)),
          translated =

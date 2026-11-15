@@ -36,12 +36,12 @@ defmodule MaveCore.AudioDescription.Scaleway do
         }
         |> maybe_put("reasoning_effort", reasoning_effort())
 
-      request_json(body, api_key, 1)
+      request_json(body, api_key, 1, opts)
     end
   end
 
-  defp request_json(body, api_key, retries_left) do
-    result = body |> request(api_key) |> decode_answer()
+  defp request_json(body, api_key, retries_left, opts) do
+    result = body |> request(api_key, opts) |> decode_answer()
 
     case result do
       {:error, reason}
@@ -49,7 +49,7 @@ defmodule MaveCore.AudioDescription.Scaleway do
              reason in [:invalid_model_json, :model_output_truncated, :empty_model_answer] ->
         body
         |> retry_body(reason)
-        |> request_json(api_key, retries_left - 1)
+        |> request_json(api_key, retries_left - 1, opts)
 
       _ ->
         result
@@ -74,15 +74,26 @@ defmodule MaveCore.AudioDescription.Scaleway do
     |> Map.update!("messages", &(&1 ++ [instruction]))
   end
 
-  defp request(body, api_key) do
-    case Req.post(endpoint(),
-           json: body,
-           headers: [{"authorization", "Bearer #{api_key}"}, {"accept", "application/json"}],
-           finch: [pool_timeout: @pool_timeout_ms],
-           receive_timeout: @receive_timeout_ms,
-           retry: :transient,
-           max_retries: 3
-         ) do
+  defp request(body, api_key, opts) do
+    request =
+      Req.new(
+        url: endpoint(),
+        method: :post,
+        json: body,
+        headers: [{"authorization", "Bearer #{api_key}"}, {"accept", "application/json"}],
+        finch: [pool_timeout: @pool_timeout_ms],
+        receive_timeout: @receive_timeout_ms,
+        retry: :transient,
+        max_retries: 3
+      )
+      |> MaveCore.Usage.attach(opts[:usage_context], %{
+        category: "audio_description",
+        provider: "scaleway",
+        model: body["model"],
+        operation: opts[:usage_operation] || "vision"
+      })
+
+    case Req.request(request) do
       {:ok, %{status: status, body: body}} when status in 200..299 -> {:ok, body}
       {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, truncate(body)}}
       {:error, reason} -> {:error, reason}

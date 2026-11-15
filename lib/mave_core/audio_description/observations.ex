@@ -87,7 +87,9 @@ defmodule MaveCore.AudioDescription.Observations do
                instruction(language) <> transcript_context(batch, transcript),
                content,
                schema: schema(),
-               max_tokens: 8_000
+               max_tokens: 8_000,
+               usage_context: ctx[:usage_context],
+               usage_operation: "vision"
              ),
            {:ok, anchored} <- anchor(rows, batch) do
         StepSupport.report_progress(ctx[:progress_reporter], %{

@@ -113,6 +113,7 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
 
   defp write_script(ctx, observations, document, transcript) do
     opts = [
+      usage_context: ctx.usage_context,
       on_attempt: fn attempt -> report_progress(ctx, "writing_script", 75, attempt) end,
       on_alignment_attempt: fn attempt ->
         report_progress(ctx, "repairing_alignment", 85, attempt)
@@ -123,6 +124,8 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
     if option?(ctx, "reuse_script") do
       with {:ok, cues} <- AD.get_json(ctx, AD.work_key(ctx, "raw-cues.json")),
            {:ok, plan} <- AD.get_json(ctx, AD.work_key(ctx, "plan.json")) do
+        record_reused(ctx, "mistral", "script")
+
         Script.repair(
           AD.writer_provider(),
           Map.put(plan, "cues", cues),
@@ -153,6 +156,7 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
     case AD.get_json(ctx, key) do
       {:ok, %{"schema_version" => 1, "frames" => rows} = cache} ->
         if cache["language"] in [nil, AD.language(ctx)] and Observations.reusable?(rows, document) do
+          record_reused(ctx, "scaleway", "vision")
           report_progress(ctx, "reusing_observations", 70, 0)
           {:ok, rows, key, true}
         else
@@ -171,6 +175,23 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
       error ->
         error
     end
+  end
+
+  defp record_reused(ctx, provider, operation) do
+    model =
+      if provider == "scaleway",
+        do: System.get_env("MAVE_AUDIO_DESCRIPTION_MODEL", "gemma-4-26b-a4b-it"),
+        else: System.get_env("MAVE_AUDIO_DESCRIPTION_WRITER_MODEL", "mistral-large-4-0")
+
+    MaveCore.Usage.record(ctx.usage_context, %{
+      category: "audio_description",
+      provider: provider,
+      model: model,
+      operation: operation,
+      status: "reused",
+      usage_status: "reused",
+      quantities: %{}
+    })
   end
 
   defp missing_observations(ctx, document, transcript, key) do

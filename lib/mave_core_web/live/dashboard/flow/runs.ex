@@ -33,6 +33,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
      |> assign(:step_type, nil)
      |> assign(:time_window, nil)
      |> assign(:expanded_run_ids, MapSet.new())
+     |> assign(:extra_run_sections, Application.get_env(:mave_core, :extra_flow_run_sections, []))
      |> maybe_subscribe_flow_events()}
   end
 
@@ -610,6 +611,13 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                 class="border-b border-stone-200/40 bg-stone-50/60 px-6 py-3 last:border-b-0"
               >
                 <div class="pl-7">
+                  <.live_component
+                    :for={section <- @extra_run_sections}
+                    module={section.module}
+                    id={"#{section.id}-#{run.id}"}
+                    run={run}
+                    current_user={@current_user}
+                  />
                   <.data_table_grid
                     columns={flow_run_steps_grid_columns()}
                     class="rounded-sm shadow-none ring-stone-200/70"
