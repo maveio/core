@@ -563,6 +563,8 @@ defmodule MaveCore.Embeds do
         subtitles: subtitles
       })
 
+    audio_tracks = PendingMedia.audio_tracks_for_run(audio_tracks, flow_run, current_version)
+
     audio_only? = audio_only_source?(current_video, flow_run, current_version, audio_tracks)
     effective_settings = effective_settings(video_embed, settings_override)
     thumbnail_cache_buster = thumbnail_cache_buster(current_video && current_video.id)

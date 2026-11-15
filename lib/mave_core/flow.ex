@@ -4863,12 +4863,57 @@ defmodule MaveCore.Flow do
         :ok
 
       language ->
+        correct_source_language? = independently_detected_language?(step_runs, language)
+
         AudioTrack
         |> where([track], track.video_id == ^video_id and track.default == true)
         |> Repo.all()
-        |> Enum.each(&maybe_update_audio_track_language(&1, language))
+        |> Enum.each(fn track ->
+          correct_source_language? =
+            correct_source_language? and original_audio_track?(track, step_runs)
+
+          maybe_update_audio_track_language(track, language, correct_source_language?)
+        end)
     end
   end
+
+  defp independently_detected_language?(step_runs, language) do
+    Enum.any?(step_runs, fn
+      %StepRun{
+        step_type: "ai.transcribe_audio",
+        status: "succeeded",
+        output: %{"status" => "ok"} = output
+      } ->
+        output["transcription_language_source"] in ["provider", "text_detection", "requested"] and
+          normalized_track_language(output["language"]) == language
+
+      _ ->
+        false
+    end)
+  end
+
+  defp original_audio_track?(%AudioTrack{label: label} = track, step_runs)
+       when label in [nil, "", "Original"] do
+    Enum.any?(step_runs, fn
+      %StepRun{
+        step_type: "media.transcode_audio",
+        status: "succeeded",
+        input: input,
+        output: %{"status" => "ok", "audio_tracks" => tracks}
+      }
+      when is_list(tracks) ->
+        is_nil(normalized_track_language(get_in(input || %{}, ["params", "language"]))) and
+          Enum.any?(tracks, fn source ->
+            source["default"] == true and source["filename"] == track.filename and
+              normalized_track_language(source["language"]) == track.language
+          end)
+
+      _ ->
+        false
+    end)
+  end
+
+  defp original_audio_track?(_track, _step_runs), do: false
 
   defp detected_subtitle_language(step_runs) do
     step_runs
@@ -5427,8 +5472,10 @@ defmodule MaveCore.Flow do
     end
   end
 
-  defp maybe_update_audio_track_language(track, language) do
-    if is_binary(track.language) and String.trim(track.language) != "" do
+  defp maybe_update_audio_track_language(track, language, correct_source_language?) do
+    if track.language == language or
+         (is_binary(track.language) and String.trim(track.language) != "" and
+            not correct_source_language?) do
       :ok
     else
       track

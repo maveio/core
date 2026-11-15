@@ -17,6 +17,47 @@ defmodule MaveCore.Embeds.PendingMedia do
 
   def for_run(_, _, _), do: @empty
 
+  def audio_tracks_for_run(tracks, %Run{status: status} = run, version)
+      when status in ["queued", "running"] do
+    if run_version(run) == version and
+         Enum.any?(
+           run.step_runs,
+           &(&1.step_type == "ai.transcribe_audio" and &1.status in @active)
+         ) do
+      Enum.map(tracks, &pending_audio_language(&1, run.step_runs))
+    else
+      tracks
+    end
+  end
+
+  def audio_tracks_for_run(tracks, _run, _version), do: tracks
+
+  defp pending_audio_language(track, steps) do
+    if track.default and Enum.any?(steps, &automatic_audio_source?(&1, track)),
+      do: Map.merge(track, %{label: "Original", language: nil, language_pending: true}),
+      else: track
+  end
+
+  defp automatic_audio_source?(
+         %{step_type: "media.transcode_audio", status: "succeeded"} = step,
+         track
+       ) do
+    configured_language = get_in(step.input || %{}, ["params", "language"])
+    sources = Map.get(step.output || %{}, "audio_tracks", [])
+
+    is_nil(Languages.normalize_media_language(configured_language)) and
+      Enum.any?(sources, &unchanged_original?(&1, track))
+  end
+
+  defp automatic_audio_source?(_step, _track), do: false
+
+  defp unchanged_original?(source, track) do
+    source["default"] == true and source["label"] in [nil, "", "Original"] and
+      source["filename"] == track.filename and
+      Languages.normalize_media_language(source["language"]) == track.language and
+      track.label == AudioTrack.display_label(source)
+  end
+
   defp build_pending(run, current) do
     outputs = Map.new(run.step_runs, &{&1.step_id, &1.output || %{}})
 

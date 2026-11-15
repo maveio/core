@@ -2217,6 +2217,20 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   attr :myself, :any, required: true
 
   defp audio_tracks_options_section(assigns) do
+    {pending_tracks, tracks} =
+      Enum.split_with(assigns.tracks || [], &Map.get(&1, :language_pending, false))
+
+    pending_rows =
+      Enum.map(
+        pending_tracks,
+        &Map.merge(&1, %{id: "generated-audio-language-#{&1.id}", state: :processing})
+      )
+
+    assigns =
+      assigns
+      |> assign(:tracks, tracks)
+      |> assign(:generated_tracks, assigns.generated_tracks ++ pending_rows)
+
     assigns = assign(assigns, :language_options, language_options())
     has_tracks = Enum.any?(assigns.tracks || [])
 
