@@ -7,11 +7,12 @@ defmodule MaveCore.Accounts do
 
   alias MaveCore.AccountDeletion
   alias MaveCore.Accounts.{User, UserNotifier, UserToken}
-  alias MaveCore.Embeds
+  alias MaveCore.Embeds.Embed
   alias MaveCore.Repo
   alias MaveCore.Spaces
   alias MaveCore.Spaces.{Domain, Membership, MembershipInvite, Space}
   alias MaveCore.StorageProfiles
+  alias MaveCore.Workers.AccountDeletionWorker
 
   @space_hash_chars ~c"0123456789abcdefghijklmnopqrstuvwxyz"
   @space_hash_length 5
@@ -151,22 +152,33 @@ defmodule MaveCore.Accounts do
   end
 
   def delete_account_and_space(%User{} = user, %Space{} = space) do
-    # Hiding all media can outlast the default database checkout timeout.
-    # Keep the lock and rollback boundary until storage protection finishes.
-    Repo.transaction(fn -> delete_account_and_space_records(user, space) end, timeout: :infinity)
+    Repo.transaction(fn -> delete_account_and_space_records(user, space) end)
   end
 
   defp delete_account_and_space_records(%User{} = user, %Space{} = space) do
     with {:ok, current_space} <- lock_active_space(space.id),
          :ok <- can_delete_account_and_space?(user, current_space),
-         {:ok, _deleted_embeds} <- Embeds.delete_space_videos(current_space),
          {:ok, _space} <- Spaces.delete_space(current_space),
          {:ok, deleted_user} <- delete(user),
+         {:ok, _job} <- enqueue_account_media_deletion(current_space),
          :ok <- AccountDeletion.enqueue_deleted_space_cleanup(current_space) do
       deleted_user
     else
       {:error, reason} -> Repo.rollback(reason)
     end
+  end
+
+  defp enqueue_account_media_deletion(space) do
+    now = DateTime.utc_now()
+
+    from(e in Embed,
+      where: e.space_id == ^space.id and e.type == :video and is_nil(e.deleted_at)
+    )
+    |> Repo.update_all(set: [deleted_at: now, updated_at: now])
+
+    %{space_id: space.id, space_hash: space.hash, space_region: space.region}
+    |> AccountDeletionWorker.new()
+    |> Oban.insert()
   end
 
   defp lock_active_space(space_id) do

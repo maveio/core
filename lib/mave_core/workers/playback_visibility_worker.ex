@@ -22,7 +22,11 @@ defmodule MaveCore.Workers.PlaybackVisibilityWorker do
       Repo.one!(from(s in Space, where: s.id == ^embed.space_id, lock: "FOR UPDATE"))
       current = Repo.get!(Embed, embed.id) |> Repo.preload(:space)
 
-      apply_visibility(current, Playback.adapter())
+      if is_nil(current.deleted_at) and is_nil(current.space.deleted_at) do
+        apply_visibility(current, Playback.adapter())
+      else
+        current
+      end
     end)
     |> case do
       {:ok, updated} ->

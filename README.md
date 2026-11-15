@@ -129,6 +129,15 @@ and backups. If you would rather focus on your videos,
 
 ## Contributing and security
 
+Account deletion revokes account and space access immediately. Media protection
+runs asynchronously on the existing Oban `flow_low` queue, which must remain
+enabled. `MaveCore.Workers.AccountDeletionWorker` processes twenty videos per
+batch, records progress after each video, and retries failed attempts up to
+twenty times with a five-minute limit per attempt. Until protection completes,
+previously public storage URLs may still work. Monitor failed or discarded jobs
+and retry them after resolving storage errors; database deletion does not imply
+that storage protection has finished. Source retention remains host-controlled.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) to develop and test locally.
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
