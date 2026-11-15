@@ -4553,6 +4553,7 @@ defmodule MaveCore.Flow do
                 "ai.transcribe_audio",
                 "ai.translate_subtitles",
                 "media.mix_audio_description",
+                "media.build_hls_master",
                 "manifest.build"
               ] do
     with %Run{input: %{"space_hash" => space_hash, "embed_hash" => embed_hash}} = run <-
@@ -4570,7 +4571,8 @@ defmodule MaveCore.Flow do
         subtitle_step when subtitle_step in ["ai.transcribe_audio", "ai.translate_subtitles"] ->
           sync_subtitles(video.id, step_runs)
 
-        type when type in ["manifest.build", "media.generate_audio_peaks"] ->
+        type
+        when type in ["manifest.build", "media.generate_audio_peaks", "media.build_hls_master"] ->
           :ok
       end
 
@@ -4647,6 +4649,7 @@ defmodule MaveCore.Flow do
               "ai.transcribe_audio",
               "ai.translate_subtitles",
               "media.mix_audio_description",
+              "media.build_hls_master",
               "manifest.build"
             ] do
     Assets.refresh_hls_master_playlist(embed)

@@ -71,6 +71,66 @@ defmodule MaveCore.Assets.AudioDescriptionPublicationTest do
     assert [%{"filename" => "audio.mp3"}] = manifest["audio_tracks"]
   end
 
+  test "a later HLS master step preserves already published audio descriptions" do
+    embed = embed_fixture()
+    description(embed, "nl")
+    assert :ok = Assets.refresh_audio_outputs(embed)
+
+    {:ok, template} =
+      Flow.create_template(%{"slug" => "late-hls-master", "name" => "Late HLS master"})
+
+    {:ok, _} =
+      Flow.create_version(template.id, %{
+        "definition" => %{
+          "steps" => [
+            %{"id" => "variant", "type" => "media.package_hls_variant", "name" => "Variant"},
+            %{
+              "id" => "master",
+              "type" => "media.build_hls_master",
+              "name" => "Master",
+              "depends_on" => ["variant"]
+            },
+            %{
+              "id" => "remaining",
+              "type" => "source.resolve",
+              "name" => "Remaining work",
+              "depends_on" => ["master"]
+            }
+          ]
+        }
+      })
+
+    {:ok, run} =
+      Flow.start_run(
+        template.slug,
+        %{"space_hash" => embed.space.hash, "embed_hash" => embed.hash, "region" => "eu"},
+        enqueue: false
+      )
+
+    Repo.get_by!(StepRun, flow_run_id: run.id, step_id: "variant")
+    |> StepRun.changeset(%{
+      status: "succeeded",
+      output: %{
+        "status" => "ok",
+        "step_type" => "media.package_hls_variant",
+        "size" => "hd",
+        "codec" => "h264",
+        "playlist_path" => "h264_hd_hls/playlist.m3u8"
+      }
+    })
+    |> Repo.update!()
+
+    assert {:ok, _} = Flow.reconcile_run(run.id, enqueue_jobs: false)
+
+    assert {:ok, %{"status" => "ok", "audio_track_count" => 0}} =
+             Flow.execute_step(run.id, "master", enqueue_coordinator: false)
+
+    assert {:ok, playlist} = Storage.get("space-abcde", "abcdefghij/playlist.m3u8", "eu")
+    assert playlist =~ "audio_description_nl_hls/playlist.m3u8"
+    assert playlist =~ "public.accessibility.describes-video"
+    assert playlist =~ "audio_hls/playlist.m3u8"
+  end
+
   test "deletion republishes the playlist and removes the final description from the manifest" do
     embed = embed_fixture()
     dutch = description(embed, "nl")
