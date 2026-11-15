@@ -33,6 +33,43 @@ defmodule MaveCore.AudioDescription.BudgetTest do
     assert window.start >= 0.5
   end
 
+  test "essential text can finish in nearby silence after its card disappears" do
+    item =
+      cue(10, 15, "Read the guide at example.org/accessibility.", 3)
+      |> Map.put(:visual_window, %{start: 10.0, end: 15.0})
+
+    assert [planned] = Budget.allocate([item], [], 18, "other").cues
+    assert planned.window == %{start: 10.0, end: 15.0}
+    assert planned.duck_window == %{start: 10.0, end: 17.0}
+
+    [roundtrip] = planned |> List.wrap() |> Cues.to_json() |> Cues.from_json()
+    assert roundtrip.duck_window == planned.duck_window
+
+    fitted = Map.merge(roundtrip, %{window: roundtrip.duck_window, allow_ducking: true})
+    timeline = Timeline.plan_timeline([fitted], [5800], [], 18, 1000)
+    assert length(timeline.cues) == 1
+    assert timeline.skipped == []
+  end
+
+  test "text carryover stops before speech, another cue, and the video ending margin" do
+    item =
+      cue(10, 15, "Read the guide at example.org.", 3)
+      |> Map.put(:visual_window, %{start: 10.0, end: 15.0})
+
+    assert [planned] = Budget.allocate([item], [%{start: 15.8, end: 18.0}], 20, "other").cues
+    assert planned.duck_window.end <= 15.8
+
+    other =
+      %{cue(16, 18, "A door closes.", 2) | kind: "action"}
+      |> Map.put(:visual_window, %{start: 16.0, end: 18.0})
+
+    assert [first, second] = Budget.allocate([item, other], [], 20, "other").cues
+    assert first.duck_window.end <= second.window.start - 0.15
+
+    assert [ending] = Budget.allocate([item], [], 16, "other").cues
+    assert ending.duck_window.end <= 15.7
+  end
+
   test "reserves end room and prioritizes essential visible text over optional detail" do
     low = cue(8.5, 9.5, "The background is blue.", 1)
     essential = cue(8, 10, "Call 112.", 3)

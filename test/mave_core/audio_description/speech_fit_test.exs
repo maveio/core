@@ -199,6 +199,45 @@ defmodule MaveCore.AudioDescription.SpeechFitTest do
     assert fitted.allow_ducking
   end
 
+  test "essential text uses its reserved silent extension without changing the message" do
+    text = "Read the guide at example.org/accessibility."
+
+    item = %{
+      text: text,
+      kind: "text",
+      priority: 3,
+      on_screen_text: text,
+      window: %{start: 10.0, end: 15.0},
+      duck_window: %{start: 10.0, end: 17.0},
+      max_words: 12
+    }
+
+    assert {:ok, fitted, _, "original"} =
+             SpeechFit.fit(
+               item,
+               fn ^text, :moderate -> {:ok, pcm(5.8)} end,
+               fn _, _, _ -> flunk("the full essential message fits its reserved time") end,
+               estimate: &prediction(&1, 6.0)
+             )
+
+    assert fitted.text == text
+    assert fitted.window == item.duck_window
+  end
+
+  test "shortening cannot replace an explicit person with an unintroduced pronoun" do
+    for {original, shortened} <- [
+          {"A woman stands beside a railing.", "She waits."},
+          {"Een vrouw staat bij een leuning.", "Ze wacht."}
+        ] do
+      assert {:skip, "no_fitting_rewrite"} =
+               SpeechFit.fit(
+                 cue(original),
+                 fn _, _ -> {:ok, pcm(4.0)} end,
+                 fn _, _, _ -> {:ok, shortened} end
+               )
+    end
+  end
+
   test "each rewrite receives measured speech feedback and retains the original event" do
     original = "A person in a bright coat walks through a hall."
     item = %{text: original, window: %{start: 0.0, end: 3.0}, max_words: 8}

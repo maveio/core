@@ -139,6 +139,24 @@ defmodule MaveCore.AudioDescription.Budget do
     end
   end
 
+  # Reading an essential card may finish just after the card disappears, but
+  # only in silence, before another cue, and with most speech still on the card.
+  defp fallback_window(%{priority: 3, kind: "text", window: window} = cue, free, speech)
+       when is_map(window) do
+    carryover = min(2.0, (cue.scene.end - window.start) / 2)
+    ceiling = min(window.start + @max_slot, cue.scene.end + carryover)
+    candidate = %{cue | scene: %{start: window.start, end: ceiling}}
+    silent = Enum.reduce(speech, free, &subtract(&2, &1))
+
+    case reserve_window(candidate, silent, @max_slot) do
+      %{start: start, end: stop} = extension when start == window.start and stop > window.end ->
+        extension
+
+      _ ->
+        nil
+    end
+  end
+
   defp fallback_window(%{priority: 3} = cue, free, _speech),
     do:
       reserve_window(cue, free, min(4.0, max(1.2, Cues.estimate_speech_seconds(cue.text) * 1.5)))
