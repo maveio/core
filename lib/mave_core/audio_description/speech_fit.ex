@@ -59,14 +59,15 @@ defmodule MaveCore.AudioDescription.SpeechFit do
 
   # Useful descriptions may finish across a short pause boundary. Use their
   # reserved extension before rewriting a complete, naturally spoken sentence.
-  defp preparation_budget(%{priority: 2, window: window, duck_window: extra}, budget)
-       when extra.start == window.start,
+  defp preparation_budget(%{priority: priority, window: window, duck_window: extra}, budget)
+       when priority in [2, 3] and extra.start == window.start,
        do: max(budget, extra.end - extra.start)
 
   defp preparation_budget(_cue, budget), do: budget
 
-  defp fits_extension?(%{priority: 2, window: window, duck_window: extra} = cue, clip),
-    do: extra.start == window.start and fits?(cue.text, clip, extra.end - extra.start)
+  defp fits_extension?(%{priority: priority, window: window, duck_window: extra} = cue, clip)
+       when priority in [2, 3],
+       do: extra.start == window.start and fits?(cue.text, clip, extra.end - extra.start)
 
   defp fits_extension?(_cue, _clip), do: false
 
@@ -244,7 +245,15 @@ defmodule MaveCore.AudioDescription.SpeechFit do
     # The word target estimates timing, not grammar. Let a complete phrase keep
     # its articles/prepositions; synthesized duration remains the hard limit.
     text != "" and word_count(text) <= max(max_words, word_count(cue.text)) and
-      MapSet.subset?(numbers(cue.text), numbers(text)) and required_text_present?(cue, text)
+      MapSet.subset?(numbers(cue.text), numbers(text)) and required_text_present?(cue, text) and
+      preserves_subject?(cue.text, text)
+  end
+
+  # Rewrites see one cue, not the preceding narration. They cannot establish
+  # that a listener knows who a newly substituted pronoun refers to.
+  defp preserves_subject?(original, rewritten) do
+    pronoun = ~r/^\s*(?:he|she|they|it|hij|zij|ze)\b/iu
+    not Regex.match?(pronoun, rewritten) or Regex.match?(pronoun, original)
   end
 
   defp required_text_present?(cue, text) do
