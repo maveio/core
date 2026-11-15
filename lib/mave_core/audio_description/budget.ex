@@ -146,7 +146,15 @@ defmodule MaveCore.AudioDescription.Budget do
     carryover = min(2.0, (cue.scene.end - window.start) / 2)
     ceiling = min(window.start + @max_slot, cue.scene.end + carryover)
     candidate = %{cue | scene: %{start: window.start, end: ceiling}}
-    silent = Enum.reduce(speech, free, &subtract(&2, &1))
+    # Speech intervals already include their safety padding. Subtracting them
+    # with the inter-description breath again can move the reserved start.
+    silent =
+      for gap <- Timeline.free_gaps(speech, ceiling),
+          available <- free,
+          start = max(gap.start, available.start),
+          stop = min(gap.end, available.end),
+          stop > start,
+          do: %{start: start, end: stop}
 
     case reserve_window(candidate, silent, @max_slot) do
       %{start: start, end: stop} = extension when start == window.start and stop > window.end ->

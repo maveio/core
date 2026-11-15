@@ -48,8 +48,7 @@ defmodule MaveCore.AudioDescription.MistralSpeechTest do
       assert_received {:speech_request, request}
       assert request["voice_id"] == "test-dutch-voice"
 
-      assert request["input"] ==
-               "[emotion=warm]" <> String.replace(text, "example.org", "example punt oo er gee")
+      assert request["input"] == "[emotion=warm]" <> text
     end
   end
 

@@ -38,7 +38,9 @@ defmodule MaveCore.AudioDescription.BudgetTest do
       cue(10, 15, "Read the guide at example.org/accessibility.", 3)
       |> Map.put(:visual_window, %{start: 10.0, end: 15.0})
 
-    assert [planned] = Budget.allocate([item], [], 18, "other").cues
+    assert [planned] =
+             Budget.allocate([item], [%{start: 0.0, end: 9.95}], 18, "other").cues
+
     assert planned.window == %{start: 10.0, end: 15.0}
     assert planned.duck_window == %{start: 10.0, end: 17.0}
 

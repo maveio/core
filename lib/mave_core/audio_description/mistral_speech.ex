@@ -9,8 +9,6 @@ defmodule MaveCore.AudioDescription.MistralSpeech do
   videos.
   """
 
-  alias MaveCore.AudioDescription.Pronunciation
-
   @endpoint "https://api.mistral.ai/v1/audio/speech"
   @default_model "voxtral-mini-tts-3-0"
   @default_voices "en:gb_jane_neutral,nl:voice_3145"
@@ -67,9 +65,8 @@ defmodule MaveCore.AudioDescription.MistralSpeech do
   end
 
   # Keep the voice's natural rate unless fitting explicitly requests faster speech.
-  defp delivery_text(text, language, pace) do
+  defp delivery_text(text, _language, pace) do
     clean = Regex.replace(~r/\[(?:pace|emotion)=[^\]]*\]/u, text, "")
-    clean = Pronunciation.for_speech(clean, language)
     tempo = if pace == :fast, do: "[pace=fast]", else: ""
     "[emotion=warm]#{tempo}#{clean}"
   end
