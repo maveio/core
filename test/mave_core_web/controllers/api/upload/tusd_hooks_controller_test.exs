@@ -1548,8 +1548,11 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
 
     assert Enum.any?(
              manifest["audio_descriptions"],
-             &(&1["label"] == "replacement (audio description)")
+             &(&1["label"] == "replacement")
            )
+
+    {:ok, republished} = ManifestPublisher.publish(embed)
+    assert republished["audio_descriptions"] == manifest["audio_descriptions"]
 
     {:ok, playlist} =
       FlowStorageAdapterStub.get(
