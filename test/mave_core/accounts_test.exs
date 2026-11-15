@@ -185,7 +185,7 @@ defmodule MaveCore.AccountsTest do
       |> MembershipInvite.create_changeset(%{email: email, created_by_id: user.id})
       |> Repo.insert!()
 
-    assert {:ok, deleted_user} = Accounts.delete_account_and_space(user, space)
+    assert {:ok, deleted_user} = delete_account_and_space(user, space)
 
     anonymized_email = "deleted##{user.id}"
     assert deleted_user.email == anonymized_email
@@ -219,7 +219,7 @@ defmodule MaveCore.AccountsTest do
     video = video_embed_fixture(space)
     other_video = video_embed_fixture(other_space)
 
-    assert {:ok, _deleted_user} = Accounts.delete_account_and_space(user, space)
+    assert {:ok, _deleted_user} = delete_account_and_space(user, space)
 
     assert Repo.get!(Embed, video.id).deleted_at
     refute Repo.get!(Embed, other_video.id).deleted_at
@@ -234,7 +234,7 @@ defmodule MaveCore.AccountsTest do
     first_space = user.current_space_membership.space
     assert {:ok, _updated_user} = Accounts.create_space_for_user(user)
 
-    assert {:error, "Part of other space"} = Accounts.delete_account_and_space(user, first_space)
+    assert {:error, "Part of other space"} = delete_account_and_space(user, first_space)
 
     assert is_nil(Repo.get!(User, user.id).deleted_at)
     assert is_nil(Repo.get!(Space, first_space.id).deleted_at)
@@ -302,7 +302,7 @@ defmodule MaveCore.AccountsTest do
     assert {:ok, _member_membership} = Spaces.add_member_by_email(child_space, member_user.email)
 
     assert {:error, "Part of other space"} =
-             Accounts.delete_account_and_space(owner_user, child_space)
+             delete_account_and_space(owner_user, child_space)
 
     assert is_nil(Repo.get!(User, owner_user.id).deleted_at)
     assert is_nil(Repo.get!(Space, child_space.id).deleted_at)
@@ -577,5 +577,11 @@ defmodule MaveCore.AccountsTest do
       %Domain{domain: domain} -> domain
       nil -> ""
     end
+  end
+
+  defp delete_account_and_space(user, space) do
+    Oban.Testing.with_testing_mode(:manual, fn ->
+      Accounts.delete_account_and_space(user, space)
+    end)
   end
 end

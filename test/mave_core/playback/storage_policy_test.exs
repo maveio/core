@@ -81,6 +81,16 @@ defmodule MaveCore.Playback.StoragePolicyTest do
     end
   end
 
+  test "a queued visibility update cannot republish a deleted space", %{space: space} do
+    {:ok, embed} = Embeds.create_video_embed(space)
+    space |> change(deleted_at: DateTime.utc_now()) |> Repo.update!()
+    embed |> change(playback_status: :publishing) |> Repo.update!()
+
+    # No storage request is expected for the stale job.
+    assert :ok = PlaybackVisibilityWorker.perform(%Oban.Job{args: %{"embed_id" => embed.id}})
+    assert Repo.reload!(embed).playback_status == :publishing
+  end
+
   test "a missing manifest still fails verification when a current video exists", %{space: space} do
     {:ok, embed} = Embeds.create_video_embed(space)
     video = %Video{} |> Video.changeset(%{asset_id: embed.asset_id}) |> Repo.insert!()
