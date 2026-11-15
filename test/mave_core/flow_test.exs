@@ -4937,6 +4937,58 @@ defmodule MaveCore.FlowTest do
              Repo.all(from(s in Subtitle, where: s.video_id == ^video_id))
   end
 
+  for source <- ["provider", "text_detection", "requested"] do
+    @tag :audio_language_sync
+    test "#{source} transcription corrects the source language of the original audio track" do
+      %{embed: embed, space: space} =
+        finalize_audio_language_fixture(%{"transcription_language_source" => unquote(source)})
+
+      assert [%AudioTrack{language: "nl"} = track] =
+               Repo.all(
+                 from(track in AudioTrack, where: track.video_id == ^embed.asset.current_video_id)
+               )
+
+      assert AudioTrack.display_label(track) == "Dutch (original)"
+
+      assert {:ok, manifest_json} =
+               FlowStorageAdapterStub.get(
+                 "space-#{space.hash}",
+                 "#{embed.hash}/manifest.json",
+                 space.region
+               )
+
+      assert [%{"language" => "nl", "label" => "Dutch (original)"}] =
+               Jason.decode!(manifest_json)["audio_tracks"]
+    end
+  end
+
+  for {name, output, track, params, expected} <- [
+        {"configured track language", %{}, %{}, %{"language" => "en"}, "en"},
+        {"custom track label", %{}, %{"label" => "Commentary"}, %{}, "en"},
+        {"alternate audio track", %{}, %{"default" => false}, %{}, "en"},
+        {"audio metadata fallback", %{"transcription_language_source" => "audio_track"}, %{}, %{},
+         "en"},
+        {"unknown language source", %{"transcription_language_source" => "unknown"}, %{}, %{},
+         "en"},
+        {"missing language source", %{"transcription_language_source" => nil}, %{}, %{}, "en"},
+        {"missing source language", %{}, %{"language" => nil}, %{}, "nl"}
+      ] do
+    @tag :audio_language_sync
+    test "audio language synchronization respects #{name}" do
+      %{embed: embed} =
+        finalize_audio_language_fixture(
+          unquote(Macro.escape(output)),
+          unquote(Macro.escape(track)),
+          unquote(Macro.escape(params))
+        )
+
+      assert [%AudioTrack{language: unquote(expected)}] =
+               Repo.all(
+                 from(track in AudioTrack, where: track.video_id == ^embed.asset.current_video_id)
+               )
+    end
+  end
+
   test "run_inline projects inspect metadata and finished renditions onto the current video" do
     assert {:ok, _installed} = Flow.install_preset("publish_local")
 
@@ -6363,6 +6415,7 @@ defmodule MaveCore.FlowTest do
     assert length(Spaces.list_webhook_deliveries(space)) == 2
   end
 
+  @tag :audio_language_sync
   test "audio tracks and subtitles are published before the full run finishes" do
     {:ok, template} =
       Flow.create_template(%{
@@ -6396,7 +6449,6 @@ defmodule MaveCore.FlowTest do
                 "codec" => "mp3",
                 "container" => "mp3",
                 "label" => "Original",
-                "language" => "en",
                 "default" => true
               }
             },
@@ -6437,7 +6489,7 @@ defmodule MaveCore.FlowTest do
           "source_body" => "stub-media-body",
           "source_content_type" => "video/mp4",
           "transcription_text" => "Hello world from progressive metadata",
-          "transcription_language" => "en",
+          "transcription_language" => "nl",
           "media_probe" => %{
             "duration" => 9.5,
             "size_bytes" => 123_456,
@@ -6445,7 +6497,12 @@ defmodule MaveCore.FlowTest do
             "height" => 720,
             "streams" => [
               %{"codec_type" => "video", "codec_name" => "h264", "width" => 1280},
-              %{"codec_type" => "audio", "codec_name" => "aac", "channels" => 2}
+              %{
+                "codec_type" => "audio",
+                "codec_name" => "aac",
+                "channels" => 2,
+                "tags" => %{"language" => "eng"}
+              }
             ]
           }
         },
@@ -6483,8 +6540,20 @@ defmodule MaveCore.FlowTest do
                space.region
              )
 
-    assert [%{"filename" => "audio.mp3", "codec" => "mp3"}] =
+    assert [%{"filename" => "audio.mp3", "codec" => "mp3", "language" => "en"}] =
              audio_manifest_json |> Jason.decode!() |> Map.fetch!("audio_tracks")
+
+    %Rendition{}
+    |> Rendition.changeset(%{
+      video_id: embed.asset.current_video_id,
+      rendition_key: "h264_sd_hls/playlist.m3u8",
+      type: :video,
+      codec: :h264,
+      container: :hls,
+      size: :sd,
+      progress: 100.0
+    })
+    |> Repo.insert!()
 
     {:ok, _run} = Flow.reconcile_run(run.id, enqueue_jobs: false)
 
@@ -6493,7 +6562,7 @@ defmodule MaveCore.FlowTest do
 
     assert %Run{status: "running"} = Repo.get!(Run, run.id)
 
-    assert [%Subtitle{language: "en"}] =
+    assert [%Subtitle{language: "nl"}] =
              Repo.all(
                from(subtitle in Subtitle,
                  where: subtitle.video_id == ^embed.asset.current_video_id
@@ -6508,8 +6577,22 @@ defmodule MaveCore.FlowTest do
              )
 
     subtitle_manifest = Jason.decode!(subtitle_manifest_json)
-    assert [%{"filename" => "audio.mp3"}] = subtitle_manifest["audio_tracks"]
-    assert [%{"language" => "en"}] = subtitle_manifest["subtitles"]
+
+    assert [%{"filename" => "audio.mp3", "language" => "nl", "label" => "Dutch (original)"}] =
+             subtitle_manifest["audio_tracks"]
+
+    assert [%{"language" => "nl"}] = subtitle_manifest["subtitles"]
+
+    assert {:ok, playlist} =
+             FlowStorageAdapterStub.get(
+               "space-#{space.hash}",
+               "#{embed.hash}/playlist.m3u8",
+               space.region
+             )
+
+    assert playlist =~ ~s|NAME="Dutch (original)"|
+    assert playlist =~ ~s(LANGUAGE="nl")
+    refute playlist =~ ~s(LANGUAGE="en")
   end
 
   defp rendition_output(rendition_key, file_size) do
@@ -6532,6 +6615,80 @@ defmodule MaveCore.FlowTest do
       "region" => space.region,
       "content_type" => "video/mp4"
     }
+  end
+
+  defp finalize_audio_language_fixture(output_overrides, track_overrides \\ %{}, params \\ %{}) do
+    {:ok, template} =
+      Flow.create_template(%{
+        "slug" => "audio-language-#{System.unique_integer([:positive])}",
+        "name" => "Audio Language"
+      })
+
+    {:ok, _version} =
+      Flow.create_version(template.id, %{
+        "definition" => %{
+          "steps" => [
+            %{
+              "id" => "audio",
+              "name" => "Audio",
+              "type" => "media.transcode_audio",
+              "params" => params
+            },
+            %{"id" => "subtitles", "name" => "Subtitles", "type" => "ai.transcribe_audio"}
+          ]
+        }
+      })
+
+    space = space_fixture()
+    {:ok, embed} = Embeds.create_video_embed(space, %{name: "Audio Language"})
+
+    {:ok, embed} =
+      Embeds.begin_video_upload(space.hash, embed.hash, %{
+        "title" => "Audio Language.mp4",
+        "source_url" => "https://example.com/media.mp4",
+        "upload_size" => 15
+      })
+
+    {:ok, run} =
+      Flow.start_run(
+        template.slug,
+        %{"space_hash" => space.hash, "embed_hash" => embed.hash},
+        enqueue: false
+      )
+
+    track =
+      Map.merge(
+        %{
+          "language" => "en",
+          "filename" => "audio.mp3",
+          "codec" => "mp3",
+          "label" => "Original",
+          "default" => true
+        },
+        track_overrides
+      )
+
+    mark_step!(run.id, "audio", %{
+      status: "succeeded",
+      output: %{"status" => "ok", "audio_tracks" => [track]}
+    })
+
+    mark_step!(run.id, "subtitles", %{
+      status: "succeeded",
+      output:
+        Map.merge(
+          %{
+            "status" => "ok",
+            "language" => "nl",
+            "transcription_language_source" => "text_detection",
+            "subtitles" => [%{"language" => "nl", "path" => "subtitle_nl.vtt"}]
+          },
+          output_overrides
+        )
+    })
+
+    assert {:ok, %{status: "succeeded"}} = Flow.reconcile_run(run.id, enqueue_jobs: false)
+    %{embed: embed, space: space, run: run}
   end
 
   defp space_fixture do

@@ -125,4 +125,65 @@ defmodule MaveCore.Embeds.PendingMediaTest do
     assert pending.audio_descriptions == []
     assert [%{language: "nl"}] = pending.subtitles
   end
+
+  test "original audio hides the source language while transcription is pending" do
+    {run, track} = language_detection_fixture()
+
+    assert [%{label: "Original", language: nil, language_pending: true}] =
+             PendingMedia.audio_tracks_for_run([track], run, 1)
+
+    assert PendingMedia.audio_tracks_for_run([track], run, 2) == [track]
+    assert PendingMedia.audio_tracks_for_run([track], %{run | status: "succeeded"}, 1) == [track]
+
+    for status <- ["succeeded", "failed", "skipped", "cancelled"] do
+      [audio, transcription] = run.step_runs
+      run = %{run | step_runs: [audio, %{transcription | status: status}]}
+      assert PendingMedia.audio_tracks_for_run([track], run, 1) == [track]
+    end
+  end
+
+  test "explicit languages, alternate tracks and edited labels keep their language" do
+    {run, track} = language_detection_fixture()
+
+    for preserved <- [
+          %{track | default: false},
+          %{track | label: "Commentary"},
+          %{track | language: "fr"}
+        ] do
+      assert PendingMedia.audio_tracks_for_run([preserved], run, 1) == [preserved]
+    end
+
+    [audio, transcription] = run.step_runs
+    audio = %{audio | input: %{"params" => %{"language" => "en"}}}
+    run = %{run | step_runs: [audio, transcription]}
+    assert PendingMedia.audio_tracks_for_run([track], run, 1) == [track]
+  end
+
+  defp language_detection_fixture do
+    track = %{
+      id: "track",
+      filename: "audio.mp3",
+      label: "English (original)",
+      language: "en",
+      default: true
+    }
+
+    audio = %StepRun{
+      step_type: "media.transcode_audio",
+      status: "succeeded",
+      output: %{
+        "audio_tracks" => [
+          %{
+            "filename" => "audio.mp3",
+            "label" => "Original",
+            "language" => "en",
+            "default" => true
+          }
+        ]
+      }
+    }
+
+    transcription = %StepRun{step_type: "ai.transcribe_audio", status: "executing"}
+    {%{run() | step_runs: [audio, transcription]}, track}
+  end
 end

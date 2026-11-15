@@ -1750,6 +1750,108 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     stop_live_view(view)
   end
 
+  @tag :audio_language_loading
+  test "original audio shows language detection until transcription finishes", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+
+    embed =
+      video_embed_fixture(space, %{name: "Audio language detection"})
+      |> Repo.preload(asset: [:current_video])
+
+    track =
+      %AudioTrack{}
+      |> AudioTrack.changeset(%{
+        video_id: embed.asset.current_video_id,
+        filename: "audio.mp3",
+        label: "Original",
+        language: "en",
+        default: true
+      })
+      |> Repo.insert!()
+
+    {:ok, template} =
+      Flow.create_template(%{
+        "slug" => "audio-language-loading-#{System.unique_integer([:positive])}",
+        "name" => "Audio language detection"
+      })
+
+    {:ok, version} =
+      Flow.create_version(template.id, %{
+        "definition" => %{
+          "steps" => [
+            %{"id" => "audio", "type" => "media.transcode_audio", "name" => "Audio"},
+            %{
+              "id" => "transcribe_audio",
+              "type" => "ai.transcribe_audio",
+              "name" => "Transcription"
+            }
+          ]
+        }
+      })
+
+    run =
+      %Run{}
+      |> Run.changeset(%{
+        flow_template_id: template.id,
+        flow_version_id: version.id,
+        status: "running",
+        input: %{"space_hash" => space.hash, "embed_hash" => embed.hash, "version" => 0}
+      })
+      |> Repo.insert!()
+
+    %StepRun{}
+    |> StepRun.changeset(%{
+      flow_run_id: run.id,
+      step_id: "audio",
+      step_type: "media.transcode_audio",
+      status: "succeeded",
+      output: %{
+        "status" => "ok",
+        "audio_tracks" => [
+          %{
+            "filename" => "audio.mp3",
+            "label" => "Original",
+            "language" => "en",
+            "default" => true
+          }
+        ]
+      }
+    })
+    |> Repo.insert!()
+
+    transcription =
+      %StepRun{}
+      |> StepRun.changeset(%{
+        flow_run_id: run.id,
+        step_id: "transcribe_audio",
+        step_type: "ai.transcribe_audio",
+        status: "executing"
+      })
+      |> Repo.insert!()
+
+    {:ok, view, _} = live(conn, "/videos/#{embed.id}")
+    selector = "#generated-audio-language-#{track.id}"
+    assert has_element?(view, selector <> "[aria-busy=true][title='Processing']")
+    assert has_element?(view, selector <> " input[value='Original']:disabled")
+    assert has_element?(view, selector <> " select:disabled")
+    assert has_element?(view, selector <> " .animate-spin")
+    refute has_element?(view, selector <> " [role=menuitem]")
+    refute render(view) =~ "Detecting language"
+    refute has_element?(view, "#audio-track-language-form-#{track.id}")
+    refute has_element?(view, "#audio-track-settings input[value='English (original)']")
+
+    transcription
+    |> StepRun.changeset(%{status: "succeeded", output: %{"status" => "ok", "language" => "nl"}})
+    |> Repo.update!()
+
+    track |> AudioTrack.changeset(%{language: "nl"}) |> Repo.update!()
+    send(view.pid, {:embed_updated, %{"space_id" => space.id, "embed_id" => embed.id}})
+    refute has_element?(view, selector)
+    assert has_element?(view, "#audio-track-settings input[value='Dutch (original)']")
+    assert has_element?(view, "#audio-track-language-form-#{track.id} option[value=nl][selected]")
+    stop_live_view(view)
+  end
+
   test "audio descriptions have their own editable settings and appear under Audio in Info", %{
     conn: conn
   } do
