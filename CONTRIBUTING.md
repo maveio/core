@@ -194,6 +194,8 @@ Technical reference, as needed:
 - [Audio description](docs/audio_description.md): steps, outputs, providers and host policy.
 - [Prepared analytics](docs/analytics_sessions.md): setup and data lifecycle.
 - [Webhook delivery](docs/webhook_delivery_outbox.md): signed lifecycle events.
+- [Emergency delivery failover](docs/emergency_delivery_failover.md): standby copy,
+  switchover runbook and local drill.
 - [Encoding boosters](deploy/encoding-booster/README.md): optional remote compute;
   not needed for the single-host installation.
 - [Analytics benchmarks](docs/analytics-benchmarks.md): tooling and its limitations.

@@ -146,6 +146,28 @@ defmodule MaveCore.Media.Storage do
     list_prefix_keys(bucket, prefix, storage_profile)
   end
 
+  @doc """
+  Lists current objects under a prefix with the metadata needed to compare two
+  copies of a bucket, following all result pages.
+
+  A missing bucket lists as empty. ETags are returned without quotes.
+  """
+  @spec list_objects(String.t(), String.t(), term()) ::
+          {:ok,
+           [
+             %{
+               key: String.t(),
+               size_bytes: non_neg_integer(),
+               etag: String.t() | nil,
+               last_modified: DateTime.t() | nil
+             }
+           ]}
+          | {:error, term()}
+  def list_objects(bucket, prefix, storage_profile \\ nil)
+      when is_binary(bucket) and is_binary(prefix) do
+    list_prefix_objects(bucket, prefix, storage_profile, nil, [])
+  end
+
   @doc "Fetches at most `max_bytes` from the beginning of an object."
   def get_prefix(bucket, path, storage_profile, max_bytes)
       when is_binary(bucket) and is_binary(path) do
@@ -1082,6 +1104,27 @@ defmodule MaveCore.Media.Storage do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  @doc """
+  Applies a space's CORS origins and public or hotlink-protected read policy to
+  a bucket on another storage profile, such as a delivery standby.
+
+  The space's domains must be preloaded. Unlike `sync_space_domain_cors/1` this
+  never consults a playback adapter: the target bucket must only hold media that
+  is public for the whole space.
+  """
+  def put_space_access(%Space{} = space, bucket, storage_profile) when is_binary(bucket) do
+    allowed_domains = allowed_domains_for_space(space)
+
+    with :ok <- maybe_put_bucket_cors(bucket, allowed_domains, storage_profile) do
+      put_bucket_access_policy(
+        bucket,
+        allowed_domains,
+        hotlink_protection_enabled_for_bucket(space),
+        storage_profile
+      )
     end
   end
 
@@ -2664,6 +2707,78 @@ defmodule MaveCore.Media.Storage do
         {:error, reason}
     end
   end
+
+  defp list_prefix_objects(bucket, prefix, storage_profile, continuation_token, pages) do
+    params =
+      [{"list-type", "2"}, {"prefix", prefix}]
+      |> maybe_add_continuation_token(continuation_token)
+
+    case Req.get(build_req(bucket, storage_profile), url: "/", params: params) do
+      {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
+        pages = [listed_objects(body) | pages]
+        next_token = extract_xml_value(body, "NextContinuationToken")
+
+        if extract_xml_value(body, "IsTruncated") == "true" and is_binary(next_token) and
+             next_token != "" do
+          list_prefix_objects(bucket, prefix, storage_profile, next_token, pages)
+        else
+          {:ok, pages |> Enum.reverse() |> Enum.concat()}
+        end
+
+      {:ok, %Req.Response{status: 404}} ->
+        {:ok, pages |> Enum.reverse() |> Enum.concat()}
+
+      {:ok, %Req.Response{status: status}} ->
+        {:error, {:list_objects_failed, status}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp listed_objects(body) when is_binary(body) do
+    ~r/<Contents>(.*?)<\/Contents>/s
+    |> Regex.scan(body, capture: :all_but_first)
+    |> Enum.flat_map(fn [entry] ->
+      case extract_xml_value(entry, "Key") do
+        key when is_binary(key) and key != "" ->
+          [
+            %{
+              key: key,
+              size_bytes: listed_object_size(extract_xml_value(entry, "Size")),
+              etag: listed_object_etag(extract_xml_value(entry, "ETag")),
+              last_modified: listed_object_time(extract_xml_value(entry, "LastModified"))
+            }
+          ]
+
+        _missing ->
+          []
+      end
+    end)
+  end
+
+  defp listed_objects(_body), do: []
+
+  defp listed_object_size(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {size, ""} when size >= 0 -> size
+      _invalid -> 0
+    end
+  end
+
+  defp listed_object_size(_value), do: 0
+
+  defp listed_object_etag(value) when is_binary(value), do: String.trim(value, "\"")
+  defp listed_object_etag(_value), do: nil
+
+  defp listed_object_time(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, time, _offset} -> time
+      _invalid -> nil
+    end
+  end
+
+  defp listed_object_time(_value), do: nil
 
   defp delete_keys(_bucket, [], _storage_profile), do: :ok
 

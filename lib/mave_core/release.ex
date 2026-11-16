@@ -10,6 +10,7 @@ defmodule MaveCore.Release do
   alias Ecto.Adapters.SQL
   alias MaveCore.Accounts
   alias MaveCore.Accounts.User
+  alias MaveCore.DeliveryStandby.CLI, as: DeliveryStandbyCLI
   alias MaveCore.Repo
 
   def migrate do
@@ -75,6 +76,28 @@ defmodule MaveCore.Release do
     |> case do
       {:ok, result} -> result
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Runs a delivery standby command, such as `"sync"`, `"check"` or
+  `"sync --dry-run"`, and halts with status 1 when it fails or the standby is
+  not ready. See `docs/emergency_delivery_failover.md`.
+  """
+  def delivery_standby(command) when is_binary(command) do
+    load_app()
+    {:ok, _started} = Application.ensure_all_started(@app)
+
+    case DeliveryStandbyCLI.run(OptionParser.split(command)) do
+      :ok ->
+        :ok
+
+      :not_ready ->
+        System.halt(1)
+
+      {:error, message} ->
+        IO.puts(:stderr, message)
+        System.halt(1)
     end
   end
 

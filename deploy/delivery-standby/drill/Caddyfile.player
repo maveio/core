@@ -1,0 +1,8 @@
+{
+	auto_https off
+}
+
+http://player.drill.test {
+	root * /srv
+	file_server
+}

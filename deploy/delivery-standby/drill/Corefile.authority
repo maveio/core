@@ -1,0 +1,7 @@
+# Authoritative DNS for the drill: the one place where the switch happens.
+drill.test:53 {
+	file /zones/drill.test.zone {
+		reload 1s
+	}
+	errors
+}

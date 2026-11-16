@@ -1,0 +1,12 @@
+$ORIGIN drill.test.
+$TTL __TTL__
+@         IN SOA ns.drill.test. operator.drill.test. __SERIAL__ 60 60 600 __TTL__
+@         IN NS  ns
+ns        IN A   __AUTHORITY__
+player    IN A   __PLAYER__
+
+; Every delivery hostname follows this single record. The emergency switch
+; changes nothing else.
+delivery  IN A   __DELIVERY__
+cdn       IN CNAME delivery
+*.cdn     IN CNAME delivery

@@ -1,0 +1,28 @@
+# Stands in for the primary provider's CDN during the drill.
+{
+	auto_https off
+}
+
+http://*.cdn.drill.test {
+	@media {
+		method GET HEAD OPTIONS
+		header_regexp space Host ^space-([a-z0-9]{5})\.
+	}
+
+	header {
+		X-Mave-Delivery primary
+		+Access-Control-Expose-Headers X-Mave-Delivery
+		defer
+	}
+
+	handle @media {
+		rewrite * /space-{re.space.1}{path}
+		reverse_proxy primary-storage:9000 {
+			header_up Host {upstream_hostport}
+		}
+	}
+
+	handle {
+		respond "Not found" 404
+	}
+}

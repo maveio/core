@@ -1,0 +1,59 @@
+# Reference edge for the emergency delivery standby.
+#
+# It answers the public media hostnames and maps each request onto the bucket
+# that `mave.delivery_standby sync` filled at the standby storage provider:
+#
+#   https://space-ab12c.<cdn host>/<embed>/<file>      (subdomain mode)
+#   https://cdn.<cdn host>/space-ab12c/<embed>/<file>  (path mode)
+#
+# Requests stay anonymous, so the bucket policy written by the sync decides
+# what is readable, including hotlink protection. The edge holds no storage
+# credentials and nothing here is specific to Caddy: any CDN or worker that
+# applies the same mapping can take its place.
+#
+# MAVE_STANDBY_EDGE_ADDRESS   site address, for example "*.video-dns.example"
+# MAVE_STANDBY_ORIGIN         S3 endpoint of the standby, for example "s3.example.net:443"
+# MAVE_STANDBY_BUCKET_PREFIX  bucket prefix at the standby (default "space-")
+#
+# The certificate for the public hostnames must exist before the switch. Issue
+# a wildcard certificate with a DNS challenge while DNS still points at the
+# primary; an HTTP challenge cannot succeed until traffic already arrives here.
+
+{$MAVE_STANDBY_EDGE_ADDRESS} {
+	@subdomain {
+		method GET HEAD OPTIONS
+		header_regexp space Host ^space-([a-z0-9]{5})\.
+	}
+
+	@path {
+		method GET HEAD OPTIONS
+		path_regexp space ^/space-([a-z0-9]{5})(/.+)$
+	}
+
+	# Shows operators which side answered a request.
+	header {
+		X-Mave-Delivery standby
+		+Access-Control-Expose-Headers X-Mave-Delivery
+		defer
+	}
+	header ?Cache-Control "public, max-age=300"
+
+	# Query strings are dropped so bucket subresources cannot be addressed.
+	handle @subdomain {
+		rewrite * /{$MAVE_STANDBY_BUCKET_PREFIX:space-}{re.space.1}{path}?
+		reverse_proxy {$MAVE_STANDBY_ORIGIN} {
+			header_up Host {upstream_hostport}
+		}
+	}
+
+	handle @path {
+		rewrite * /{$MAVE_STANDBY_BUCKET_PREFIX:space-}{re.space.1}{re.space.2}?
+		reverse_proxy {$MAVE_STANDBY_ORIGIN} {
+			header_up Host {upstream_hostport}
+		}
+	}
+
+	handle {
+		respond "Not found" 404
+	}
+}

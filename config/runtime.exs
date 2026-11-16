@@ -222,6 +222,41 @@ config :mave_core,
        :default_storage_profile,
        parse_string_env.("MAVE_DEFAULT_STORAGE_PROFILE", "default")
 
+# Optional copy of public media at an independent provider for an emergency
+# delivery switch. See docs/emergency_delivery_failover.md.
+if standby_endpoint = parse_optional_string_env.("MAVE_DELIVERY_STANDBY_S3_ENDPOINT") do
+  standby_edge_url = parse_optional_string_env.("MAVE_DELIVERY_STANDBY_EDGE_URL")
+
+  if standby_edge_url do
+    case URI.parse(standby_edge_url) do
+      %URI{scheme: scheme, host: host, userinfo: nil, query: nil, fragment: nil}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+        :ok
+
+      _other ->
+        raise "MAVE_DELIVERY_STANDBY_EDGE_URL must be an HTTP(S) base URL"
+    end
+  end
+
+  config :mave_core, :delivery_standby,
+    storage: %{
+      endpoint: String.trim_trailing(standby_endpoint, "/"),
+      access_key_id:
+        parse_optional_string_env.("MAVE_DELIVERY_STANDBY_S3_ACCESS_KEY") ||
+          raise("MAVE_DELIVERY_STANDBY_S3_ACCESS_KEY is missing"),
+      secret_access_key:
+        parse_optional_string_env.("MAVE_DELIVERY_STANDBY_S3_SECRET_KEY") ||
+          raise("MAVE_DELIVERY_STANDBY_S3_SECRET_KEY is missing"),
+      region: parse_string_env.("MAVE_DELIVERY_STANDBY_S3_REGION", "us-east-1"),
+      bucket_prefix: parse_string_env.("MAVE_DELIVERY_STANDBY_BUCKET_PREFIX", "space-"),
+      object_acl: parse_boolean_env.("MAVE_DELIVERY_STANDBY_OBJECT_ACL", false)
+    },
+    edge_url: standby_edge_url,
+    status_bucket:
+      parse_string_env.("MAVE_DELIVERY_STANDBY_STATUS_BUCKET", "mave-delivery-standby"),
+    max_age_seconds: parse_integer_env.("MAVE_DELIVERY_STANDBY_MAX_AGE_SECONDS", 86_400)
+end
+
 if shared_storage_space_hash = parse_optional_string_env.("MAVE_SHARED_STORAGE_SPACE_HASH") do
   config :mave_core, :shared_storage_space_hash, shared_storage_space_hash
 end
