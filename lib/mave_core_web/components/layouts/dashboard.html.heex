@@ -24,6 +24,8 @@
       user_email={Map.get(assigns[:current_user] || %{}, :email, "")}
       route={nil}
       suggests={assigns[:suggests] || []}
+      search_scope={MaveCoreWeb.UserLiveAuth.search_scope(assigns)}
+      search_query={assigns[:search_query] || ""}
       extra_padding={assigns[:settings_open] || false}
     />
 

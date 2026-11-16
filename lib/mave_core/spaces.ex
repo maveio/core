@@ -627,7 +627,11 @@ defmodule MaveCore.Spaces do
     attrs =
       attrs
       |> stringify_keys()
-      |> Map.take(["hotlink_protection_enabled", "audio_description_enabled"])
+      |> Map.take([
+        "hotlink_protection_enabled",
+        "audio_description_enabled",
+        "video_search_enabled"
+      ])
 
     with :ok <- authorize_feature_change(space, attrs),
          {:ok, updated_space} <- space |> Space.features_changeset(attrs) |> Repo.update() do
@@ -650,13 +654,36 @@ defmodule MaveCore.Spaces do
 
   def audio_description_active?(_space), do: false
 
-  defp authorize_feature_change(%Space{} = space, %{"audio_description_enabled" => value}) do
+  @doc """
+  Whether new uploads in the space are indexed for content search: the space
+  opted in and the host still allows it.
+  """
+  def video_search_active?(%Space{video_search_enabled: true} = space) do
+    UsageLimits.can_use_video_search?(space) == :ok
+  end
+
+  def video_search_active?(_space), do: false
+
+  defp authorize_feature_change(%Space{} = space, attrs) do
+    with :ok <- authorize_audio_description_change(space, attrs) do
+      authorize_video_search_change(space, attrs)
+    end
+  end
+
+  defp authorize_audio_description_change(space, %{"audio_description_enabled" => value}) do
     with :ok <- UsageLimits.can_manage_audio_description?(space) do
       if value in [true, "true"], do: UsageLimits.can_use_audio_description?(space), else: :ok
     end
   end
 
-  defp authorize_feature_change(_space, _attrs), do: :ok
+  defp authorize_audio_description_change(_space, _attrs), do: :ok
+
+  # Turning search off is always allowed; existing moments stay searchable.
+  defp authorize_video_search_change(space, %{"video_search_enabled" => value})
+       when value in [true, "true"],
+       do: UsageLimits.can_use_video_search?(space)
+
+  defp authorize_video_search_change(_space, _attrs), do: :ok
 
   def update_space_processing(%Space{} = space, attrs) when is_map(attrs) do
     attrs =

@@ -211,6 +211,34 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
               </div>
             </:actions>
           </.data_table_row>
+          <.data_table_row id="video-search-feature">
+            <div>
+              <div>{gettext("Searchable video")}</div>
+              <div
+                :if={@features.video_search_notice}
+                id="video-search-notice"
+                class="text-xs text-stone-400 mt-1"
+              >
+                {@features.video_search_notice}
+              </div>
+            </div>
+            <.info_hover>
+              {gettext(
+                "New videos become findable by what happens on screen and what is said. Search then shows the matching moments."
+              )}
+            </.info_hover>
+            <:actions>
+              <div class="p-4">
+                <.toggle
+                  id="video-search-toggle"
+                  enabled={@features.video_search}
+                  disabled={@features.video_search_disabled}
+                  phx-click="toggle_video_search"
+                  phx-target={@myself}
+                />
+              </div>
+            </:actions>
+          </.data_table_row>
         </.data_table>
       </div>
 
@@ -576,6 +604,32 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
     end
   end
 
+  def handle_event("toggle_video_search", _params, socket) do
+    attrs = %{video_search_enabled: !socket.assigns.current_space.video_search_enabled}
+
+    case Spaces.update_space_features(socket.assigns.current_space, attrs) do
+      {:ok, updated_space} ->
+        {:noreply,
+         socket
+         |> notify_parent(updated_space)
+         |> assign(:current_space, updated_space)
+         |> reload_state()}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply, put_flash(socket, :error, gettext("Could not update searchable video."))}
+
+      {:error, reason} ->
+        copy = UsageLimits.restriction_copy(:video_search, reason)
+
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           Map.get(copy, :error, gettext("Searchable video isn't available for this space."))
+         )}
+    end
+  end
+
   def handle_event("change_default_flow_template", %{"processing" => params}, socket) do
     case Spaces.update_space_processing(socket.assigns.current_space, %{
            default_flow_template: Map.get(params, "default_flow_template")
@@ -700,9 +754,31 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
           hotlink_protection: hotlink_protection_enabled?(current_space),
           hotlink_protection_disabled: SharedStorageSpace.shared?(current_space)
         },
-        audio_description_features(current_space)
+        current_space
+        |> audio_description_features()
+        |> Map.merge(video_search_features(current_space))
       )
     )
+  end
+
+  # Like audio description: a space that lost access can still switch it off.
+  defp video_search_features(%Space{} = space) do
+    enabled? = space.video_search_enabled == true
+
+    case UsageLimits.can_use_video_search?(space) do
+      :ok ->
+        %{video_search: enabled?, video_search_disabled: false, video_search_notice: nil}
+
+      {:error, reason} ->
+        copy = UsageLimits.restriction_copy(:video_search, reason)
+
+        %{
+          video_search: enabled?,
+          video_search_disabled: not enabled?,
+          video_search_notice:
+            Map.get(copy, :notice, gettext("Searchable video isn't available for this space."))
+        }
+    end
   end
 
   # A space that lost access can still switch the feature off, but not back on.

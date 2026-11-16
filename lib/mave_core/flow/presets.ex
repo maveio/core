@@ -32,7 +32,10 @@ defmodule MaveCore.Flow.Presets do
        "description" =>
          "Encoder-compatible default publish flow with upload, transcode, manifest, and webhook steps.",
        "definition" =>
-         publish_default_definition() |> with_audio_peaks() |> with_audio_description()
+         publish_default_definition()
+         |> with_audio_peaks()
+         |> with_audio_description()
+         |> with_search_index()
      }
      |> maybe_override_preset("publish_default")}
   end
@@ -45,7 +48,10 @@ defmodule MaveCore.Flow.Presets do
        "description" =>
          "Lighter local-development publish flow that skips heavy codec variants while still producing a manifest.",
        "definition" =>
-         publish_local_definition() |> with_audio_peaks() |> with_audio_description()
+         publish_local_definition()
+         |> with_audio_peaks()
+         |> with_audio_description()
+         |> with_search_index()
      }
      |> maybe_override_preset("publish_local")}
   end
@@ -89,6 +95,7 @@ defmodule MaveCore.Flow.Presets do
     |> Map.put("steps", durable_steps)
     |> with_audio_peaks()
     |> with_audio_description()
+    |> with_search_index()
   end
 
   defp with_audio_peaks(definition) do
@@ -151,6 +158,21 @@ defmodule MaveCore.Flow.Presets do
     ]
 
     Map.update!(definition, "steps", &(&1 ++ steps))
+  end
+
+  # Content search indexes after the steps whose output it reads: a finished
+  # audio description lets it reuse the frame observations instead of paying twice.
+  defp with_search_index(definition) do
+    step =
+      background_step(
+        "index_search",
+        "search.index_video",
+        "Index Video For Search",
+        ["detect_scenes", "describe_video", "transcribe_audio"],
+        nil
+      )
+
+    Map.update!(definition, "steps", &(&1 ++ [step]))
   end
 
   defp background_step(id, type, name, depends_on, params) do

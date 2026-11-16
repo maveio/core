@@ -49,6 +49,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
      |> assign(:route_scope, :unscoped)
      |> assign(:persisted_settings, nil)
      |> assign(:player_dom_id, nil)
+     |> assign(:start_time, nil)
      |> assign(:video_ready, false)
      |> assign(:video_processing, false)
      |> assign(:processing_player_visible_after_ms, nil)
@@ -84,6 +85,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
     {:noreply,
      socket
      |> assign(:route_scope, route_scope(params))
+     |> assign(:start_time, parse_start_time(params["t"]))
      |> load_resource(id, tab, page)}
   end
 
@@ -1836,6 +1838,16 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
       page: page
     )
   end
+
+  # `?t=` (seconds) opens the video at a moment, as search results link to.
+  defp parse_start_time(value) when is_binary(value) do
+    case Float.parse(value) do
+      {seconds, ""} when seconds >= 0 -> seconds
+      _ -> nil
+    end
+  end
+
+  defp parse_start_time(_value), do: nil
 
   defp parse_page(page) when is_binary(page) do
     case Integer.parse(page) do

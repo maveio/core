@@ -726,7 +726,8 @@ defmodule MaveCore.Uploads do
           present(metadata, "callback_url") ||
             present(metadata, "webhook_url") ||
             present(metadata, "notify_webhook_url"),
-        "audio_description" => AudioDescription.run_input(space)
+        "audio_description" => AudioDescription.run_input(space),
+        "search" => MaveCore.Search.run_input(space)
       }
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
       |> Map.new()

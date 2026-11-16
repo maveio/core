@@ -36,6 +36,7 @@ defmodule MaveCore.Flow do
   alias MaveCore.LegacyShortUUID
   alias MaveCore.Media.Storage
   alias MaveCore.Repo
+  alias MaveCore.Search
   alias MaveCore.Spaces
   alias MaveCore.Spaces.Space
   alias MaveCore.Uploads.Events, as: UploadEvents
@@ -1720,6 +1721,7 @@ defmodule MaveCore.Flow do
         maybe_publish_processing_manifest(step_run_id, flow_run_id, step_type, output)
         maybe_enqueue_ready_webhooks_for_step(flow_run_id, output)
         maybe_sync_completed_media_metadata(flow_run_id, step_type, output)
+        maybe_index_search_document(flow_run_id, step_type, output)
         maybe_broadcast_processing_progress(flow_run_id, step_type)
         {:ok, :ok}
 
@@ -4593,6 +4595,50 @@ defmodule MaveCore.Flow do
   end
 
   defp maybe_sync_completed_media_metadata(_flow_run_id, _step_type, _output), do: :ok
+
+  # Content search reads PostgreSQL, so the moments a step stored are indexed
+  # here. A failure leaves the previous index of the video in place.
+  defp maybe_index_search_document(
+         flow_run_id,
+         "search.index_video",
+         %{"status" => "ok", "document_key" => key}
+       )
+       when is_binary(flow_run_id) and is_binary(key) do
+    with %Run{input: %{"space_hash" => space_hash, "embed_hash" => embed_hash} = input} = run <-
+           Repo.get(Run, flow_run_id),
+         %Embed{} = embed <- Embeds.get_embed_by_hashes(space_hash, embed_hash),
+         %Video{} = video <- run_video(run, embed),
+         storage = Application.get_env(:mave_core, :flow_storage_adapter, Storage),
+         bucket = Storage.bucket_for_space(space_hash, input["region"]),
+         {:ok, body} <- storage.get(bucket, key, input["region"]),
+         {:ok, document} <- decode_search_document(body),
+         {:ok, moments, language} <- Search.Document.from_json(document) do
+      {:ok, _count} = Search.index_video(video, embed.space_id, moments, language)
+      :ok
+    else
+      other ->
+        Logger.warning(
+          "Could not index search moments for flow #{flow_run_id}: #{inspect(other, limit: 5)}"
+        )
+
+        :ok
+    end
+  rescue
+    exception ->
+      Logger.warning(
+        "Failed to index search moments for flow #{flow_run_id}: " <>
+          Exception.message(exception)
+      )
+
+      :ok
+  end
+
+  defp maybe_index_search_document(_flow_run_id, _step_type, _output), do: :ok
+
+  # HTTP storage adapters may already decode application/json responses.
+  defp decode_search_document(body) when is_map(body), do: {:ok, body}
+  defp decode_search_document(body) when is_binary(body), do: Jason.decode(body)
+  defp decode_search_document(_body), do: {:error, :invalid_document}
 
   defp maybe_publish_completed_media_metadata(
          step_type,

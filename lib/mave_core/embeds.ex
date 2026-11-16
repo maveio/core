@@ -27,6 +27,7 @@ defmodule MaveCore.Embeds do
   alias MaveCore.Media.Storage
   alias MaveCore.Playback.Media, as: PlaybackMedia
   alias MaveCore.Repo
+  alias MaveCore.Search
   alias MaveCore.Spaces
   alias MaveCore.Spaces.Space
   alias MaveCore.UsageLimits
@@ -36,6 +37,8 @@ defmodule MaveCore.Embeds do
   @hash_length 10
   @settings_fields EmbedSettings.dashboard_fields()
   @search_suggestion_limit 8
+  @search_suggestion_moments 2
+  @search_suggestion_content_slots 4
 
   @resolution_labels %{
     {176, 144} => "QCIF",
@@ -328,10 +331,17 @@ defmodule MaveCore.Embeds do
     })
   end
 
+  @doc """
+  Videos for the dashboard search box: matches on name, file name and ID first,
+  then videos whose picture or transcript matches (see `MaveCore.Search`), each
+  with the moments where that happens. `:collection` limits both to a folder
+  and the folders nested in it.
+  """
   @spec search_video_suggestions(Space.t(), String.t(), keyword()) :: [map()]
   def search_video_suggestions(%Space{} = space, query, opts \\ []) when is_binary(query) do
     archived = Keyword.get(opts, :archived, false)
     limit = Keyword.get(opts, :limit, @search_suggestion_limit)
+    collection = Keyword.get(opts, :collection)
     normalized_query = String.trim(query)
 
     if byte_size(normalized_query) < 2 do
@@ -356,8 +366,9 @@ defmodule MaveCore.Embeds do
           match_query
         end
 
-      embeds =
+      named =
         from(e in Embed,
+          as: :embed,
           left_join: a in assoc(e, :asset),
           left_join: v in assoc(a, :current_video),
           where: e.space_id == ^space.id,
@@ -367,10 +378,20 @@ defmodule MaveCore.Embeds do
           limit: ^(limit * 4),
           preload: [asset: {a, [current_video: v]}]
         )
+        |> Search.within_collection(space, collection)
         |> Repo.all()
         |> Enum.sort_by(&search_rank(space, &1, normalized_query))
-        |> Enum.take(limit)
 
+      content =
+        Search.search(space, normalized_query,
+          archived: archived,
+          collection: collection,
+          limit: limit,
+          moments_per_video: @search_suggestion_moments
+        )
+
+      embeds = merge_search_matches(named, Enum.map(content, & &1.embed), limit)
+      moments = Map.new(content, &{&1.embed.id, &1.moments})
       thumbnail_cache_busters = thumbnail_cache_busters(embeds)
 
       Enum.map(embeds, fn embed ->
@@ -382,10 +403,22 @@ defmodule MaveCore.Embeds do
           name: row.name,
           thumb: row.thumb,
           public_id: public_embed_id(space, embed),
-          hash: embed.hash
+          hash: embed.hash,
+          moments: Map.get(moments, embed.id, [])
         }
       end)
     end
+  end
+
+  # Name matches lead, but a full list of them must not hide every video that
+  # only matches on its content.
+  defp merge_search_matches(named, content, limit) do
+    named_ids = MapSet.new(named, & &1.id)
+    content_only = Enum.reject(content, &MapSet.member?(named_ids, &1.id))
+    reserved = min(length(content_only), @search_suggestion_content_slots)
+
+    (Enum.take(named, limit - reserved) ++ Enum.take(content_only, limit))
+    |> Enum.take(limit)
   end
 
   @spec list_folder_items(Space.t(), Embed.t(), keyword()) :: map()
