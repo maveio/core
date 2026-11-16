@@ -14,7 +14,8 @@ defmodule MaveCoreWeb.Api.Data.EventsController do
 
     case EventIngest.validate_and_enrich(events, user_agent) do
       {:ok, enriched_events} ->
-        IngestionBuffer.push(enriched_events)
+        country = viewer_country(conn)
+        IngestionBuffer.push(Enum.map(enriched_events, &Map.put(&1, "country", country)))
         send_resp(conn, :accepted, "")
 
       {:error, :too_many_events} ->
@@ -38,5 +39,17 @@ defmodule MaveCoreWeb.Api.Data.EventsController do
     conn
     |> put_status(:bad_request)
     |> json(%{error: "Invalid payload, expected 'events' list"})
+  end
+
+  # Only a header set by the deployment's own proxy or CDN is used; a country
+  # sent in the event body is always overwritten.
+  defp viewer_country(conn) do
+    case Application.get_env(:mave_core, :viewer_country_header) do
+      header when is_binary(header) and header != "" ->
+        conn |> get_req_header(header) |> List.first()
+
+      _ ->
+        nil
+    end
   end
 end

@@ -154,6 +154,20 @@ if playback_origin = System.get_env("MAVE_PLAYBACK_ORIGIN") do
          URI.to_string(%{uri | host: String.downcase(uri.host), path: nil})
 end
 
+# Playback performance: the viewer country comes from a header that only the
+# deployment's own proxy or CDN sets; delivery telemetry needs an operator token.
+if viewer_country_header = parse_optional_string_env.("MAVE_VIEWER_COUNTRY_HEADER") do
+  config :mave_core, :viewer_country_header, String.downcase(viewer_country_header)
+end
+
+if cdn_telemetry_token = parse_optional_string_env.("MAVE_CDN_TELEMETRY_TOKEN") do
+  if byte_size(cdn_telemetry_token) < 16 do
+    raise "MAVE_CDN_TELEMETRY_TOKEN must be at least 16 characters"
+  end
+
+  config :mave_core, :cdn_telemetry_token, cdn_telemetry_token
+end
+
 if public_cdn_host = System.get_env("MAVE_PUBLIC_CDN_HOST") do
   trimmed = String.trim(public_cdn_host)
 

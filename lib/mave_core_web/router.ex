@@ -31,7 +31,8 @@ defmodule MaveCoreWeb.Router do
       allowed_paths: [
         "/v1/events",
         "/internal/encoding-booster/hls-uploads",
-        "/internal/upload-hooks/tusd"
+        "/internal/upload-hooks/tusd",
+        "/internal/cdn-telemetry"
       ],
       allow_internal_users: true
   end
@@ -115,6 +116,7 @@ defmodule MaveCoreWeb.Router do
          :create
 
     post "/internal/upload-hooks/tusd", Api.Upload.TusdHooksController, :create
+    post "/internal/cdn-telemetry", Api.Data.CdnTelemetryController, :create
   end
 
   scope "/api", MaveCoreWeb do
@@ -259,6 +261,7 @@ defmodule MaveCoreWeb.Router do
       live "/videos/:id", Dashboard.Videos.Show, :show
       live "/data", Dashboard.Data.Index, :index
       live "/data/top", Dashboard.Data.Index, :top_list
+      live "/data/performance", Dashboard.Data.Index, :performance
       live "/settings", Dashboard.Settings.Index, :general
       live "/settings/developer", Dashboard.Settings.Index, :developer
       live "/settings/team", Dashboard.Settings.Index, :team
@@ -289,6 +292,7 @@ defmodule MaveCoreWeb.Router do
       live "/:space_id/videos/:id", Dashboard.Videos.Show, :show
       live "/:space_id/data", Dashboard.Data.Index, :index
       live "/:space_id/data/top", Dashboard.Data.Index, :top_list
+      live "/:space_id/data/performance", Dashboard.Data.Index, :performance
       live "/:space_id/settings", Dashboard.Settings.Index, :general
       live "/:space_id/settings/developer", Dashboard.Settings.Index, :developer
       live "/:space_id/settings/team", Dashboard.Settings.Index, :team
