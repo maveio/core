@@ -39,7 +39,8 @@ config :mave_core, Oban,
        {"* * * * *", MaveCore.Workers.FlowRecoveryWorker},
        {"* * * * *", MaveCore.Workers.AnalyticsSessionsWorker},
        {"* * * * *", MaveCore.Workers.AnalyticsSessionsCleanupWorker},
-       {"23 * * * *", MaveCore.Workers.CliAuthorizationPruneWorker}
+       {"23 * * * *", MaveCore.Workers.CliAuthorizationPruneWorker},
+       {"*/5 * * * *", MaveCore.Workers.ExperimentWorker}
      ]}
   ],
   shutdown_grace_period: :timer.hours(6),

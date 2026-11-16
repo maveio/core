@@ -194,6 +194,7 @@ Technical reference, as needed:
 - [Audio description](docs/audio_description.md): steps, outputs, providers and host policy.
 - [Prepared analytics](docs/analytics_sessions.md): setup and data lifecycle.
 - [Webhook delivery](docs/webhook_delivery_outbox.md): signed lifecycle events.
+- [A/B tests](docs/ab_testing.md): viewer split, counting, the decision rule and limits.
 - [Encoding boosters](deploy/encoding-booster/README.md): optional remote compute;
   not needed for the single-host installation.
 - [Analytics benchmarks](docs/analytics-benchmarks.md): tooling and its limitations.

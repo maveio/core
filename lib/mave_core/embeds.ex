@@ -825,10 +825,19 @@ defmodule MaveCore.Embeds do
         embed
       end)
       |> unwrap_repo_result()
+      |> end_experiments()
       |> maybe_enqueue_embed_event(embed.space || %Space{id: embed.space_id}, :video_deleted)
       |> maybe_broadcast_embed_updated(%{"action" => "deleted"})
     end
   end
+
+  # A deleted video can neither host an A/B test nor play as one of its variants.
+  defp end_experiments({:ok, %Embed{type: :video} = embed} = result) do
+    MaveCore.Experiments.embed_deleted(embed)
+    result
+  end
+
+  defp end_experiments(result), do: result
 
   defp maybe_hide_embed_assets(_storage, %Embed{type: :collection}), do: :ok
 

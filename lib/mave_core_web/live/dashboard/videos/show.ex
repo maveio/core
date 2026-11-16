@@ -13,6 +13,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   alias MaveCore.Spaces
   alias MaveCore.Uploads.Token
   alias MaveCore.UsageLimits
+  alias MaveCoreWeb.Dashboard.Videos.ExperimentComponent
   alias MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent
   alias MaveCoreWeb.DashboardRoutes
   alias MaveCoreWeb.Formatter
@@ -138,6 +139,16 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
       )
       when is_number(progress) do
     {:noreply, schedule_processing_progress_refresh(socket, space_id, embed_id)}
+  end
+
+  # An A/B test changed, here or in the scheduled evaluation. The video itself did not.
+  def handle_info(
+        {:embed_updated,
+         %{"space_id" => space_id, "embed_id" => embed_id, "action" => "experiment"}},
+        %{assigns: %{current_space: %{id: space_id}, resource_embed: %{id: embed_id}}} = socket
+      ) do
+    send_update(ExperimentComponent, id: "video-experiment", refresh: true)
+    {:noreply, socket}
   end
 
   def handle_info(

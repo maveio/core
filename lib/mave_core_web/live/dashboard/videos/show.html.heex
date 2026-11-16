@@ -300,6 +300,18 @@
 
         <div class="w-12 my-8 mx-auto border-t border-stone-100"></div>
 
+        <%= if @video_ready and not @replace_mode do %>
+          <.live_component
+            module={ExperimentComponent}
+            id="video-experiment"
+            embed={@resource_embed}
+            current_space={@current_space}
+            route_scope={@route_scope}
+          />
+
+          <div class="w-12 my-8 mx-auto border-t border-stone-100"></div>
+        <% end %>
+
         <div class="grid grid-cols-3 gap-4">
           <.video_metric_card label={gettext("today")} value={format_number(@video.views_today)} />
           <.video_metric_card

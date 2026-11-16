@@ -1,5 +1,5 @@
 defmodule MaveCore.Flow.Steps.AssetUploadOriginalStepTest do
-  use ExUnit.Case, async: false
+  use MaveCore.DataCase, async: false
 
   alias MaveCore.Flow.Steps.AssetUploadOriginalStep
   alias MaveCore.TestSupport.FlowStorageAdapterStub
