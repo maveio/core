@@ -185,6 +185,44 @@ transcription provider as the `:context` option; the built-in Mistral provider
 sends it as `context_bias`, and transcribes without it when the configured
 model rejects the option. Custom providers may ignore `:context`.
 
+### Asking for a change in plain language
+
+When a language model is configured, the Encoding tab has an input where a
+member asks for a change: "Do not generate 4K for this space", or "Use our
+company name as context when transcribing".
+
+![Encoding tab with a proposed change to review](images/dashboard-encoding-assistant.png)
+
+`MaveCore.Flow.PipelineAssistant` sends the request to the model together with
+the steps of the pipeline, their state and their editable settings. The model
+answers with a short reply and a list of operations: turn a step off or on, or
+set a setting. It never edits the pipeline itself:
+
+1. Each operation is applied with `MaveCore.Flow.Pipeline`, the code behind the
+   editor. Operations the editor would refuse (a required step, an unknown step
+   or setting, an invalid value, an unavailable add-on) are left out and listed
+   with the reason.
+2. The changes shown to the member are read from the pipeline before and after,
+   including the steps that turn off because they depend on a changed step.
+3. The proposal is loaded into the editor as unsaved changes. The member can
+   inspect the highlighted steps, adjust them, dismiss the proposal, or approve
+   it, which saves a new version like any other edit.
+
+The default provider uses Mistral with `MISTRAL_API_KEY`. Without a key the
+input is hidden.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MAVE_PIPELINE_ASSISTANT_MODEL` | `mistral-medium-latest` | Model to ask |
+| `MAVE_PIPELINE_ASSISTANT_URL` | Mistral | Another endpoint with the same chat completions format and JSON schema output, such as a self-hosted model |
+| `MAVE_PIPELINE_ASSISTANT_API_KEY` | none | Key for that endpoint, when it needs one |
+
+For another model API, implement `MaveCore.Flow.PipelineAssistant.Provider` and
+set `config :mave_core, :pipeline_assistant_provider, MyApp.PipelineModel`.
+Host applications decide which spaces get the assistant with
+`can_use_pipeline_assistant?/1` in the `:usage_limits_backend`, and can explain
+a refusal through `restriction_copy(:pipeline_assistant, reason)`.
+
 ## Step plugins
 
 A step plugin adds a step type to Mave without changing Core. It is a module
