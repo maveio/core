@@ -13,6 +13,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   alias MaveCore.Spaces
   alias MaveCore.Uploads.Token
   alias MaveCore.UsageLimits
+  alias MaveCoreWeb.Dashboard.Videos.ChaptersComponent
   alias MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent
   alias MaveCoreWeb.DashboardRoutes
   alias MaveCoreWeb.Formatter
@@ -146,7 +147,15 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
       ) do
     case Embeds.resolve_dashboard_embed(socket.assigns.current_space, embed_id) do
       {:ok, %Embed{} = embed} ->
-        {:noreply, assign_video_by_state(socket, embed, update_mode: :event)}
+        socket = assign_video_by_state(socket, embed, update_mode: :event)
+
+        # Chapters are stored apart from the embed, so an unchanged embed would
+        # not re-render the editor when a suggestion arrives.
+        if socket.assigns.video_ready and not socket.assigns.replace_mode do
+          send_update(ChaptersComponent, id: "video-chapters", refresh: make_ref())
+        end
+
+        {:noreply, socket}
 
       _ ->
         {:noreply, socket}

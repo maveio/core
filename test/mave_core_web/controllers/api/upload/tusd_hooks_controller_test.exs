@@ -4,7 +4,18 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
 
   alias MaveCore.Accounts
   alias MaveCore.Assets
-  alias MaveCore.Assets.{Asset, AudioDescription, AudioTrack, Rendition, Subtitle, Video}
+
+  alias MaveCore.Assets.{
+    Asset,
+    AudioDescription,
+    AudioTrack,
+    ChapterSet,
+    Rendition,
+    Subtitle,
+    Video
+  }
+
+  alias MaveCore.Chapters
   alias MaveCore.Collections.CollectionEmbed
   alias MaveCore.Embeds
   alias MaveCore.Embeds.Embed
@@ -15,6 +26,7 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
   alias MaveCore.Repo
   alias MaveCore.Spaces
   alias MaveCore.Spaces.Space
+  alias MaveCore.TestSupport.ChapterTranscriptFixture
   alias MaveCore.TestSupport.FlowStorageAdapterStub
   alias MaveCore.Uploads.Token
 
@@ -1959,6 +1971,52 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
 
       File.rm_rf(tmp_dir)
     end
+  end
+
+  test "custom subtitle uploads get a chapter suggestion in spaces with automatic chapters",
+       %{conn: conn} do
+    space =
+      space_fixture()
+      |> Ecto.Changeset.change(automatic_chapters_enabled: true)
+      |> Repo.update!()
+
+    embed = video_embed_fixture(space, %{name: "Chapter Target"})
+    asset = Repo.get!(Asset, embed.asset_id)
+    source_key = "uploads/subtitles/#{embed.hash}.vtt"
+    transcript = ChapterTranscriptFixture.vtt()
+
+    Repo.get!(Video, asset.current_video_id)
+    |> Ecto.Changeset.change(duration: ChapterTranscriptFixture.duration())
+    |> Repo.update!()
+
+    assert {:ok, _} =
+             FlowStorageAdapterStub.put(
+               "mave-upload",
+               source_key,
+               transcript,
+               "text/vtt",
+               @upload_source_region
+             )
+
+    conn =
+      post(conn, ~p"/internal/upload-hooks/tusd?secret=hook_secret", %{
+        "Type" => "post-finish",
+        "Event" => %{
+          "Upload" => %{
+            "ID" => "upload-subtitle-chapters",
+            "Size" => byte_size(transcript),
+            "MetaData" =>
+              upload_metadata(embed, %{"custom_subtitle" => "true", "language" => "en"}),
+            "Storage" => %{"Bucket" => "mave-upload", "Key" => source_key}
+          }
+        }
+      })
+
+    assert %{"status" => "ok", "action" => "custom_subtitle"} = json_response(conn, 200)
+
+    # Jobs run inline in tests. The suggestion is a draft: nothing is published.
+    assert %ChapterSet{draft: [_, _ | _], published: [], inputs: ["transcript"]} =
+             Chapters.get_set(asset.current_video_id)
   end
 
   test "custom subtitle uploads create a subtitle and republish the manifest", %{conn: conn} do

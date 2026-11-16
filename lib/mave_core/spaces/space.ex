@@ -12,6 +12,7 @@ defmodule MaveCore.Spaces.Space do
     field :public_sharing_enabled, :boolean
     field :hotlink_protection_enabled, :boolean
     field :audio_description_enabled, :boolean, default: false
+    field :automatic_chapters_enabled, :boolean, default: false
     field :default_flow_template, :string
     field :deleted_at, :utc_datetime_usec
 
@@ -37,7 +38,11 @@ defmodule MaveCore.Spaces.Space do
 
   def features_changeset(space, attrs) do
     space
-    |> cast(attrs, [:hotlink_protection_enabled, :audio_description_enabled])
+    |> cast(attrs, [
+      :hotlink_protection_enabled,
+      :audio_description_enabled,
+      :automatic_chapters_enabled
+    ])
     |> validate_shared_storage_features()
   end
 

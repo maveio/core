@@ -211,6 +211,34 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
               </div>
             </:actions>
           </.data_table_row>
+          <.data_table_row id="automatic-chapters-feature">
+            <div>
+              <div>{gettext("Automatic chapters")}</div>
+              <div
+                :if={@features.automatic_chapters_notice}
+                id="automatic-chapters-notice"
+                class="text-xs text-stone-400 mt-1"
+              >
+                {@features.automatic_chapters_notice}
+              </div>
+            </div>
+            <.info_hover>
+              {gettext(
+                "When a video gets subtitles, chapters are suggested from what is said. They stay a draft until you review and publish them on the video page."
+              )}
+            </.info_hover>
+            <:actions>
+              <div class="p-4">
+                <.toggle
+                  id="automatic-chapters-toggle"
+                  enabled={@features.automatic_chapters}
+                  disabled={@features.automatic_chapters_disabled}
+                  phx-click="toggle_automatic_chapters"
+                  phx-target={@myself}
+                />
+              </div>
+            </:actions>
+          </.data_table_row>
         </.data_table>
       </div>
 
@@ -576,6 +604,34 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
     end
   end
 
+  def handle_event("toggle_automatic_chapters", _params, socket) do
+    attrs = %{
+      automatic_chapters_enabled: !socket.assigns.current_space.automatic_chapters_enabled
+    }
+
+    case Spaces.update_space_features(socket.assigns.current_space, attrs) do
+      {:ok, updated_space} ->
+        {:noreply,
+         socket
+         |> notify_parent(updated_space)
+         |> assign(:current_space, updated_space)
+         |> reload_state()}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply, put_flash(socket, :error, gettext("Could not update automatic chapters."))}
+
+      {:error, reason} ->
+        copy = UsageLimits.restriction_copy(:automatic_chapters, reason)
+
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           Map.get(copy, :error, gettext("Automatic chapters aren't available for this space."))
+         )}
+    end
+  end
+
   def handle_event("change_default_flow_template", %{"processing" => params}, socket) do
     case Spaces.update_space_processing(socket.assigns.current_space, %{
            default_flow_template: Map.get(params, "default_flow_template")
@@ -700,9 +756,39 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
           hotlink_protection: hotlink_protection_enabled?(current_space),
           hotlink_protection_disabled: SharedStorageSpace.shared?(current_space)
         },
-        audio_description_features(current_space)
+        current_space
+        |> audio_description_features()
+        |> Map.merge(automatic_chapters_features(current_space))
       )
     )
+  end
+
+  # A space that lost access can still switch the feature off, but not back on.
+  defp automatic_chapters_features(%Space{} = space) do
+    enabled? = space.automatic_chapters_enabled == true
+
+    case UsageLimits.can_use_automatic_chapters?(space) do
+      :ok ->
+        %{
+          automatic_chapters: enabled?,
+          automatic_chapters_disabled: false,
+          automatic_chapters_notice: nil
+        }
+
+      {:error, reason} ->
+        copy = UsageLimits.restriction_copy(:automatic_chapters, reason)
+
+        %{
+          automatic_chapters: enabled?,
+          automatic_chapters_disabled: not enabled?,
+          automatic_chapters_notice:
+            Map.get(
+              copy,
+              :notice,
+              gettext("Automatic chapters aren't available for this space.")
+            )
+        }
+    end
   end
 
   # A space that lost access can still switch the feature off, but not back on.

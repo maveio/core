@@ -3,6 +3,7 @@ defmodule MaveCoreWeb.Api.LegacyEmbedControllerTest do
 
   alias MaveCore.Accounts
   alias MaveCore.Assets.Video
+  alias MaveCore.Chapters
   alias MaveCore.Embeds
   alias MaveCore.Embeds.SettingsSerializer
   alias MaveCore.PublicApi
@@ -92,6 +93,45 @@ defmodule MaveCoreWeb.Api.LegacyEmbedControllerTest do
     assert video["filetype"] == "mp4"
     assert video["status"] == "ready"
     assert video["ready"] == true
+  end
+
+  test "published chapters are in the manifest and the collection response, drafts are not", %{
+    conn: conn,
+    key: key,
+    space: space,
+    root_video: root_video
+  } do
+    embed_id = space.hash <> root_video.hash
+    token = sign_jwt(key, %{"sub" => space.id})
+    video = Repo.get!(Video, Repo.preload(root_video, :asset).asset.current_video_id)
+    video = video |> Ecto.Changeset.change(duration: 90.0) |> Repo.update!()
+
+    {:ok, _set} =
+      Chapters.save_draft(video, [
+        %{"start" => 0, "title" => "Intro"},
+        %{"start" => 30, "title" => "Demo"}
+      ])
+
+    manifest = conn |> get(~p"/api/v1/#{embed_id}") |> json_response(200)
+    refute Map.has_key?(manifest, "chapters")
+
+    assert %{"embeds" => [%{"chapters" => []}]} =
+             conn |> get(~p"/api/v1/collection/#{token}") |> json_response(200)
+
+    {:ok, _set} = Chapters.publish(root_video)
+
+    cues = [
+      %{"start" => 0.0, "end" => 30.0, "title" => "Intro"},
+      %{"start" => 30.0, "end" => 90.0, "title" => "Demo"}
+    ]
+
+    assert %{"chapters" => %{"cues" => ^cues, "path" => path}} =
+             conn |> get(~p"/api/v1/#{embed_id}") |> json_response(200)
+
+    assert path =~ "/#{root_video.hash}/chapters.vtt?e="
+
+    assert %{"embeds" => [%{"chapters" => ^cues}]} =
+             conn |> get(~p"/api/v1/collection/#{token}") |> json_response(200)
   end
 
   test "GET /v1/:embed_id works on the configured API host", %{
