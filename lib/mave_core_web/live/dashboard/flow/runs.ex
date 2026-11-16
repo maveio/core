@@ -9,6 +9,7 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   alias MaveCore.Flow.Diagnostics
   alias MaveCore.Flow.Events, as: FlowEvents
   alias MaveCore.Flow.Resolution
+  alias MaveCore.Flow.StepRegistry
   alias MaveCoreWeb.Dashboard.Flow.RunTiming
   alias MaveCoreWeb.DashboardRoutes
   alias Phoenix.LiveView.JS
@@ -675,7 +676,9 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                           :if={execution_progress_percent(step.execution_metadata, step.step_status)}
                           class="mt-2 text-[0.68rem] text-blue-500"
                         >
-                          <div class="mb-1">{execution_progress_label(step.execution_metadata)}</div>
+                          <div class="mb-1">
+                            {execution_progress_label(step.execution_metadata, step.step_type)}
+                          </div>
                           <div class="h-1.5 w-24 overflow-hidden rounded-full bg-stone-200">
                             <div
                               class="h-full rounded-full bg-blue-500 transition-[width] duration-300"
@@ -684,6 +687,16 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
                             </div>
                           </div>
                         </div>
+                        <dl
+                          :if={Map.get(step, :results, []) != []}
+                          id={"step-results-#{run.id}-#{step.step_id}"}
+                          class="mt-2 space-y-0.5 text-[0.68rem] text-stone-500"
+                        >
+                          <div :for={result <- step.results} class="flex gap-1.5">
+                            <dt class="text-stone-400">{result.label}</dt>
+                            <dd class="tabular-nums">{result.text}</dd>
+                          </div>
+                        </dl>
                       </.data_table_grid_cell>
                       <.data_table_grid_cell label={gettext("Timing / Executor")}>
                         <.timing_bar timing={step} id={"step-timing-#{run.id}-#{step.step_id}"} />
@@ -1982,6 +1995,15 @@ defmodule MaveCoreWeb.Dashboard.Flow.Runs do
   end
 
   defp execution_progress_percent(_metadata, _status), do: nil
+
+  # Plugin step types name their own work, such as "measuring".
+  defp execution_progress_label(metadata, step_type) do
+    case {execution_progress_percent(metadata, "executing"),
+          StepRegistry.progress_label(step_type)} do
+      {percent, label} when is_integer(percent) and is_binary(label) -> "#{percent}% #{label}"
+      _ -> execution_progress_label(metadata)
+    end
+  end
 
   defp execution_progress_label(%{"progress" => %{} = progress} = metadata) do
     case execution_progress_percent(metadata, "executing") do

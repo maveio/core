@@ -1222,6 +1222,17 @@ defmodule MaveCore.Flow do
 
   defp maybe_start_progress_reporter(%{step_run: %{step_type: step_type}} = execution)
        when step_type in @media_step_types or step_type == "ai.describe_video" do
+    start_progress_reporter(execution, step_type)
+  end
+
+  # Plugin steps report progress when their contract describes it.
+  defp maybe_start_progress_reporter(%{step_run: %{step_type: step_type}} = execution) do
+    if StepRegistry.progress_label(step_type),
+      do: start_progress_reporter(execution, step_type),
+      else: {execution, nil}
+  end
+
+  defp start_progress_reporter(execution, step_type) do
     case ProgressReporter.start_link(
            flow_run_id: execution.run.id,
            step_run_id: execution.step_run.id,
@@ -1232,8 +1243,6 @@ defmodule MaveCore.Flow do
       {:error, _reason} -> {execution, nil}
     end
   end
-
-  defp maybe_start_progress_reporter(execution), do: {execution, nil}
 
   defp safe_stop_progress_reporter(nil), do: :ok
 

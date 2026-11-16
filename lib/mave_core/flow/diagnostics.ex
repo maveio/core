@@ -10,7 +10,7 @@ defmodule MaveCore.Flow.Diagnostics do
 
   alias MaveCore.Embeds
   alias MaveCore.Embeds.{Embed, SettingsSerializer}
-  alias MaveCore.Flow.{Definition, Resolution, Run, StepRun}
+  alias MaveCore.Flow.{Definition, Resolution, Run, StepRegistry, StepRun}
   alias MaveCore.Repo
   alias MaveCore.Spaces.Space
 
@@ -1113,6 +1113,7 @@ defmodule MaveCore.Flow.Diagnostics do
       step_execution_ms: execution_ms(step_run, now),
       step_ready_total_ms: ready_total_ms(step_run, now),
       execution_metadata: execution_metadata(step_run),
+      results: StepRegistry.results(step_run.step_type, step_run.output || %{}),
       error: compact_error(step_run.error),
       error_detail: step_run.error,
       scheduled_at: step_run.scheduled_at,
