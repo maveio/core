@@ -6,6 +6,10 @@ OS and native-library advisories. See the [workflows](../.github/workflows) and
 [dependency configuration](../mix.exs) for current versions and check definitions.
 These checks complement code review; a passing scan is not proof of safety.
 
+Maintainers can additionally let a model test pull requests in an isolated
+sandbox; see [AI sandbox testing](ai_sandbox_testing.md). It is advisory and off
+by default.
+
 Run local checks as described in [CONTRIBUTING](../CONTRIBUTING.md#validate-a-change).
 Report vulnerabilities using [SECURITY.md](../SECURITY.md).
 

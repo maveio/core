@@ -1,0 +1,237 @@
+name: AI sandbox
+
+# A model tests incoming pull requests inside an isolated sandbox and reports
+# findings for human review. Read docs/ai_sandbox_testing.md before changing
+# this file. Three jobs keep three powers apart:
+#
+#   prepare  runs pull-request code with network access, holds no secrets
+#   explore  holds the model key; pull-request code runs only in containers
+#            without network, host mounts or credentials
+#   report   may comment on the pull request; never touches its code
+
+on:
+  # Uses this file and its scripts from the base branch, never from the pull
+  # request, which is checked out as data and executed only inside containers.
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to test
+        required: true
+        type: number
+  # Self-test of the sandbox itself, without a model or secrets, when it changes.
+  pull_request:
+    paths:
+      - .github/ai-sandbox/**
+      - .github/scripts/ai_sandbox*.py
+      - .github/scripts/test_ai_sandbox.py
+      - .github/workflows/ai-sandbox.yml
+
+permissions: {}
+
+concurrency:
+  group: ai-sandbox-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: Build sandbox image
+    # Model runs stay off until a maintainer opts in; the self-test needs no opt-in.
+    if: >-
+      github.event_name == 'pull_request' ||
+      (vars.AI_SANDBOX_ENABLED == 'true' && github.event.pull_request.draft != true)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      base_sha: ${{ steps.pr.outputs.base_sha }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+    steps:
+      - name: Check out the trusted sandbox files
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: trusted
+          persist-credentials: false
+      - name: Resolve the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pull-request.json"
+          base=$(jq -r .base.sha "$RUNNER_TEMP/pull-request.json")
+          head=$(jq -r .head.sha "$RUNNER_TEMP/pull-request.json")
+          [[ "$base" =~ ^[0-9a-f]{40}$ && "$head" =~ ^[0-9a-f]{40}$ ]]
+          printf 'number=%s\nbase_sha=%s\nhead_sha=%s\n' "$PR_NUMBER" "$base" "$head" >> "$GITHUB_OUTPUT"
+      - name: Check out the pull request as data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/pull/${{ steps.pr.outputs.number }}/head
+          path: pull-request
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Confirm the checkout is the resolved commit
+        env:
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: '[[ "$(git -C pull-request rev-parse HEAD)" == "$HEAD_SHA" ]]'
+      - name: Build the sandbox image
+        run: |
+          bash trusted/.github/scripts/prepare-runner-network.sh
+          bash trusted/.github/ai-sandbox/prepare.sh pull-request "$RUNNER_TEMP/sandbox-image.tar.zst"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ai-sandbox-image
+          path: ${{ runner.temp }}/sandbox-image.tar.zst
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+  selftest:
+    name: Sandbox self-test without a model
+    if: github.event_name == 'pull_request'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ai-sandbox-image
+          path: ${{ runner.temp }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Test the orchestrator with its locked dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --require-hashes --requirement .github/ai-sandbox/requirements.txt
+          "$RUNNER_TEMP/venv/bin/python" -m unittest discover -s .github/scripts -p 'test_ai_sandbox.py' -v
+      - name: Start the sandbox and verify its isolation
+        run: bash .github/ai-sandbox/start.sh "$RUNNER_TEMP/sandbox-image.tar.zst"
+      - name: Run scripted steps in the sandbox
+        env:
+          PR_NUMBER: ${{ needs.prepare.outputs.number }}
+          PR_BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+        run: |
+          python3 .github/scripts/ai_sandbox.py review \
+            --model-script .github/ai-sandbox/selftest.json \
+            --output "$RUNNER_TEMP/report.json"
+          python3 .github/scripts/ai_sandbox_report.py "$RUNNER_TEMP/report.json" >> "$GITHUB_STEP_SUMMARY"
+
+  explore:
+    name: Test with the model
+    if: github.event_name != 'pull_request'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    # Keep the model key in this environment; add required reviewers to approve runs.
+    environment: ai-sandbox
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out the trusted sandbox files
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ai-sandbox-image
+          path: ${{ runner.temp }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install the locked orchestrator dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --require-hashes --requirement .github/ai-sandbox/requirements.txt
+      - name: Start the sandbox and verify its isolation
+        run: bash .github/ai-sandbox/start.sh "$RUNNER_TEMP/sandbox-image.tar.zst"
+      - name: Fetch the pull request description
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.prepare.outputs.number }}
+        run: gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pull-request.json"
+      - name: Let the model test the pull request
+        env:
+          # The key exists only in this step's environment, never in a container.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AI_SANDBOX_MODEL: ${{ vars.AI_SANDBOX_MODEL }}
+          AI_SANDBOX_EFFORT: ${{ vars.AI_SANDBOX_EFFORT }}
+          AI_SANDBOX_MAX_TURNS: ${{ vars.AI_SANDBOX_MAX_TURNS }}
+          AI_SANDBOX_MAX_MINUTES: ${{ vars.AI_SANDBOX_MAX_MINUTES }}
+          AI_SANDBOX_REFUSAL_FALLBACK: ${{ vars.AI_SANDBOX_REFUSAL_FALLBACK }}
+          PR_NUMBER: ${{ needs.prepare.outputs.number }}
+          PR_BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+        run: |
+          "$RUNNER_TEMP/venv/bin/python" .github/scripts/ai_sandbox.py review \
+            --pull-request "$RUNNER_TEMP/pull-request.json" \
+            --output "$RUNNER_TEMP/ai-sandbox/report.json" \
+            --transcript "$RUNNER_TEMP/ai-sandbox/transcript.jsonl"
+      - name: Summarize the report
+        if: always()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -f "$RUNNER_TEMP/ai-sandbox/report.json" ]]; then
+            python3 .github/scripts/ai_sandbox_report.py "$RUNNER_TEMP/ai-sandbox/report.json" \
+              --run-url "$RUN_URL" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: ai-sandbox-report
+          path: ${{ runner.temp }}/ai-sandbox
+          retention-days: 14
+          if-no-files-found: warn
+
+  report:
+    name: Comment on the pull request
+    if: >-
+      always() && github.event_name != 'pull_request' &&
+      (needs.explore.result == 'success' || needs.explore.result == 'failure')
+    needs: [prepare, explore]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check out the trusted sandbox files
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ai-sandbox-report
+          path: ${{ runner.temp }}/ai-sandbox
+      - name: Post or update the report comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.prepare.outputs.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # The report is untrusted model output; the renderer makes it inert.
+          python3 .github/scripts/ai_sandbox_report.py "$RUNNER_TEMP/ai-sandbox/report.json" \
+            --run-url "$RUN_URL" --output "$RUNNER_TEMP/comment.md"
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- mave-ai-sandbox-report -->"))) | .id' \
+            | tail -n 1)
+          if [[ -n "$existing" ]]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" \
+              --field body=@"$RUNNER_TEMP/comment.md" --silent
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+              --field body=@"$RUNNER_TEMP/comment.md" --silent
+          fi
