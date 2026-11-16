@@ -1,5 +1,6 @@
 defmodule MaveCoreWeb.BrowserSecurity do
   @moduledoc false
+  alias MaveCore.Embeds.SettingsSerializer
   alias MaveCore.Playback.URLs
 
   def init(opts), do: opts
@@ -25,6 +26,7 @@ defmodule MaveCoreWeb.BrowserSecurity do
     "default-src 'self'; " <>
       "base-uri 'self'; " <>
       "frame-ancestors 'self'; " <>
+      frame_src() <>
       "form-action 'self'; " <>
       "object-src 'none'; " <>
       "script-src #{script_src}; " <>
@@ -33,6 +35,21 @@ defmodule MaveCoreWeb.BrowserSecurity do
       "font-src 'self' data:; " <>
       "connect-src 'self' https: ws: wss: #{external_sources}; " <>
       "media-src 'self' https: blob: #{external_sources}"
+  end
+
+  # The dashboard previews a live stream in the public player page, which is
+  # served from the API origin.
+  defp frame_src do
+    if MaveCore.LiveStreams.enabled?() do
+      api =
+        SettingsSerializer.component_runtime_config()["api"]["endpoint"]
+        |> extract_origin()
+        |> Enum.join(" ")
+
+      "frame-src 'self' #{api}; "
+    else
+      ""
+    end
   end
 
   defp component_script_origins do

@@ -181,6 +181,7 @@ An `Embed` is a public placement, an `Asset` is its media identity, and a
 | Dashboard, authentication, HTTP API, sockets | `lib/mave_core_web` |
 | Uploads, processing, and jobs | `lib/mave_core/{uploads,flow,workers}` |
 | Storage, manifests, playlists, posters | `lib/mave_core/media` |
+| RTMP ingest and live HLS playback | `lib/mave_core/live_streams` |
 | Event ingestion and analytics | `lib/mave_core/{metrics,analytics}` |
 | Product and analytics migrations | `priv/repo/migrations`, `priv/clickhouse_repo/migrations` |
 
@@ -194,6 +195,7 @@ Technical reference, as needed:
 - [Audio description](docs/audio_description.md): steps, outputs, providers and host policy.
 - [Prepared analytics](docs/analytics_sessions.md): setup and data lifecycle.
 - [Webhook delivery](docs/webhook_delivery_outbox.md): signed lifecycle events.
+- [Live streaming](docs/live_streaming.md): setup, playback, API and limits.
 - [Encoding boosters](deploy/encoding-booster/README.md): optional remote compute;
   not needed for the single-host installation.
 - [Analytics benchmarks](docs/analytics-benchmarks.md): tooling and its limitations.

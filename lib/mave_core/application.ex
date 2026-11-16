@@ -53,7 +53,8 @@ defmodule MaveCore.Application do
     [
       MaveCore.Repo,
       MaveCore.ClickHouseRepo,
-      MaveCore.Metrics.IngestionBuffer
+      MaveCore.Metrics.IngestionBuffer,
+      MaveCore.LiveStreams.Supervisor
     ]
   end
 

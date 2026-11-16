@@ -116,6 +116,9 @@ local MinIO support and deployment adapter integration.
   register it in [StepRegistry](lib/mave_core/flow/step_registry.ex), and use it
   in your pipeline. New step implementations require rebuilding Core; see
   [contributing](CONTRIBUTING.md) for local development and tests.
+- **Live streaming:** let a space broadcast from OBS over RTMP and watch it as
+  HLS, with the recording at the same address afterwards. It is off by default;
+  see [live streaming](docs/live_streaming.md).
 - **Analytics at scale:** prepare playback sessions in bounded background batches,
   then enable the reader for selected spaces. See
   [prepared analytics operations](docs/analytics_sessions.md) for backfill,
