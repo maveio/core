@@ -13,6 +13,11 @@ defmodule MaveCore.Spaces.Space do
     field :hotlink_protection_enabled, :boolean
     field :audio_description_enabled, :boolean, default: false
     field :default_flow_template, :string
+    field :replica_regions, {:array, :string}, default: []
+    field :delivery_region, :string
+    field :delivery_failover, :string, default: "automatic"
+    field :delivery_region_reason, :string
+    field :delivery_region_changed_at, :utc_datetime_usec
     field :deleted_at, :utc_datetime_usec
 
     has_many :memberships, Membership
@@ -39,6 +44,19 @@ defmodule MaveCore.Spaces.Space do
     space
     |> cast(attrs, [:hotlink_protection_enabled, :audio_description_enabled])
     |> validate_shared_storage_features()
+  end
+
+  @doc false
+  def multi_region_changeset(space, attrs) do
+    space
+    |> cast(attrs, [
+      :replica_regions,
+      :delivery_region,
+      :delivery_failover,
+      :delivery_region_reason,
+      :delivery_region_changed_at
+    ])
+    |> validate_inclusion(:delivery_failover, ["automatic", "manual"])
   end
 
   # Compatibility shims for private hosts that previously called these helpers.

@@ -5,6 +5,7 @@ defmodule MaveCore.Workers.PlaybackVisibilityWorker do
   import Ecto.Query
   alias MaveCore.Embeds.Embed
   alias MaveCore.Embeds.Events
+  alias MaveCore.MultiRegion.Replicator
   alias MaveCore.Playback
   alias MaveCore.Repo
   alias MaveCore.Spaces.Space
@@ -43,14 +44,20 @@ defmodule MaveCore.Workers.PlaybackVisibilityWorker do
   defp apply_visibility(embed, adapter) do
     visibility = if embed.playback_status in [:private, :protecting], do: :private, else: :public
 
-    case adapter.apply_visibility(embed, visibility) do
-      :ok ->
-        embed
-        |> Ecto.Changeset.change(playback_visibility: visibility, playback_status: visibility)
-        |> Repo.update!()
-
-      {:error, _reason} ->
-        Repo.rollback(:playback_storage_sync_failed)
+    # Replicas only hold public media. Remove this embed's copy before the
+    # adapter confirms private visibility, so no region keeps serving it.
+    with :ok <- remove_private_replicas(embed, visibility),
+         :ok <- adapter.apply_visibility(embed, visibility) do
+      embed
+      |> Ecto.Changeset.change(playback_visibility: visibility, playback_status: visibility)
+      |> Repo.update!()
+    else
+      {:error, _reason} -> Repo.rollback(:playback_storage_sync_failed)
     end
   end
+
+  defp remove_private_replicas(embed, :private),
+    do: Replicator.remove_embed(embed.space, embed.hash)
+
+  defp remove_private_replicas(_embed, :public), do: :ok
 end

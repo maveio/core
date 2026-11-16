@@ -1,6 +1,8 @@
 defmodule MaveCore.Embeds.Events do
   @moduledoc false
 
+  alias MaveCore.MultiRegion.Cache
+
   @topic_prefix "embeds:"
   @space_topic_prefix "embeds:space:"
 
@@ -33,6 +35,14 @@ defmodule MaveCore.Embeds.Events do
       space_topic(space_id),
       {:space_embeds_updated,
        Map.merge(%{"space_id" => space_id, "embed_id" => embed_id}, payload)}
+    )
+
+    # One topic for every space, for listeners that follow media changes, such
+    # as multi-region replication.
+    Phoenix.PubSub.broadcast(
+      MaveCore.PubSub,
+      Cache.changes_topic(),
+      {:embed_changed, space_id, embed_id}
     )
   end
 

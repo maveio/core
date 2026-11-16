@@ -222,6 +222,70 @@ config :mave_core,
        :default_storage_profile,
        parse_string_env.("MAVE_DEFAULT_STORAGE_PROFILE", "default")
 
+# Additional storage regions. A space can add them as replica regions for
+# multi-region delivery; see docs/multi_region_delivery.md.
+default_storage_profile = parse_string_env.("MAVE_DEFAULT_STORAGE_PROFILE", "default")
+storage_regions = parse_csv_env.("MAVE_STORAGE_REGIONS")
+
+storage_region_env = fn region, name ->
+  parse_optional_string_env.("MAVE_STORAGE_REGION_#{String.upcase(region)}_#{name}")
+end
+
+Enum.each(storage_regions, fn region ->
+  unless Regex.match?(~r/\A[a-z0-9][a-z0-9_]{0,31}\z/, region) and
+           region != default_storage_profile do
+    raise "MAVE_STORAGE_REGIONS must list lower-case identifiers other than " <>
+            "#{inspect(default_storage_profile)}; got: #{inspect(region)}"
+  end
+end)
+
+if storage_regions != [] do
+  required = fn region, name ->
+    storage_region_env.(region, name) ||
+      raise "MAVE_STORAGE_REGION_#{String.upcase(region)}_#{name} is missing"
+  end
+
+  config :mave_core,
+         :storage_providers,
+         Map.new(storage_regions, fn region ->
+           {region,
+            [
+              endpoint: required.(region, "ENDPOINT"),
+              access_key_id: required.(region, "ACCESS_KEY"),
+              secret_access_key: required.(region, "SECRET_KEY"),
+              region: storage_region_env.(region, "REGION") || "us-east-1",
+              bucket_prefix: storage_region_env.(region, "BUCKET_PREFIX") || "space-"
+            ]}
+         end)
+end
+
+storage_region_cards =
+  [default_storage_profile | storage_regions]
+  |> Enum.map(fn region ->
+    [
+      id: region,
+      name: storage_region_env.(region, "NAME"),
+      provider: storage_region_env.(region, "PROVIDER"),
+      location: storage_region_env.(region, "LOCATION")
+    ]
+  end)
+  |> Enum.filter(fn card -> card[:name] || card[:provider] || card[:location] end)
+
+if storage_region_cards != [] do
+  config :mave_core, :extra_dashboard_regions, storage_region_cards
+end
+
+storage_region_public_base_urls =
+  for region <- [default_storage_profile | storage_regions],
+      base_url = storage_region_env.(region, "PUBLIC_BASE_URL"),
+      into: %{} do
+    {region, String.trim_trailing(base_url, "/")}
+  end
+
+if storage_region_public_base_urls != %{} do
+  config :mave_core, :multi_region_public_base_urls, storage_region_public_base_urls
+end
+
 if shared_storage_space_hash = parse_optional_string_env.("MAVE_SHARED_STORAGE_SPACE_HASH") do
   config :mave_core, :shared_storage_space_hash, shared_storage_space_hash
 end
@@ -397,7 +461,8 @@ if config_env() == :prod do
       flow_media: flow_media_limit,
       flow_imports: flow_imports_limit,
       flow_low: flow_low_limit,
-      webhooks: webhooks_limit
+      webhooks: webhooks_limit,
+      multi_region: parse_integer_env.("MAVE_OBAN_MULTI_REGION_LIMIT", 2)
     ]
 
   config :mave_core, :flow_fair_queues,

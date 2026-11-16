@@ -39,6 +39,7 @@ config :mave_core, Oban,
        {"* * * * *", MaveCore.Workers.FlowRecoveryWorker},
        {"* * * * *", MaveCore.Workers.AnalyticsSessionsWorker},
        {"* * * * *", MaveCore.Workers.AnalyticsSessionsCleanupWorker},
+       {"* * * * *", MaveCore.Workers.MultiRegionMonitorWorker},
        {"23 * * * *", MaveCore.Workers.CliAuthorizationPruneWorker}
      ]}
   ],
@@ -52,7 +53,8 @@ config :mave_core, Oban,
     flow_imports: 10,
     flow_low: 5,
     analytics: 1,
-    webhooks: 20
+    webhooks: 20,
+    multi_region: 2
   ]
 
 config :mave_core, :flow_fair_queues,

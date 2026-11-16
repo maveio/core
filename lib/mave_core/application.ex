@@ -53,7 +53,9 @@ defmodule MaveCore.Application do
     [
       MaveCore.Repo,
       MaveCore.ClickHouseRepo,
-      MaveCore.Metrics.IngestionBuffer
+      MaveCore.Metrics.IngestionBuffer,
+      {MaveCore.MultiRegion.Cache,
+       listen: Application.get_env(:mave_core, :multi_region_change_listener, true)}
     ]
   end
 

@@ -10,6 +10,7 @@ defmodule MaveCore.Spaces do
   alias MaveCore.Embeds.Embed
   alias MaveCore.LegacyShortUUID
   alias MaveCore.Media.Storage
+  alias MaveCore.MultiRegion
   alias MaveCore.PublicApi
   alias MaveCore.PublicHttpUrl
   alias MaveCore.Repo
@@ -78,6 +79,17 @@ defmodule MaveCore.Spaces do
 
   def sync_bucket_access_for_space_hash(space_hash, storage_profile) when is_binary(space_hash) do
     sync_domain_cors_by_hash(space_hash, storage_profile)
+  end
+
+  @doc """
+  Applies the space's CORS and access configuration to its bucket in another
+  storage region, so a replica answers browsers the same way as the primary.
+  """
+  def sync_bucket_access_for_region(%Space{} = space, region) when is_binary(region) do
+    case get_space_with_domains(space.id) do
+      %Space{} = current -> run_domain_cors_sync(%{current | region: region})
+      nil -> :ok
+    end
   end
 
   def list_domains(%Space{id: space_id}) do
@@ -1149,9 +1161,20 @@ defmodule MaveCore.Spaces do
   defp sync_domain_cors_for_space(nil), do: :ok
 
   defp sync_domain_cors_for_space(%Space{} = space) do
-    space
-    |> run_domain_cors_sync()
-    |> log_domain_cors_result(space)
+    result =
+      space
+      |> run_domain_cors_sync()
+      |> log_domain_cors_result(space)
+
+    # Replicas follow on a best-effort basis; every replication run applies the
+    # same configuration again.
+    Enum.each(MultiRegion.replica_regions(space), fn region ->
+      %{space | region: region}
+      |> run_domain_cors_sync()
+      |> log_domain_cors_result(space)
+    end)
+
+    result
   end
 
   defp run_domain_cors_sync(space) do
