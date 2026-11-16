@@ -125,6 +125,63 @@ spaces that opted in. They skip themselves unless the run input has
 `audio_description`, and nothing in the publish path waits for them. See
 [audio description](audio_description.md).
 
+## Space pipelines
+
+A space can adjust the flow its uploads use without owning a template. In the
+dashboard, **Settings → Encoding** shows the steps from upload to delivery and
+lets a member:
+
+- turn optional steps off, for example the 4K rendition;
+- change the step options a step type marks as editable, such as the
+  transcription vocabulary or the number of storyboard frames.
+
+![Encoding settings with the 4K rendition turned off, the steps it needs and feeds, and the steps that turned off with it.](images/dashboard-encoding-pipeline.png)
+
+Required steps stay on. Turning a step off also turns off the optional steps
+that cannot work without it, so disabling the 4K transcode removes its HLS
+packaging, HEVC/AV1 clips and the master playlist refresh that would only add
+that variant. A change that would leave a required step without something it
+needs is rejected. Each step type declares how it copes with a missing
+dependency in [`StepRegistry`](../lib/mave_core/flow/step_registry.ex)
+(`dependencies: :all | :any | :accumulate`); the rules themselves live in
+[`Pipeline`](../lib/mave_core/flow/pipeline.ex).
+
+Each save is a new pipeline version for the space (`flow_pipeline_versions`).
+It stores only the overrides, keyed by step id:
+
+```json
+{
+  "disabled_steps": ["video_h264_uhd"],
+  "settings": {"transcribe_audio": {"context": "Mave, Hovercraft"}}
+}
+```
+
+When a run starts for the space, the newest overrides are applied to the flow
+version the run would otherwise use. The result is stored as a regular,
+immutable flow version of a template derived for the space
+(`<template>.space-<space uuid>`) and recorded on the run, so earlier runs keep
+the definition they ran with. Because overrides are applied at run start:
+
+- they follow preset updates, and the same overrides cover the local and
+  remote-source variants of a preset (step ids a flow does not have are ignored);
+- an upload that names its own `template` runs that template unchanged, as do
+  runs started through `/v1/flow/runs`;
+- overrides that no longer fit a flow, for example after a custom template made
+  a step required, are skipped with a warning rather than failing the upload.
+
+Host applications can make the editor read-only for a space by implementing
+`can_edit_encoding_pipeline?/1` in the `:usage_limits_backend`, and explain why
+through `restriction_copy(:encoding_pipeline, reason)`.
+
+### Transcription vocabulary
+
+`ai.transcribe_audio` accepts a `context` parameter with names and terms that
+should be spelled correctly in subtitles, such as a company or product name.
+The text is split into single words (at most 100) and passed to the
+transcription provider as the `:context` option; the built-in Mistral provider
+sends it as `context_bias`, and transcribes without it when the configured
+model rejects the option. Custom providers may ignore `:context`.
+
 ## Execution and recovery
 
 By default:
@@ -133,7 +190,7 @@ By default:
 - Serverless booster: video/audio transcodes, frame extraction, and video/audio HLS packaging when the deployment enables it
 - Inline: lightweight orchestration and HLS publication steps (`source.resolve`, `storage.ensure_space_bucket`, `media.package_hls_*`, `manifest.build`, `cdn.purge`, `event.notify_webhook`, etc.)
 
-`GET /v1/flow/step-types` returns step metadata (`type`, `category`, `description`, `options`) so a visual builder can render clear, stable controls (for example step-level `strict`).
+`GET /v1/flow/step-types` returns step metadata (`type`, `category`, `stage`, `dependencies`, `description`, `options`) so a visual builder can render clear, stable controls (for example step-level `strict`). Options with `"editable": true` may be changed per space.
 
 ### Retry and orphan recovery
 

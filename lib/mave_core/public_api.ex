@@ -244,7 +244,7 @@ defmodule MaveCore.PublicApi do
            Flow.start_run(
              remote_input_template(space),
              build_run_input(space, updated_embed, input_url, params),
-             []
+             space_pipeline: space
            ) do
       Events.broadcast_updated(updated_embed.space_id, updated_embed.id, %{"status" => "queued"})
       :ok

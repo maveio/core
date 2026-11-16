@@ -820,6 +820,64 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
     assert flow_run.flow_template.slug == "space_default_test"
   end
 
+  test "uploads use the space's pipeline unless they name their own template", %{conn: conn} do
+    definition = %{
+      "steps" => [
+        %{"id" => "source", "type" => "source.resolve", "name" => "Resolve Source"},
+        %{
+          "id" => "notify",
+          "type" => "event.notify_webhook",
+          "name" => "Notify Webhook",
+          "depends_on" => ["source"],
+          "required" => false
+        }
+      ]
+    }
+
+    {:ok, _template} =
+      Flow.create_template(%{"slug" => "space_default_test", "name" => "Space Default Test"})
+
+    {:ok, _version} = Flow.create_version("space_default_test", %{"definition" => definition})
+    space = space_fixture()
+
+    assert {:ok, space} =
+             Spaces.update_space_processing(space, %{default_flow_template: "space_default_test"})
+
+    assert {:ok, _pipeline} = Flow.Pipelines.save(space, %{"disabled_steps" => ["notify"]})
+
+    start_upload = fn id, metadata ->
+      embed = placeholder_video_embed_fixture(space, %{name: "Pipeline Upload #{id}"})
+
+      conn =
+        post(conn, ~p"/internal/upload-hooks/tusd?secret=hook_secret", %{
+          "Type" => "post-finish",
+          "Event" => %{
+            "Upload" => %{
+              "ID" => "upload-pipeline-#{id}",
+              "Size" => 321,
+              "MetaData" =>
+                upload_metadata(
+                  embed,
+                  Map.merge(%{"filetype" => "video/mp4", "enqueue" => "false"}, metadata)
+                ),
+              "Storage" => %{"Bucket" => "mave-upload", "Key" => "uploads/pipeline-#{id}.mp4"}
+            }
+          }
+        })
+
+      assert %{"status" => "ok", "flow_run_id" => flow_run_id} = json_response(conn, 200)
+      Flow.get_run(flow_run_id)
+    end
+
+    piped = start_upload.("default", %{})
+    assert Flow.Pipelines.derived_slug?(piped.flow_template.slug)
+    assert Enum.map(piped.step_runs, & &1.step_id) == ["source"]
+
+    explicit = start_upload.("explicit", %{"template" => "space_default_test"})
+    assert explicit.flow_template.slug == "space_default_test"
+    assert length(explicit.step_runs) == 2
+  end
+
   test "upload metadata template overrides the space default template", %{conn: conn} do
     {:ok, _template} =
       Flow.create_template(%{"slug" => "upload_test", "name" => "Upload Test"})
