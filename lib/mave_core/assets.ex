@@ -286,7 +286,11 @@ defmodule MaveCore.Assets do
              ),
            bucket = Storage.bucket_for_space(embed.space.hash, region),
            {:ok, _} <- storage_adapter().put_public(bucket, key, body, "text/vtt", region),
-           {:ok, updated} <- update_subtitle_outputs(embed, subtitle, %{path: key}) do
+           {:ok, updated} <- update_subtitle_outputs(embed, subtitle, %{path: key}),
+           {:ok, _job} <-
+             %{embed_id: embed.id, subtitle_id: updated.id, path: key}
+             |> MaveCore.Workers.SubtitleJsonWorker.new()
+             |> Oban.insert() do
         updated
       else
         nil -> Repo.rollback(:subtitle_not_found)
@@ -294,6 +298,101 @@ defmodule MaveCore.Assets do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  def publish_subtitle_json(embed_id, subtitle_id, path) do
+    Repo.transaction(fn ->
+      with %Embed{deleted_at: nil} = embed <- Repo.get(Embed, embed_id),
+           embed = Repo.preload(embed, [:space, asset: :current_video]),
+           %Video{} = video <- embed.asset.current_video,
+           %Subtitle{path: ^path} = subtitle <-
+             Repo.one(
+               from(s in Subtitle,
+                 where: s.id == ^subtitle_id and s.video_id == ^video.id,
+                 lock: "FOR UPDATE"
+               )
+             ),
+           region = embed.space.region || "default",
+           bucket = Storage.bucket_for_space(embed.space.hash, region),
+           {:ok, body} <- storage_adapter().get(bucket, path, region),
+           {:ok, document} <- SubtitleDocument.parse(body),
+           :ok <- write_subtitle_json(embed, subtitle, document, bucket, region) do
+        :ok
+      else
+        {:error, reason} -> Repo.rollback(reason)
+        _obsolete -> :ok
+      end
+    end)
+    |> case do
+      {:ok, :ok} -> :ok
+      error -> error
+    end
+  end
+
+  defp write_subtitle_json(embed, subtitle, document, bucket, region) do
+    video = embed.asset.current_video
+    version = Embeds.current_video_version(video)
+    language = subtitle.language || "en"
+    key = audio_source_key(embed.hash, version, "subtitle_#{language}.json")
+
+    primary? =
+      case normalize_language(video.language) || default_audio_language(video.id) do
+        nil ->
+          not Repo.exists?(
+            from(s in Subtitle, where: s.video_id == ^video.id and s.id != ^subtitle.id)
+          )
+
+        source ->
+          source == normalize_language(language)
+      end
+
+    keys =
+      if primary?, do: [key, audio_source_key(embed.hash, version, "subtitle.json")], else: [key]
+
+    with {:ok, previous} <- previous_subtitle_json(bucket, key, region) do
+      body = SubtitleDocument.transcript_json(document, previous)
+
+      result =
+        Enum.reduce_while(keys, :ok, fn path, :ok ->
+          case storage_adapter().put_public(bucket, path, body, "application/json", region) do
+            {:ok, _} -> {:cont, :ok}
+            error -> {:halt, error}
+          end
+        end)
+
+      with :ok <- result, do: CdnCache.purge_best_effort(embed.space, region, keys)
+    end
+  end
+
+  defp default_audio_language(video_id) do
+    Repo.one(
+      from(t in AudioTrack,
+        where: t.video_id == ^video_id and t.default == true,
+        select: t.language,
+        order_by: t.inserted_at,
+        limit: 1
+      )
+    )
+    |> normalize_language()
+  end
+
+  defp previous_subtitle_json(bucket, key, region) do
+    case storage_adapter().get(bucket, key, region) do
+      {:ok, json} when is_binary(json) ->
+        case Jason.decode(json) do
+          {:ok, %{} = previous} -> {:ok, previous}
+          _ -> {:ok, %{}}
+        end
+
+      {:ok, json} when is_map(json) ->
+        {:ok, json}
+
+      {:error, :not_found} ->
+        {:ok, %{}}
+
+      error ->
+        error
+    end
   end
 
   defp render_subtitle_edits(current, body) when is_binary(body) do

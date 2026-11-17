@@ -87,6 +87,34 @@ defmodule MaveCore.Transcription.SubtitleDocument do
 
   def cues(document), do: Enum.filter(document.blocks, &Map.has_key?(&1, :text))
 
+  def transcript_json(document, previous) do
+    existing =
+      for %{"start" => start, "end" => stop, "text" => text, "words" => [_ | _] = words} <-
+            List.wrap(previous["segments"]),
+          is_number(start) and is_number(stop),
+          into: %{} do
+        {{round(start * 1000), round(stop * 1000), text}, words}
+      end
+
+    cues =
+      Enum.map(cues(document), fn cue ->
+        %{start: cue.start_seconds, end: cue.end_seconds, text: cue.text}
+      end)
+
+    segments = MaveCore.Transcription.SubtitleCues.json_segments(cues)
+
+    segments =
+      Enum.map(segments, fn segment ->
+        key = {round(segment["start"] * 1000), round(segment["end"] * 1000), segment["text"]}
+        Map.put(segment, "words", Map.get(existing, key, segment["words"]))
+      end)
+
+    Jason.encode!(%{
+      text: Enum.map_join(cues, " ", &String.replace(&1.text, ~r/\s+/u, " ")),
+      segments: segments
+    })
+  end
+
   defp start_seconds(timing) do
     [timestamp | _] = String.split(timing, ~r/[ \t]+/)
 

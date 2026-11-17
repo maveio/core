@@ -13,6 +13,10 @@
 @source "../js";
 @source "../../lib/mave_core_web";
 
+.dashboard-menu-panel {
+  @apply w-52 max-w-[calc(100vw-1rem)] rounded-lg bg-stone-800 shadow-xl shadow-black/40 ring-1 ring-white/10;
+}
+
 [data-webvtt-view="true"] :is([phx-hook="description_document"], [data-add-line]) { display: none; }
 .description-prose { min-height: 12rem; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; color: #e7e5e4; font-size: 0.875rem; line-height: 1.8; padding: 0.5rem 0.25rem; }
 .description-prose p { margin: 0 0 0.65rem; }
