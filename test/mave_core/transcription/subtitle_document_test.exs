@@ -63,6 +63,25 @@ defmodule MaveCore.Transcription.SubtitleDocumentTest do
     end
   end
 
+  test "raw WebVTT edits require separated cues and valid video times" do
+    assert {:ok, _, [_]} =
+             SubtitleDocument.parse_editor_vtt(
+               "WEBVTT\r\n\r\n00:01.000\t-->  00:02.000\r\nHello",
+               10,
+               :subtitle
+             )
+
+    for invalid <- [
+          "WEBVTT\n\n00:00.000 --> 00:60.000\nHello",
+          "WEBVTT\n\n00:01.000 --> 00:02.000\nFirst\n00:02.000 --> 00:03.000\nSecond",
+          "WEBVTT\n00:01.000 --> 00:02.000\nFirst\n\n00:02.000 --> 00:03.000\nSecond",
+          "WEBVTT\n\n00:04.000 --> 00:03.000\nHello",
+          "WEBVTT\n\n00:04.000 --> 00:15.000\nHello"
+        ] do
+      assert {:error, :invalid_webvtt} = SubtitleDocument.parse_editor_vtt(invalid, 10, :subtitle)
+    end
+  end
+
   test "existing simultaneous subtitles remain editable" do
     source = String.replace(@vtt, "00:04.000", "00:01.000")
     {:ok, document} = SubtitleDocument.parse(source)

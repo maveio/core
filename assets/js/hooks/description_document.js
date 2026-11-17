@@ -50,8 +50,52 @@ export function replaceWithMoment(state, from, to, time, id) {
     transaction.split(position)
     position += 2
   }
+  const beforeLabel = transaction.doc.resolve(position).nodeAfter?.type === descriptionSchema.nodes.moment
   transaction.insert(position, [node, descriptionSchema.text(" ")])
+  if (beforeLabel) transaction.split(position + 2)
   return transaction.setSelection(TextSelection.create(transaction.doc, position + 2))
+}
+
+export function addTimedLine(state, cursor, windows, duration, id) {
+  const anchors = []
+  state.doc.forEach((paragraph, position) => {
+    paragraph.forEach((node, offset) => {
+      if (node.type === descriptionSchema.nodes.moment) {
+        anchors.push({ position, label: position + 1 + offset, attrs: node.attrs })
+      }
+    })
+  })
+  let index = anchors.findLastIndex(anchor => cursor != null && anchor.position < cursor)
+  if (index < 0 && anchors[0]?.attrs.start === 0) index = 0
+  // Keep simultaneous existing cues together.
+  while (index >= 0 && anchors[index + 1]?.attrs.start === anchors[index].attrs.start) index++
+  const previous = anchors[index]
+  const next = anchors[index + 1]
+  const limit = Math.ceil((next?.attrs.start ?? duration) * 1000)
+  const tr = state.tr
+  let start = 0
+  if (previous) {
+    const previousStart = Math.round(previous.attrs.start * 1000)
+    const end = previous.attrs.end ?? windows.find(window => window.id === previous.attrs.id)?.end
+    let ms = Math.max(previousStart + 1, Math.round((end ?? previous.attrs.start + 1) * 1000))
+    if (ms >= limit) ms = Math.floor((previousStart + limit) / 2)
+    if (ms <= previousStart) return null
+    start = ms / 1000
+    if (previous.attrs.end > start) tr.setNodeMarkup(previous.label, null, { ...previous.attrs, end: start })
+  }
+  if (start * 1000 >= limit) return null
+  let insertAt = next?.position ?? state.doc.content.size
+  const cue = descriptionSchema.nodes.paragraph.create(null, [
+    descriptionSchema.nodes.moment.create({ id, start }),
+    descriptionSchema.text(" "),
+  ])
+  if (state.doc.childCount === 1 && !state.doc.firstChild.content.size) {
+    tr.replaceWith(0, state.doc.content.size, cue)
+    insertAt = 0
+  } else {
+    tr.insert(insertAt, cue)
+  }
+  return tr.setSelection(TextSelection.create(tr.doc, insertAt + 3))
 }
 
 export const momentDeletionKey = new PluginKey("momentDeletion")
@@ -241,7 +285,7 @@ export const DescriptionDocumentHook = {
     this.playbackWindows = JSON.parse(this.el.dataset.playbackWindows || "[]")
     this.form = this.el.closest("form")
     this.hidden = this.form.querySelector("[data-description-document]")
-    this.addButton = this.form.querySelector("[data-add-moment]")
+    this.addButton = this.form.querySelector("[data-add-line]")
     const feedbackPlugin = new Plugin({ props: { decorations: state => this.decorations(state) } })
     const typedMoment = new InputRule(/\[(\d{1,3}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?)\] $/, (state, match, start, end) => {
       const time = parseMoment(match[1])
@@ -263,19 +307,28 @@ export const DescriptionDocumentHook = {
         if (transaction.docChanged) this.changed()
       },
     })
-    this.addMoment = () => {
-      const player = findEditorPlayer(this.form.dataset.playerEmbed)
-      const time = player?.currentTime
-      if (!Number.isFinite(time) || time < 0) {
-        this.pushEventTo(this.form, "description_player_unavailable", {})
+    this.pickLine = event => {
+      this.linePicked = true
+      const label = event.target.closest(".description-moment")
+      this.pickedLabel = label ? this.view.posAtDOM(label, 0) : null
+    }
+    this.view.dom.addEventListener("focusin", this.pickLine)
+    this.view.dom.addEventListener("pointerdown", this.pickLine)
+    this.addLine = () => {
+      const { state } = this.view
+      const cursor = this.linePicked ? this.pickedLabel ?? state.selection.to : null
+      const transaction = addTimedLine(state, cursor, this.playbackWindows,
+        Number(this.el.dataset.duration), crypto.randomUUID())
+      if (!transaction) {
+        this.pushEventTo(this.form, "description_line_unavailable", {})
         return
       }
+      this.view.dispatch(transaction.scrollIntoView())
       this.view.focus()
-      const { state } = this.view
-      this.view.dispatch(replaceWithMoment(state, state.selection.from, state.selection.to,
-        Math.floor(Math.min(time, Number(this.el.dataset.duration) - 0.001) * 1000) / 1000, crypto.randomUUID()).scrollIntoView())
+      this.linePicked = true
+      this.pickedLabel = null
     }
-    this.addButton.addEventListener("click", this.addMoment)
+    this.addButton.addEventListener("click", this.addLine)
     this.beforeSubmit = () => { this.hidden.value = JSON.stringify(momentsFromDocument(this.view.state.doc).moments) }
     this.form.addEventListener("submit", this.beforeSubmit, true)
     this.onPlayhead = event => {
@@ -449,7 +502,9 @@ export const DescriptionDocumentHook = {
     this.destroyedEditor = true
     this.form.removeEventListener("submit", this.beforeSubmit, true)
     this.form.removeEventListener("description:playhead", this.onPlayhead)
-    this.addButton.removeEventListener("click", this.addMoment)
+    this.view.dom.removeEventListener("focusin", this.pickLine)
+    this.view.dom.removeEventListener("pointerdown", this.pickLine)
+    this.addButton.removeEventListener("click", this.addLine)
     this.view.destroy()
   },
 }

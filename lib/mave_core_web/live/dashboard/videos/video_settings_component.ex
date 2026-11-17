@@ -409,6 +409,14 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           editor
           |> Map.put(:texts, SubtitleDocument.texts(editor.document))
           |> Map.put(:error, nil)
+          |> Map.put(:webvtt_view, false)
+          |> Map.put(:raw_valid, true)
+          |> Map.put(:raw_vtt, nil)
+          |> Map.put(:opening_vtt, nil)
+          |> Map.put(:initial_document, editor.document)
+          |> Map.put_new(:vtt_basis, false)
+          |> Map.put(:document_version, 0)
+          |> Map.put(:preview_valid, true)
           |> Map.put(:initial_moments, editor.moments)
 
         {:noreply, assign(socket, :subtitle_editor, editor)}
@@ -430,12 +438,71 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     end
   end
 
+  def handle_event("toggle_webvtt_view", _params, socket) do
+    case socket.assigns.subtitle_editor do
+      nil ->
+        {:noreply, socket}
+
+      %{webvtt_view: true} = editor ->
+        case import_webvtt(editor) do
+          {:ok, editor} ->
+            {:noreply,
+             assign(socket, :subtitle_editor, %{
+               editor
+               | webvtt_view: false,
+                 raw_vtt: nil,
+                 opening_vtt: nil,
+                 error: nil
+             })}
+
+          {:error, reason} ->
+            {:noreply,
+             assign(socket, :subtitle_editor, %{editor | error: subtitle_editor_error(reason)})}
+        end
+
+      editor ->
+        case editor_webvtt(editor) do
+          {:ok, body} ->
+            {:noreply,
+             assign(socket, :subtitle_editor, %{
+               editor
+               | webvtt_view: true,
+                 raw_vtt: body,
+                 raw_valid: true,
+                 opening_vtt: body,
+                 error: nil
+             })}
+
+          {:error, _} ->
+            {:noreply,
+             assign(socket, :subtitle_editor, %{
+               editor
+               | error: gettext("Give each cue text and valid timing to open WebVTT.")
+             })}
+        end
+    end
+  end
+
+  def handle_event("change_editor_webvtt", %{"editor" => %{"webvtt" => body}}, socket) do
+    editor = socket.assigns.subtitle_editor
+
+    if editor && editor.webvtt_view && is_binary(body) do
+      valid =
+        match?({:ok, _, _}, SubtitleDocument.parse_editor_vtt(body, editor.duration, editor.kind))
+
+      {:noreply,
+       assign(socket, :subtitle_editor, %{editor | raw_vtt: body, raw_valid: valid, error: nil})}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_event("change_description_document", %{"moments" => moments}, socket) do
     editor = socket.assigns.subtitle_editor
 
     with %{} <- editor,
          {:ok, moments} <- validate_editor_moments(editor, moments) do
-      editor = %{editor | moments: moments, error: nil}
+      editor = %{editor | moments: moments, error: nil, preview_valid: true}
 
       {:reply,
        %{groups: description_groups(editor), windows: description_playback_windows(editor)},
@@ -447,7 +514,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             do:
               assign(socket, :subtitle_editor, %{
                 editor
-                | error: subtitle_editor_error(:invalid_moments)
+                | error: subtitle_editor_error(:invalid_moments),
+                  preview_valid: false
               }),
             else: socket
 
@@ -455,7 +523,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     end
   end
 
-  def handle_event("description_player_unavailable", _params, socket) do
+  def handle_event("description_line_unavailable", _params, socket) do
     case socket.assigns.subtitle_editor do
       nil ->
         {:noreply, socket}
@@ -464,7 +532,10 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         {:noreply,
          assign(socket, :subtitle_editor, %{
            editor
-           | error: gettext("Open the video at the desired moment first.")
+           | error:
+               gettext(
+                 "There is no room for another timestamp here. Adjust the surrounding times first."
+               )
          })}
     end
   end
@@ -485,33 +556,28 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     {:noreply, assign(socket, subtitle_editor: nil, discard_subtitle_editor: false)}
   end
 
+  def handle_event(
+        "save_subtitle_text",
+        %{"editor" => %{"webvtt" => body}},
+        %{assigns: %{subtitle_editor: %{webvtt_view: true} = editor}} = socket
+      )
+      when is_binary(body) do
+    save_editor_document(assign(socket, :subtitle_editor, %{editor | raw_vtt: body}), {:ok, body})
+  end
+
   def handle_event("save_subtitle_text", %{"editor" => %{"document" => json}}, socket) do
     editor = socket.assigns.subtitle_editor
 
-    save =
-      if editor && editor.kind == :subtitle,
-        do: &Assets.save_subtitle_document/4,
-        else: &Assets.save_description_draft/4
+    payload =
+      with {:ok, moments} when is_list(moments) <- Jason.decode(json) do
+        if editor && editor.vtt_basis,
+          do: editor_webvtt(%{editor | moments: moments}),
+          else: {:ok, moments}
+      else
+        _ -> {:error, :invalid_moments}
+      end
 
-    with %{} <- editor,
-         {:ok, moments} when is_list(moments) <- Jason.decode(json),
-         {:ok, _} <- save.(socket.assigns.embed, editor.subtitle_id, editor.revision, moments) do
-      if editor.kind == :subtitle, do: notify_parent(:subtitles_updated)
-
-      message =
-        if editor.kind == :subtitle,
-          do: gettext("Subtitle text saved."),
-          else: gettext("Description draft saved.")
-
-      {:noreply, socket |> assign(:subtitle_editor, nil) |> put_flash(:info, message)}
-    else
-      {:error, reason} ->
-        {:noreply,
-         assign(socket, :subtitle_editor, %{editor | error: subtitle_editor_error(reason)})}
-
-      _ ->
-        {:noreply, socket}
-    end
+    save_editor_document(socket, payload)
   end
 
   def handle_event("save_subtitle_text", %{"editor" => %{"cues" => texts}}, socket) do
@@ -925,20 +991,26 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           phx-submit="save_subtitle_text"
           phx-target={@myself}
           phx-hook="text_editor_preview"
+          data-webvtt-view={to_string(@subtitle_editor.webvtt_view)}
           data-preview-src={get_in(@video, [:thumbnail_preview, :preferred_src])}
           data-fallback-src={get_in(@video, [:thumbnail_preview, :fallback_src])}
           data-player-embed={@video.public_id}
           class="flex h-full min-h-0 flex-col [&_.fieldset]:mb-0 [&_.fieldset]:min-w-0"
         >
           <p class="my-3 shrink-0 text-xs leading-5 text-stone-400">
-            <%= if @subtitle_editor.kind == :audio_description do %>
-              {gettext(
-                "Edit and save a draft. The published audio and text stay as they are until new speech is generated."
-              )}
-            <% else %>
-              {gettext(
-                "Click a start or end time to edit it. Press Enter for a new line in the same subtitle."
-              )}
+            <%= cond do %>
+              <% @subtitle_editor.webvtt_view -> %>
+                {if @subtitle_editor.kind == :audio_description,
+                  do: gettext("Edit or paste WebVTT. Changes are saved in the description draft."),
+                  else: gettext("Edit or paste WebVTT, including cue timings and line breaks.")}
+              <% @subtitle_editor.kind == :audio_description -> %>
+                {gettext(
+                  "Edit and save a draft. The published audio and text stay as they are until new speech is generated."
+                )}
+              <% true -> %>
+                {gettext(
+                  "Click a start or end time to edit it. Press Enter for a new line in the same subtitle."
+                )}
             <% end %>
           </p>
           <div
@@ -1011,10 +1083,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
               {if @subtitle_editor.kind == :audio_description, do: gettext("Waiting for AD audio")}
             </span>
             <div class="flex-1" />
-            <.dash_button type="button" variant="link" data-add-moment class="text-xs">
-              {if @subtitle_editor.kind == :subtitle,
-                do: gettext("Add subtitle"),
-                else: gettext("Add moment")}
+            <.dash_button type="button" variant="link" data-add-line class="text-xs">
+              {gettext("Add line")}
             </.dash_button>
           </div>
           <input
@@ -1028,7 +1098,11 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             class="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain py-1 pr-2"
           >
             <div
-              id="description-document"
+              id={
+                if @subtitle_editor.document_version == 0,
+                  do: "description-document",
+                  else: "description-document-#{@subtitle_editor.document_version}"
+              }
               phx-hook="description_document"
               phx-update="ignore"
               phx-target={@myself}
@@ -1050,6 +1124,16 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
                 gettext("Use a valid time between the previous and next moment.")
               }
             />
+            <textarea
+              :if={@subtitle_editor.webvtt_view}
+              id="editor-webvtt"
+              name="editor[webvtt]"
+              aria-label="WebVTT"
+              spellcheck="false"
+              phx-change="change_editor_webvtt"
+              phx-target={@myself}
+              class="min-h-full w-full resize-none bg-transparent py-2 font-mono text-xs leading-5 text-stone-200 outline-none"
+            >{@subtitle_editor.raw_vtt}</textarea>
           </div>
           <p :if={@subtitle_editor.error} role="alert" class="mt-6 text-sm text-red-400">
             {@subtitle_editor.error}
@@ -1062,6 +1146,18 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
               phx-target={@myself}
             >
               {gettext("Cancel")}
+            </.dash_button>
+            <.dash_button
+              id="toggle-editor-webvtt"
+              type="button"
+              variant="link"
+              class="ml-auto"
+              phx-click="toggle_webvtt_view"
+              phx-target={@myself}
+            >
+              {if @subtitle_editor.webvtt_view,
+                do: gettext("Back to editor"),
+                else: gettext("Edit WebVTT")}
             </.dash_button>
             <.dash_button
               variant="primary"
@@ -3743,6 +3839,58 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     Assets.get_audio_track_for_embed(id, socket.assigns.embed)
   end
 
+  defp save_editor_document(socket, payload) do
+    editor = socket.assigns.subtitle_editor
+
+    save =
+      if editor && editor.kind == :subtitle,
+        do: &Assets.save_subtitle_document/4,
+        else: &Assets.save_description_draft/4
+
+    with %{} <- editor,
+         {:ok, contents} <- payload,
+         {:ok, _} <- save.(socket.assigns.embed, editor.subtitle_id, editor.revision, contents) do
+      if editor.kind == :subtitle, do: notify_parent(:subtitles_updated)
+
+      message =
+        if editor.kind == :subtitle,
+          do: gettext("Subtitle text saved."),
+          else: gettext("Description draft saved.")
+
+      {:noreply, socket |> assign(:subtitle_editor, nil) |> put_flash(:info, message)}
+    else
+      {:error, reason} ->
+        {:noreply,
+         assign(socket, :subtitle_editor, %{editor | error: subtitle_editor_error(reason)})}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  defp import_webvtt(%{raw_vtt: body, opening_vtt: body} = editor), do: {:ok, editor}
+
+  defp import_webvtt(editor) do
+    with {:ok, document, moments} <-
+           SubtitleDocument.parse_editor_vtt(editor.raw_vtt, editor.duration, editor.kind) do
+      {:ok,
+       %{
+         editor
+         | document: document,
+           moments: moments,
+           vtt_basis: true,
+           preview_valid: true,
+           document_version: editor.document_version + 1
+       }}
+    end
+  end
+
+  defp subtitle_editor_error(:invalid_webvtt),
+    do:
+      gettext(
+        "Check the WEBVTT header, cue text and timestamps. Each end time must follow its start and fit within the video."
+      )
+
   defp subtitle_editor_error(:stale_document),
     do:
       gettext("This text has changed. Copy your edits and reopen it to load the latest version.")
@@ -3765,16 +3913,39 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   defp subtitle_editor_changed?(nil), do: false
 
   defp subtitle_editor_changed?(%{moments: _} = editor),
-    do: editor.moments != editor.initial_moments
+    do:
+      editor.moments != editor.initial_moments or editor.document != editor.initial_document or
+        editor.raw_vtt != editor.opening_vtt
 
   defp subtitle_editor_changed?(editor),
     do: editor.texts != SubtitleDocument.texts(editor.document)
+
+  defp editor_webvtt(%{preview_valid: false}), do: {:error, :invalid_moments}
+
+  defp editor_webvtt(%{vtt_basis: true} = editor),
+    do: SubtitleDocument.render_moments(editor.document, editor.moments, editor.duration)
+
+  defp editor_webvtt(%{kind: :subtitle} = editor),
+    do: SubtitleDocument.render_moments(editor.document, editor.moments, editor.duration)
+
+  defp editor_webvtt(editor) do
+    ends = Map.new(description_playback_windows(editor), &{&1.id, &1.end})
+
+    if Enum.all?(editor.moments, &Map.has_key?(ends, &1["id"])) do
+      cues = Enum.map(editor.moments, &Map.put(&1, "end", ends[&1["id"]]))
+      SubtitleDocument.render_moments(editor.source_document, cues, editor.duration)
+    else
+      {:error, :invalid_moments}
+    end
+  end
 
   defp validate_editor_moments(%{kind: :subtitle, duration: duration}, moments),
     do: SubtitleDocument.validate_moments(moments, duration)
 
   defp validate_editor_moments(editor, moments),
     do: DescriptionDocument.validate(moments, editor.duration)
+
+  defp valid_editor_labels?(%{webvtt_view: true} = editor), do: editor.raw_valid
 
   defp valid_editor_labels?(editor) do
     original_starts =
@@ -3819,6 +3990,9 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     )
     |> Enum.map(fn group -> Map.put(group, :label, description_group_label(group)) end)
   end
+
+  defp description_playback_windows(%{vtt_basis: true} = editor),
+    do: SubtitleDocument.windows(editor.document, editor.moments, editor.duration)
 
   defp description_playback_windows(%{kind: :subtitle} = editor),
     do: SubtitleDocument.windows(editor.document, editor.moments, editor.duration)
