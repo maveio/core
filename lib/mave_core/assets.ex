@@ -5,7 +5,7 @@ defmodule MaveCore.Assets do
 
   import Ecto.Query, warn: false
 
-  alias MaveCore.Assets.{AudioDescription, AudioTrack, Subtitle, Video}
+  alias MaveCore.Assets.{AudioDescription, AudioTrack, Subtitle, SubtitleDocument, Video}
   alias MaveCore.Embeds
   alias MaveCore.Embeds.{Embed, ManifestPublisher, SettingsSerializer}
   alias MaveCore.EncodingBooster
@@ -152,6 +152,82 @@ defmodule MaveCore.Assets do
       nil -> {:error, :missing_current_video}
       {:error, _reason} = error -> error
     end
+  end
+
+  @doc """
+  Reads the stored WebVTT of a subtitle of the embed's current video for editing.
+  """
+  def read_subtitle_document(%Embed{} = embed, %Subtitle{} = subtitle) do
+    embed = Repo.preload(embed, [:space, asset: [:current_video]])
+
+    with %Video{} = video <- embed.asset && embed.asset.current_video,
+         :ok <- ensure_subtitle_for_video(subtitle, video),
+         {:ok, region} <- require_binary(embed.space.region || "default", :region),
+         {:ok, body} <- read_subtitle_source(embed, subtitle, region) do
+      SubtitleDocument.parse(body)
+    else
+      nil -> {:error, :missing_current_video}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc """
+  Stores an edited subtitle and publishes it: the WebVTT replaces the stored
+  file, and the playlist and manifest are refreshed so viewers get the new text.
+  """
+  def publish_subtitle_document(
+        %Embed{} = embed,
+        %Subtitle{} = subtitle,
+        %SubtitleDocument{} = document
+      ) do
+    embed = Repo.preload(embed, [:space, asset: [:current_video]])
+    body = SubtitleDocument.to_vtt(document)
+
+    with %Video{} = video <- embed.asset && embed.asset.current_video,
+         :ok <- ensure_subtitle_for_video(subtitle, video),
+         {:ok, region} <- require_binary(embed.space.region || "default", :region),
+         :ok <- ensure_subtitle_cues(body),
+         bucket = Storage.bucket_for_space(embed.space.hash, region),
+         key =
+           subtitle_source_key(
+             embed.hash,
+             Embeds.current_video_version(embed),
+             subtitle.language || "en"
+           ),
+         {:ok, _body} <- storage_adapter().put_public(bucket, key, body, "text/vtt", region),
+         {:ok, updated_subtitle} <- update_subtitle(subtitle, %{path: key}),
+         {:ok, _playlist} <- rebuild_hls_master_playlist(embed, region),
+         {:ok, _manifest} <- ManifestPublisher.publish(embed) do
+      {:ok, updated_subtitle}
+    else
+      nil -> {:error, :missing_current_video}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp ensure_subtitle_cues(body) do
+    if String.contains?(body, "-->"), do: :ok, else: {:error, :empty_subtitle}
+  end
+
+  defp read_subtitle_source(%Embed{} = embed, %Subtitle{} = subtitle, region) do
+    storage = storage_adapter()
+    bucket = Storage.bucket_for_space(embed.space.hash, region)
+    version = Embeds.current_video_version(embed)
+    language = subtitle.language || "en"
+
+    [
+      local_subtitle_path?(subtitle.path) && String.trim_leading(subtitle.path, "/"),
+      subtitle_source_key(embed.hash, version, language),
+      "#{embed.hash}/subtitle_#{language}.vtt"
+    ]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+    |> Enum.find_value({:error, :subtitle_not_found}, fn key ->
+      case storage.get(bucket, key, region) do
+        {:ok, body} when is_binary(body) -> {:ok, body}
+        _ -> nil
+      end
+    end)
   end
 
   def create_audio_track(attrs \\ %{}) when is_map(attrs) do

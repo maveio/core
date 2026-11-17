@@ -45,6 +45,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       |> assign(assigns)
       |> MaveCoreWeb.SpaceLiveAuth.attach_component()
       |> assign_new(:current_tab, fn -> :options end)
+      |> assign_new(:route_scope, fn -> :scoped end)
       |> assign_new(:settings, fn -> incoming_settings end)
       |> assign_new(:persisted_settings, fn -> incoming_settings end)
       |> assign_new(:has_changes, fn -> false end)
@@ -724,6 +725,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
               processing_uploaded_audio_track={@processing_uploaded_audio_track}
               processing_uploaded_subtitle={@processing_uploaded_subtitle}
               current_space={@current_space}
+              route_scope={@route_scope}
               myself={@myself}
             />
           </div>
@@ -1093,6 +1095,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   attr :processing_uploaded_audio_track, :map, default: nil
   attr :processing_uploaded_subtitle, :map, default: nil
   attr :current_space, :map, required: true
+  attr :route_scope, :atom, default: :scoped
   attr :myself, :any, required: true
 
   defp options_tab(assigns) do
@@ -1184,6 +1187,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         processing_uploaded_subtitle={@processing_uploaded_subtitle}
         uploads={@uploads}
         current_space={@current_space}
+        route_scope={@route_scope}
         myself={@myself}
       />
       <.controls_section settings={@settings} myself={@myself} />
@@ -2025,6 +2029,20 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         class="fixed z-[100] w-52 overflow-hidden rounded-lg bg-stone-800 text-sm shadow-xl shadow-black/40 ring-1 ring-white/10"
       >
         <div :for={item <- @items} class={item.separator && "border-t border-white/10"}>
+          <.link
+            :if={item.navigate}
+            id={item.id}
+            navigate={item.navigate}
+            role="menuitem"
+            tabindex="-1"
+            class="group flex w-full items-center gap-2.5 px-3.5 py-3 text-left text-stone-200 outline-none transition-colors duration-150 hover:bg-white/[0.05] hover:text-white focus-visible:bg-white/[0.05] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/20 cursor-pointer"
+          >
+            <.icon
+              name={item.icon}
+              class="h-4 w-4 shrink-0 text-stone-400 transition-colors group-hover:text-stone-300 group-focus-visible:text-stone-300"
+            />
+            <span class="flex-1 text-xs font-medium">{item.label}</span>
+          </.link>
           <a
             :if={item.href}
             id={item.id}
@@ -2045,7 +2063,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             >{item.format}</span>
           </a>
           <button
-            :if={!item.href}
+            :if={!item.href and !item.navigate}
             id={item.id}
             type="button"
             role="menuitem"
@@ -2090,6 +2108,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         label: label,
         icon: icon,
         href: nil,
+        navigate: nil,
         filename: nil,
         format: nil,
         event: nil,
@@ -2181,8 +2200,12 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       ]
   end
 
-  defp subtitle_menu_items(subtitle, space, video_id) do
+  defp subtitle_menu_items(subtitle, space, video_id, route_scope) do
     [
+      menu_item("subtitle-edit-text-#{subtitle.id}", gettext("Edit text"), "hero-pencil-square",
+        navigate:
+          DashboardRoutes.subtitle_editor_path(space, video_id, subtitle.id, scope: route_scope)
+      ),
       menu_item(
         "subtitle-download-#{subtitle.id}",
         gettext("Download text"),
@@ -2495,6 +2518,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   attr :processing_uploaded_subtitle, :map, default: nil
   attr :uploads, :map, required: true
   attr :current_space, :map, required: true
+  attr :route_scope, :atom, default: :scoped
   attr :myself, :any, required: true
 
   defp subtitles_options_section(assigns) do
@@ -2562,7 +2586,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             id={"subtitle-files-#{subtitle.id}"}
             trigger_id={"subtitle-edit-#{subtitle.id}"}
             label={gettext("Edit subtitles")}
-            items={subtitle_menu_items(subtitle, @current_space, @video.id)}
+            items={subtitle_menu_items(subtitle, @current_space, @video.id, @route_scope)}
             busy={
               processing_subtitle?(@processing_uploaded_subtitle, subtitle) ||
                 (@uploads.subtitle_file.entries != [] &&

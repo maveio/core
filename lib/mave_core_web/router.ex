@@ -257,6 +257,7 @@ defmodule MaveCoreWeb.Router do
       live "/", Dashboard.Videos.Index, :index
       live "/videos", Dashboard.Videos.Index, :index
       live "/videos/:id", Dashboard.Videos.Show, :show
+      live "/videos/:id/subtitles/:subtitle_id", Dashboard.Videos.Subtitles, :edit
       live "/data", Dashboard.Data.Index, :index
       live "/data/top", Dashboard.Data.Index, :top_list
       live "/settings", Dashboard.Settings.Index, :general
@@ -287,6 +288,7 @@ defmodule MaveCoreWeb.Router do
       live "/flow/runs", Dashboard.Flow.Runs, :index
       live "/:space_id/videos", Dashboard.Videos.Index, :index
       live "/:space_id/videos/:id", Dashboard.Videos.Show, :show
+      live "/:space_id/videos/:id/subtitles/:subtitle_id", Dashboard.Videos.Subtitles, :edit
       live "/:space_id/data", Dashboard.Data.Index, :index
       live "/:space_id/data/top", Dashboard.Data.Index, :top_list
       live "/:space_id/settings", Dashboard.Settings.Index, :general
