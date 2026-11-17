@@ -169,18 +169,8 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
   defp speak_cue(ctx, cue, index, language, pace) do
     # Retrying a description run can change its text or voice at the same index.
     # Reuse a clip only while all inputs to speech generation stay the same.
-    {provider, options} = AD.speech_config(ctx)
-
-    inputs =
-      {5, cue.text, language, pace, provider, System.get_env("MAVE_AUDIO_DESCRIPTION_TTS_MODEL"),
-       System.get_env("MAVE_AUDIO_DESCRIPTION_VOICES"),
-       System.get_env("MAVE_AUDIO_DESCRIPTION_VOICE")}
-
-    fingerprint =
-      if(options == [], do: inputs, else: {inputs, provider, options})
-      |> :erlang.term_to_binary()
-      |> then(&:crypto.hash(:sha256, &1))
-      |> Base.encode16(case: :lower)
+    fingerprint = speech_fingerprint(ctx, cue.text, language, pace)
+    {provider, _options} = AD.speech_config(ctx)
 
     key =
       AD.work_key(
@@ -202,7 +192,23 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
     end
   end
 
-  defp generate_speech(ctx, text, language, pace) do
+  @doc false
+  def speech_fingerprint(ctx, text, language, pace) do
+    {provider, options} = AD.speech_config(ctx)
+
+    inputs =
+      {5, text, language, pace, provider, System.get_env("MAVE_AUDIO_DESCRIPTION_TTS_MODEL"),
+       System.get_env("MAVE_AUDIO_DESCRIPTION_VOICES"),
+       System.get_env("MAVE_AUDIO_DESCRIPTION_VOICE")}
+
+    if(options == [], do: inputs, else: {inputs, provider, options})
+    |> :erlang.term_to_binary()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
+  @doc false
+  def generate_speech(ctx, text, language, pace) do
     {provider, options} = AD.speech_config(ctx)
 
     if Code.ensure_loaded?(provider) and function_exported?(provider, :speak, 3),

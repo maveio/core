@@ -299,10 +299,12 @@ export const DescriptionDocumentHook = {
         doc: documentFromMoments(initial, this.el.dataset.kind),
         plugins: [history(), keymap({ ...lineKeys, "Backspace": backspaceMoment, "Mod-z": undo, "Shift-Mod-z": redo, "Mod-y": redo }), keymap(baseKeymap), inputRules({ rules: [typedMoment] }), uniqueMoments(), momentDeletionPlugin(), feedbackPlugin],
       }),
+      editable: () => this.el.dataset.readOnly !== "true",
       transformPasted: subtitle ? subtitlePaste : undefined,
       attributes: { class: "description-prose", role: "textbox", "aria-multiline": "true", "aria-label": this.el.dataset.label },
       nodeViews: { moment: (node, view, getPos, decorations) => this.momentView(node, view, getPos, decorations) },
       dispatchTransaction: transaction => {
+        if (transaction.docChanged && this.el.dataset.readOnly === "true") return
         this.view.updateState(this.view.state.apply(transaction))
         if (transaction.docChanged) this.changed()
       },
@@ -340,6 +342,13 @@ export const DescriptionDocumentHook = {
     }
     this.form.addEventListener("description:playhead", this.onPlayhead)
     this.currentTime = findEditorPlayer(this.form.dataset.playerEmbed)?.currentTime
+    this.updated()
+  },
+
+  updated() {
+    const readOnly = this.el.dataset.readOnly === "true"
+    this.addButton.disabled = readOnly
+    this.view.dom.setAttribute("aria-readonly", String(readOnly))
     this.view.updateState(this.view.state)
   },
 
@@ -378,12 +387,18 @@ export const DescriptionDocumentHook = {
       decorations.push(Decoration.inline(active.from, active.to, { class: "description-active-text" }))
       decorations.push(Decoration.node(active.from, active.from + 1, { class: "description-active-moment", "aria-current": "true" }))
     }
+    const ducking = new Set(this.playbackWindows.filter(window => window.ducks_speech).map(window => window.id))
     const invalid = invalidMomentIds(state.doc, Number(this.el?.dataset.duration ?? Infinity), this.originalStarts)
     const pending = momentDeletionKey.getState(state)
     if (pending) decorations.push(Decoration.node(pending.position, pending.position + 1, { class: "description-armed-moment" }))
     const cueEnds = subtitle
       ? new Map(this.playbackWindows.map(window => [window.id, window.end])) : null
     state.doc.descendants((node, position) => {
+      if (node.type.name === "moment" && ducking.has(node.attrs.id)) {
+        decorations.push(Decoration.node(position, position + 1, {
+          "data-ducking": "true", title: this.el.dataset.duckingHint,
+        }))
+      }
       if (node.type.name === "moment" && cueEnds?.has(node.attrs.id)) {
         const end = cueEnds.get(node.attrs.id)
         const pace = paceHints.get(node.attrs.id) || ""
@@ -432,6 +447,8 @@ export const DescriptionDocumentHook = {
     }
     refresh()
     dom.appendChild(button)
+    const volumeTemplate = this.form.querySelector("[data-original-volume-template]")
+    if (volumeTemplate) dom.append(volumeTemplate.content.cloneNode(true))
     if (endButton) dom.append("–", endButton)
     const edit = (trigger, editingEnd) => {
       if (dom.querySelector("input")) return

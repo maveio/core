@@ -47,11 +47,20 @@ defmodule MaveCore.Flow.Steps.MediaMixAudioDescriptionStep do
          timeline =
            Map.put(timeline, :quality, Timeline.quality_metrics(timeline.cues, speech, duration)),
          :ok <- require_placements(timeline),
-         {:ok, audio_size} <- render_and_mix(ctx, context, timeline, clips, duration, language),
+         {:ok, audio_size} <-
+           render_and_mix(
+             ctx,
+             context,
+             timeline,
+             clips,
+             duration,
+             AudioDescription.audio_filename(language)
+           ),
          vtt = Cues.to_vtt(timeline.cues, language),
          vtt_key = AD.output_key(ctx, AudioDescription.vtt_filename(language)),
          {:ok, _} <- ctx.storage.put_public(ctx.bucket, vtt_key, vtt, "text/vtt", ctx.region),
-         {:ok, hls} <- package_hls(ctx, language, audio_size) do
+         {:ok, hls} <-
+           package_hls(ctx, language, audio_size, AudioDescription.audio_filename(language)) do
       output(ctx, language, timeline, audio_size, byte_size(vtt), hls, speech_output)
     else
       {:error, :no_placements} ->
@@ -64,6 +73,35 @@ defmodule MaveCore.Flow.Steps.MediaMixAudioDescriptionStep do
 
       {:error, reason} ->
         AD.failure(@step_type, ctx, reason)
+    end
+  end
+
+  @doc false
+  def render_edit(ctx, timeline, clips, duration, language, render_id, edited_vtt) do
+    filename = "audio_description_edit_#{render_id}.mp3"
+    vtt_filename = "descriptions_edit_#{render_id}.vtt"
+    vtt = edited_vtt || Cues.to_vtt(timeline.cues, language)
+
+    with {:ok, size} <- render_and_mix(ctx, %{}, timeline, clips, duration, filename),
+         {:ok, _} <- package_hls(ctx, language, size, filename),
+         {:ok, _} <-
+           ctx.storage.put_public(
+             ctx.bucket,
+             AD.output_key(ctx, vtt_filename),
+             vtt,
+             "text/vtt",
+             ctx.region
+           ) do
+      {:ok,
+       %{
+         audio_filename: filename,
+         audio_file_size: size,
+         vtt_filename: vtt_filename,
+         vtt_file_size: byte_size(vtt),
+         cue_count: length(clips),
+         ducked_cue_count: length(clips),
+         user_managed: true
+       }}
     end
   end
 
@@ -85,9 +123,9 @@ defmodule MaveCore.Flow.Steps.MediaMixAudioDescriptionStep do
   defp require_placements(%{placements: []}), do: {:error, :no_placements}
   defp require_placements(_timeline), do: :ok
 
-  defp render_and_mix(ctx, context, timeline, clips, duration, language) do
+  defp render_and_mix(ctx, context, timeline, clips, duration, filename) do
     clips = List.to_tuple(clips)
-    audio_key = AD.output_key(ctx, AudioDescription.audio_filename(language))
+    audio_key = AD.output_key(ctx, filename)
 
     progress =
       StepSupport.ffmpeg_progress(context[:progress_reporter], %{
@@ -145,8 +183,7 @@ defmodule MaveCore.Flow.Steps.MediaMixAudioDescriptionStep do
     end
   end
 
-  defp package_hls(ctx, language, audio_size) do
-    filename = AudioDescription.audio_filename(language)
+  defp package_hls(ctx, language, audio_size, filename) do
     key = AD.output_key(ctx, filename)
     track = audio_track(ctx, language, filename, audio_size)
 
