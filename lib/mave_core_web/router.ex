@@ -65,6 +65,10 @@ defmodule MaveCoreWeb.Router do
     plug MaveCoreWeb.Plugs.RequireHost, env_var: "MAVE_MANAGE_HOST"
   end
 
+  pipeline :live_viewer do
+    plug MaveCoreWeb.Plugs.ViewerSession
+  end
+
   pipeline :redirect_if_authenticated do
     plug :redirect_if_user_is_authenticated
   end
@@ -262,6 +266,16 @@ defmodule MaveCoreWeb.Router do
     scope "/v1" do
       options "/:embed_id", Api.LegacyEmbedController, :embed
       get "/:embed_id", Api.LegacyEmbedController, :embed
+    end
+  end
+
+  # The public watch page of a live stream. It comes before the dashboard so a
+  # stream's address is never read as a space.
+  scope "/", MaveCoreWeb do
+    pipe_through [:browser, :manage_host, :live_viewer]
+
+    live_session :live_watch, root_layout: {MaveCoreWeb.Layouts, :watch_root} do
+      live "/watch/:id", Watch.Show, :show
     end
   end
 

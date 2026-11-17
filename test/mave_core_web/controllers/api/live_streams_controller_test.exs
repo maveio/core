@@ -34,12 +34,18 @@ defmodule MaveCoreWeb.Api.LiveStreamsControllerTest do
              "name" => "Town hall",
              "status" => "idle",
              "ingest" => %{"url" => "rtmp://" <> _, "stream_key" => "live_" <> _},
-             "playback" => %{"hls" => hls, "player" => player, "embed" => "<iframe " <> _}
+             "playback" => %{
+               "hls" => hls,
+               "player" => player,
+               "watch" => watch,
+               "embed" => "<iframe " <> _
+             }
            } = json_response(conn, 201)
 
     assert String.starts_with?(id, space.hash)
     assert hls =~ "/live/#{id}/index.m3u8"
     assert player =~ "/live/#{id}/embed"
+    assert String.ends_with?(watch, "/watch/#{id}")
 
     assert %{"object" => "list", "data" => [%{"id" => ^id}]} =
              api(auth) |> get(~p"/api/v1/live_streams") |> json_response(200)

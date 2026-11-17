@@ -9,7 +9,8 @@ defmodule MaveCore.LiveStreams.Config do
     playlist_segments: 6,
     reconnect_seconds: 60,
     idle_timeout_seconds: 15,
-    max_connections: 100
+    max_connections: 100,
+    chat_refresh_ms: 2_000
   ]
 
   def get(key) when is_atom(key) do

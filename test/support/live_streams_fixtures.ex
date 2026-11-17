@@ -37,6 +37,7 @@ defmodule MaveCore.LiveStreamsFixtures do
     Application.put_env(:mave_core, :live_streams_test_pid, self())
 
     on_exit(fn ->
+      stop_chats()
       Application.put_env(:mave_core, :live_streams, previous)
       Application.delete_env(:mave_core, :live_streams_storage_adapter)
       Application.delete_env(:mave_core, :live_streams_test_pid)
@@ -47,6 +48,32 @@ defmodule MaveCore.LiveStreamsFixtures do
     end)
 
     :ok
+  end
+
+  # A chat room follows its stream in the database, which goes away with the test.
+  defp stop_chats do
+    supervisor = MaveCore.LiveStreams.ChatSupervisor
+
+    for {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(supervisor),
+        is_pid(pid),
+        do: DynamicSupervisor.terminate_child(supervisor, pid)
+  end
+
+  @doc "Waits for something that another process does shortly."
+  def eventually(fun, attempts \\ 200) do
+    cond do
+      fun.() ->
+        true
+
+      attempts == 0 ->
+        false
+
+      true ->
+        receive do
+        after
+          10 -> eventually(fun, attempts - 1)
+        end
+    end
   end
 
   def space_fixture do

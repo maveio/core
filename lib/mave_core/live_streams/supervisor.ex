@@ -1,8 +1,8 @@
 defmodule MaveCore.LiveStreams.Supervisor do
   @moduledoc """
   Processes behind live streaming. Every node gets the task supervisor used to
-  remove media. Nodes with live streaming enabled also accept RTMP connections
-  and run the ingest sessions.
+  remove media and the processes behind the watch page's chat. Nodes with live
+  streaming enabled also accept RTMP connections and run the ingest sessions.
   """
 
   use Supervisor
@@ -16,8 +16,11 @@ defmodule MaveCore.LiveStreams.Supervisor do
   @impl true
   def init(_opts) do
     children =
-      [{Task.Supervisor, name: MaveCore.LiveStreams.TaskSupervisor}] ++
-        if(Config.enabled?(), do: ingest_children(), else: [])
+      [
+        {Task.Supervisor, name: MaveCore.LiveStreams.TaskSupervisor},
+        MaveCore.LiveStreams.Chat.Presence,
+        {DynamicSupervisor, name: MaveCore.LiveStreams.ChatSupervisor, strategy: :one_for_one}
+      ] ++ if(Config.enabled?(), do: ingest_children(), else: [])
 
     Supervisor.init(children, strategy: :one_for_one)
   end

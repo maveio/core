@@ -68,6 +68,12 @@ defmodule MaveCoreWeb.Live.Dashboard.LiveStreamsTest do
     assert has_element?(view, "#live-stream-server")
     assert html =~ LiveStreams.ingest_url()
     assert html =~ "/live/#{space.hash}#{stream.hash}/index.m3u8"
+    assert has_element?(view, "#live-stream-watch", "/watch/#{space.hash}#{stream.hash}")
+
+    assert has_element?(
+             view,
+             ~s(#live-stream-watch-link[href$="/watch/#{space.hash}#{stream.hash}"])
+           )
 
     assert has_element?(
              view,

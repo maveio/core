@@ -115,7 +115,7 @@ Read the relevant reference before changing these contracts:
 - [Webhook delivery](docs/webhook_delivery_outbox.md): delivery state and retries.
 - [Prepared analytics](docs/analytics_sessions.md): activation and data lifecycle.
 - [Private playback](docs/private_playback.md) and [media isolation](docs/media_security.md).
-- [Live streaming](docs/live_streaming.md): RTMP ingest, playlists and public addresses.
+- [Live streaming](docs/live_streaming.md): RTMP ingest, playlists, public addresses and chat.
 - [Self-hosting](deploy/self-hosted/README.md) and [encoding boosters](deploy/encoding-booster/README.md).
 
 Update documentation when a reader's setup, usage or public contract changes.

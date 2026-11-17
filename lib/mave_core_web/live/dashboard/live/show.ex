@@ -218,6 +218,23 @@ defmodule MaveCoreWeb.Dashboard.Live.Show do
               <div class="mt-5">
                 <.data_table>
                   <.address_field
+                    id="live-stream-watch"
+                    label={gettext("Watch page with chat")}
+                    value={@watch_url}
+                  >
+                    <:action>
+                      <a
+                        id="live-stream-watch-link"
+                        href={@watch_url}
+                        target="_blank"
+                        rel="noopener"
+                        class="text-blue-500 hover:text-blue-600"
+                      >
+                        {gettext("open")}
+                      </a>
+                    </:action>
+                  </.address_field>
+                  <.address_field
                     id="live-stream-embed"
                     label={gettext("Embed code")}
                     value={@embed_code}
@@ -278,6 +295,7 @@ defmodule MaveCoreWeb.Dashboard.Live.Show do
     |> assign(:page_title, stream_name(stream))
     |> assign(:recorded_seconds, recorded)
     |> assign(:player_url, LiveStreams.player_url(space, stream))
+    |> assign(:watch_url, LiveStreams.watch_url(space, stream))
     |> assign(:playback_url, LiveStreams.playback_url(space, stream))
     |> assign(:embed_code, LiveStreams.embed_code(space, stream))
   end

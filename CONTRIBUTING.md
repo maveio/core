@@ -181,7 +181,7 @@ An `Embed` is a public placement, an `Asset` is its media identity, and a
 | Dashboard, authentication, HTTP API, sockets | `lib/mave_core_web` |
 | Uploads, processing, and jobs | `lib/mave_core/{uploads,flow,workers}` |
 | Storage, manifests, playlists, posters | `lib/mave_core/media` |
-| RTMP ingest and live HLS playback | `lib/mave_core/live_streams` |
+| RTMP ingest, live HLS playback and watch page chat | `lib/mave_core/live_streams` |
 | Event ingestion and analytics | `lib/mave_core/{metrics,analytics}` |
 | Product and analytics migrations | `priv/repo/migrations`, `priv/clickhouse_repo/migrations` |
 

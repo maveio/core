@@ -422,6 +422,12 @@ defmodule MaveCore.LiveStreams do
   def player_url(%Space{} = space, %LiveStream{} = stream),
     do: "#{base_url(space, stream)}/embed"
 
+  @doc "The page where viewers watch the stream and chat during a broadcast."
+  def watch_url(%Space{} = space, %LiveStream{} = stream) do
+    origin = Application.get_env(:mave_core, :domain) || MaveCoreWeb.Endpoint.url()
+    "#{String.trim_trailing(origin, "/")}/watch/#{public_id(space, stream)}"
+  end
+
   def embed_code(%Space{} = space, %LiveStream{} = stream) do
     ~s(<iframe src="#{player_url(space, stream)}" style="aspect-ratio: 16 / 9; width: 100%; border: 0" allow="autoplay; fullscreen"></iframe>)
   end
@@ -447,6 +453,7 @@ defmodule MaveCore.LiveStreams do
       playback: %{
         hls: playback_url(space, stream),
         player: player_url(space, stream),
+        watch: watch_url(space, stream),
         embed: embed_code(space, stream)
       }
     }
