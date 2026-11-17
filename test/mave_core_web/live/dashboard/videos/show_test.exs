@@ -2237,29 +2237,32 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     {:ok, view, _} = live(conn, "/videos/#{embed.id}")
 
     view |> element("#subtitle-edit-text-#{subtitle.id}") |> render_click()
-    assert has_element?(view, "#subtitle-text-editor textarea", "Hello world")
+    assert has_element?(view, "#description-document[data-document*='Hello world']")
     other = video_embed_fixture(space, %{name: "Other text editing"})
 
     assert {:error, :subtitle_not_found} =
              MaveCore.Assets.load_subtitle_document(other, subtitle.id)
 
-    assert has_element?(view, "#subtitle-timing-0[data-preview-time='1.0']", "00:01 – 00:03")
+    assert has_element?(view, "#description-playback-controls[data-kind=subtitle]")
+    assert has_element?(view, "[data-add-moment]", "Add subtitle")
     assert has_element?(view, "#subtitle-text-form [data-editor-scroll].overflow-y-auto")
     assert has_element?(view, "#subtitle-text-editor .bg-stone-900")
 
+    moments = [%{"id" => "0", "start" => 1.0, "text" => "Hello again"}]
+
     view
-    |> form("#subtitle-text-form", editor: %{cues: %{"0" => "Hello again"}})
-    |> render_change()
+    |> element("#description-document")
+    |> render_hook("change_description_document", %{moments: moments})
 
     view |> element("#subtitle-text-editor button", "Cancel") |> render_click()
     assert has_element?(view, "#discard-subtitle-edits")
     view |> element("#discard-subtitle-edits-cancel") |> render_click()
     send(view.pid, {:embed_updated, %{"space_id" => space.id, "embed_id" => embed.id}})
-    assert has_element?(view, "#subtitle-text-editor textarea", "Hello again")
+    assert has_element?(view, "#description-document[data-document*='Hello again']")
 
     view
-    |> form("#subtitle-text-form", editor: %{cues: %{"0" => "Hello again"}})
-    |> render_submit()
+    |> element("#subtitle-text-form")
+    |> render_submit(%{"editor" => %{"document" => Jason.encode!(moments)}})
 
     refute has_element?(view, "#subtitle-text-editor")
     updated = Repo.get!(Subtitle, subtitle.id)
@@ -2274,8 +2277,8 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
       FlowStorageAdapterStub.put_public(bucket, updated.path, body, "text/vtt", space.region)
 
     view
-    |> form("#subtitle-text-form", editor: %{cues: %{"0" => "My stale edit"}})
-    |> render_submit()
+    |> element("#subtitle-text-form")
+    |> render_submit(%{"editor" => %{"document" => Jason.encode!(moments)}})
 
     assert has_element?(view, "#subtitle-text-editor [role=alert]", "has changed")
     assert {:ok, ^body} = FlowStorageAdapterStub.get(bucket, updated.path, space.region)

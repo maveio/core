@@ -105,6 +105,134 @@ defmodule MaveCore.Transcription.SubtitleDocument do
     end
   end
 
+  def windows(document, moments, duration) do
+    originals = Map.new(cues(document), &{&1.id, &1})
+
+    moments
+    |> Enum.filter(&is_number(&1["start"]))
+    |> Enum.chunk_every(2, 1)
+    |> Enum.map(fn [moment | following] ->
+      start = moment["start"]
+      source = originals[moment["id"]]
+      next = List.first(following)
+      limit = if next, do: next["start"], else: duration
+
+      stop =
+        cond do
+          is_number(moment["end"]) ->
+            moment["end"]
+
+          source && source.start_seconds == start ->
+            if next && limit > start &&
+                 Map.get(originals[next["id"]] || %{}, :start_seconds) != limit,
+               do: min(source.end_seconds, limit),
+               else: source.end_seconds
+
+          source ->
+            min(start + source.end_seconds - source.start_seconds, limit)
+
+          true ->
+            min(start + 2, limit)
+        end
+
+      %{id: moment["id"], start: start, end: stop}
+    end)
+  end
+
+  def original_starts(document), do: Map.new(cues(document), &{&1.id, &1.start_seconds})
+
+  def validate_moments(moments, duration) do
+    with {:ok, normalized} <-
+           MaveCore.AudioDescription.DescriptionDocument.validate(moments, duration, 100_000) do
+      valid_ends =
+        Enum.all?(moments, fn moment ->
+          stop = moment["end"]
+
+          is_nil(stop) or
+            (is_number(stop) and is_number(moment["start"]) and
+               round(stop * 1000) > round(moment["start"] * 1000) and stop <= duration)
+        end)
+
+      if valid_ends do
+        {:ok,
+         Enum.zip_with(normalized, moments, fn cue, input ->
+           Map.merge(cue, Map.take(input, ["end"]))
+         end)}
+      else
+        {:error, :invalid_time_labels}
+      end
+    end
+  end
+
+  def render_moments(document, moments, duration) do
+    alias MaveCore.AudioDescription.DescriptionDocument
+
+    with {:ok, moments} <- validate_moments(moments, duration),
+         :ok <- DescriptionDocument.validate_time_labels(moments, original_starts(document)),
+         true <-
+           moments != [] and
+             Enum.all?(moments, &(is_number(&1["start"]) and String.trim(&1["text"]) != "")),
+         windows = windows(document, moments, duration),
+         true <- Enum.all?(windows, &(round(&1.end * 1000) > round(&1.start * 1000))) do
+      originals = Map.new(cues(document), &{&1.id, &1})
+
+      rendered =
+        Enum.zip_with(moments, windows, fn moment, window ->
+          render_moment(originals[moment["id"]], moment["text"], window)
+        end)
+
+      {blocks, remaining} =
+        Enum.map_reduce(document.blocks, rendered, fn
+          %{text: _}, [cue | rest] -> {cue, rest}
+          %{text: _}, [] -> {nil, []}
+          block, rest -> {block.raw, rest}
+        end)
+
+      body =
+        Enum.join(Enum.reject([document.header | blocks] ++ remaining, &is_nil/1), "\n\n") <> "\n"
+
+      if byte_size(body) <= 2_000_000, do: {:ok, body}, else: {:error, :invalid_text}
+    else
+      false -> {:error, :invalid_text}
+      error -> error
+    end
+  end
+
+  defp render_moment(nil, text, window),
+    do: timestamp(window.start) <> " --> " <> timestamp(window.end) <> "\n" <> escape_text(text)
+
+  defp render_moment(source, text, window) do
+    block =
+      if String.trim(source.text) == text,
+        do: source.raw,
+        else: render_block(source, %{source.id => text})
+
+    if window.start == source.start_seconds and window.end == source.end_seconds do
+      block
+    else
+      prefix =
+        Regex.replace(
+          ~r/^\d[\d:.]* --> [\d:.]+/m,
+          source.prefix,
+          timestamp(window.start) <> " --> " <> timestamp(window.end)
+        )
+
+      prefix <> String.replace_prefix(block, source.prefix, "")
+    end
+  end
+
+  defp timestamp(seconds) do
+    ms = round(seconds * 1000)
+
+    :io_lib.format("~2..0B:~2..0B:~2..0B.~3..0B", [
+      div(ms, 3_600_000),
+      rem(div(ms, 60_000), 60),
+      rem(div(ms, 1000), 60),
+      rem(ms, 1000)
+    ])
+    |> IO.iodata_to_binary()
+  end
+
   defp render_block(%{id: id, text: original} = block, texts) do
     case Map.fetch!(texts, id) do
       ^original -> block.raw

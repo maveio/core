@@ -95,7 +95,7 @@ defmodule MaveCore.Assets do
   def get_subtitle_for_embed(_, _), do: nil
 
   def load_subtitle_document(%Embed{} = embed, id) do
-    embed = Repo.preload(embed, [:space, :asset], force: true)
+    embed = Repo.preload(embed, [:space, asset: :current_video], force: true)
 
     with %Subtitle{} = subtitle <- get_subtitle_for_embed(id, embed),
          {:ok, body} <- subtitle_body(embed, subtitle),
@@ -105,6 +105,9 @@ defmodule MaveCore.Assets do
          subtitle_id: subtitle.id,
          kind: :subtitle,
          language: subtitle.language,
+         label: subtitle.language,
+         duration: embed.asset.current_video.duration,
+         moments: DescriptionDocument.from_vtt(document),
          document: document,
          revision: :crypto.hash(:sha256, body)
        }}
@@ -261,7 +264,8 @@ defmodule MaveCore.Assets do
   defp description_draft_document(_description, _body, _revision),
     do: {:error, :stale_document}
 
-  def save_subtitle_document(%Embed{} = embed, id, revision, texts) when is_map(texts) do
+  def save_subtitle_document(%Embed{} = embed, id, revision, texts)
+      when is_map(texts) or is_list(texts) do
     embed = Repo.preload(embed, [:space, :asset], force: true)
 
     Repo.transaction(fn ->
@@ -270,7 +274,7 @@ defmodule MaveCore.Assets do
              Repo.one(from(s in Subtitle, where: s.id == ^subtitle.id, lock: "FOR UPDATE")),
            {:ok, current} <- load_subtitle_document(embed, id),
            true <- current.revision == revision,
-           {:ok, body} <- SubtitleDocument.render(current.document, texts),
+           {:ok, body} <- render_subtitle_edits(current, texts),
            region = embed.space.region || "default",
            key =
              audio_source_key(
@@ -289,6 +293,11 @@ defmodule MaveCore.Assets do
       end
     end)
   end
+
+  defp render_subtitle_edits(current, moments) when is_list(moments),
+    do: SubtitleDocument.render_moments(current.document, moments, current.duration)
+
+  defp render_subtitle_edits(current, texts), do: SubtitleDocument.render(current.document, texts)
 
   defp subtitle_body(embed, subtitle) do
     region = embed.space.region || "default"

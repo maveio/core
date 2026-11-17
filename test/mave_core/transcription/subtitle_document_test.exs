@@ -28,6 +28,48 @@ defmodule MaveCore.Transcription.SubtitleDocumentTest do
     assert {:ok, @vtt} = SubtitleDocument.render(document, SubtitleDocument.texts(document))
   end
 
+  test "inserting a subtitle splits its predecessor and preserves cue markup and settings" do
+    {:ok, document} = SubtitleDocument.parse(@vtt)
+    [first, second] = MaveCore.AudioDescription.DescriptionDocument.from_vtt(document)
+    new = %{"id" => "new", "start" => 2.5, "text" => "<new>"}
+    assert {:ok, body} = SubtitleDocument.render_moments(document, [first, new, second], 12)
+    assert body =~ "00:00:01.000 --> 00:00:02.500 align:start\n<v Speaker>Hello &amp; welcome</v>"
+    assert body =~ "00:00:02.500 --> 00:00:04.000\n&lt;new&gt;"
+    assert body =~ "00:04.000 --> 00:06.000\nSecond line"
+
+    assert {:error, :invalid_time_labels} =
+             SubtitleDocument.render_moments(document, [first, second, new], 12)
+
+    assert {:ok, body} = SubtitleDocument.render_moments(document, [%{second | "start" => 8}], 12)
+    assert body =~ "00:00:08.000 --> 00:00:10.000"
+    refute body =~ "intro"
+  end
+
+  test "an edited subtitle end controls playback and its published interval" do
+    {:ok, document} = SubtitleDocument.parse(@vtt)
+    [first, second] = MaveCore.AudioDescription.DescriptionDocument.from_vtt(document)
+    edited = Map.put(first, "end", 2.125)
+    assert [%{end: 2.125}, _] = SubtitleDocument.windows(document, [edited, second], 12)
+    assert {:ok, body} = SubtitleDocument.render_moments(document, [edited, second], 12)
+    assert body =~ "00:00:01.000 --> 00:00:02.125 align:start"
+
+    for invalid <- [1, 0.5, 13, "invalid"] do
+      assert {:error, :invalid_time_labels} =
+               SubtitleDocument.render_moments(
+                 document,
+                 [Map.put(first, "end", invalid), second],
+                 12
+               )
+    end
+  end
+
+  test "existing simultaneous subtitles remain editable" do
+    source = String.replace(@vtt, "00:04.000", "00:01.000")
+    {:ok, document} = SubtitleDocument.parse(source)
+    moments = MaveCore.AudioDescription.DescriptionDocument.from_vtt(document)
+    assert {:ok, ^source} = SubtitleDocument.render_moments(document, moments, 12)
+  end
+
   test "line breaks cannot inject a new cue" do
     assert {:ok, document} = SubtitleDocument.parse(@vtt)
 
