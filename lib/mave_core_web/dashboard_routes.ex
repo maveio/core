@@ -11,7 +11,14 @@ defmodule MaveCoreWeb.DashboardRoutes do
 
   def video_path(space_or_user, id, tab \\ :all, opts \\ []) do
     page = Keyword.get(opts, :page, 1)
-    params = build_params(tab, page)
+    time = Keyword.get(opts, :time)
+
+    # `t` opens the video at a moment, in seconds.
+    params =
+      tab
+      |> build_params(page)
+      |> maybe_put_param(:t, is_number(time), time && Float.round(time * 1.0, 1))
+
     path_for(space_or_user, "/videos/#{id}", params, opts)
   end
 

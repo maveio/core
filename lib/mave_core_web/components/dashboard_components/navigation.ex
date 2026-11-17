@@ -810,50 +810,151 @@ defmodule MaveCoreWeb.DashboardComponents.Navigation do
     """
   end
 
+  attr :suggests, :list, default: []
+  attr :search_scope, :map, default: nil
+
   def suggest(assigns) do
     ~H"""
     <div
       id="suggest"
-      class="duration-75 ease-out transition-all transform-gpu pointer-events-none opacity-0 scale-75 absolute top-10 mt-1.5 left-0 w-80 bg-white z-20 rounded-b-md shadow overflow-hidden"
+      class="duration-75 ease-out transition-all transform-gpu pointer-events-none opacity-0 scale-75 absolute top-10 mt-1.5 left-0 w-[26rem] max-h-[70vh] overflow-y-auto bg-white z-20 rounded-b-md shadow"
     >
-      <button
-        :for={suggest <- @suggests}
-        type="button"
-        class="flex w-full items-center gap-3 text-left text-sm text-stone-500 py-2 px-3 border-b border-stone-200/50 active:bg-blue-500 active:text-white cursor-pointer select-none hover:bg-stone-50"
-        phx-click="search_embed"
-        phx-value-id={suggest.id}
+      <div
+        :if={@search_scope}
+        id="search-scope"
+        class="flex items-center gap-1.5 px-3 py-2 border-b border-stone-200/50 text-xs text-stone-400"
       >
-        <div class="h-9 w-16 flex-none overflow-hidden rounded bg-stone-100">
-          <img :if={suggest.thumb} src={suggest.thumb} alt="" class="h-full w-full object-cover" />
-        </div>
-        <div class="min-w-0">
-          <div class="truncate text-stone-600">{suggest.name}</div>
-          <div class="truncate text-xs text-stone-400 mt-0.5">{suggest.public_id}</div>
-        </div>
-      </button>
+        <span class="mr-1">{gettext("Search in")}</span>
+        <button
+          :for={
+            {scope, label} <- [
+              {:collection, @search_scope.name},
+              {:library, gettext("Entire library")}
+            ]
+          }
+          type="button"
+          id={"search-scope-#{scope}"}
+          phx-click="search_scope"
+          phx-value-scope={scope}
+          aria-pressed={to_string(@search_scope.selected == scope)}
+          class={[
+            "max-w-40 truncate rounded-full px-2.5 py-1 ring-1 ring-inset cursor-pointer select-none",
+            if(@search_scope.selected == scope,
+              do: "bg-blue-500 text-white ring-blue-500",
+              else: "bg-white text-stone-500 ring-stone-200 hover:bg-stone-50"
+            )
+          ]}
+        >
+          {label}
+        </button>
+      </div>
+      <div
+        :for={suggest <- @suggests}
+        id={"suggest-#{suggest.id}"}
+        class="border-b border-stone-200/50"
+      >
+        <button
+          type="button"
+          class="flex w-full items-center gap-3 text-left text-sm text-stone-500 py-2 px-3 active:bg-blue-500 active:text-white cursor-pointer select-none hover:bg-stone-50"
+          phx-click="search_embed"
+          phx-value-id={suggest.id}
+        >
+          <div class="h-9 w-16 flex-none overflow-hidden rounded bg-stone-100">
+            <img :if={suggest.thumb} src={suggest.thumb} alt="" class="h-full w-full object-cover" />
+          </div>
+          <div class="min-w-0">
+            <div class="truncate text-stone-600">{suggest.name}</div>
+            <div class="truncate text-xs text-stone-400 mt-0.5">{suggest.public_id}</div>
+          </div>
+        </button>
+        <button
+          :for={{moment, index} <- Enum.with_index(Map.get(suggest, :moments, []))}
+          type="button"
+          id={"suggest-#{suggest.id}-moment-#{index}"}
+          class="group flex w-full items-start gap-2 text-left text-xs text-stone-500 py-1.5 pl-[5.75rem] pr-3 cursor-pointer select-none hover:bg-stone-50 last:pb-2.5"
+          phx-click="search_embed"
+          phx-value-id={suggest.id}
+          phx-value-t={moment.start}
+          title={search_moment_title(moment.source)}
+        >
+          <.icon
+            name={
+              if moment.source == "visual", do: "hero-eye-mini", else: "hero-chat-bubble-left-mini"
+            }
+            class="size-3.5 mt-px flex-none text-stone-300"
+          />
+          <span class="flex-none font-mono tabular-nums text-blue-500 group-hover:underline">
+            {search_moment_time(moment.start)}
+          </span>
+          <span class="min-w-0 line-clamp-2 leading-snug text-stone-500">
+            {search_snippet(moment.snippet)}
+          </span>
+        </button>
+      </div>
     </div>
     """
   end
+
+  # Built as one string: whitespace between template tags would show up as
+  # spaces around the highlighted words.
+  defp search_snippet(parts) do
+    {:safe,
+     Enum.map(parts, fn {text, match?} ->
+       escaped = text |> Phoenix.HTML.html_escape() |> Phoenix.HTML.safe_to_string()
+
+       if match?,
+         do: [~s(<mark class="bg-amber-100 text-stone-700 rounded-sm">), escaped, "</mark>"],
+         else: escaped
+     end)}
+  end
+
+  defp search_moment_title("visual"), do: gettext("On screen")
+  defp search_moment_title(_source), do: gettext("Spoken")
+
+  defp search_moment_time(seconds) do
+    total = trunc(seconds)
+    hours = div(total, 3600)
+    minutes = total |> rem(3600) |> div(60)
+    rest = total |> rem(60) |> Integer.to_string() |> String.pad_leading(2, "0")
+
+    if hours > 0,
+      do: "#{hours}:#{minutes |> Integer.to_string() |> String.pad_leading(2, "0")}:#{rest}",
+      else: "#{minutes}:#{rest}"
+  end
+
+  attr :user_email, :string, default: ""
+  attr :route, :any, default: nil
+  attr :suggests, :list, default: []
+  attr :search_scope, :map, default: nil
+  attr :search_query, :string, default: ""
+  attr :extra_padding, :boolean, default: false
 
   def bar(assigns) do
     ~H"""
     <div class={"absolute w-full top-0 flex-none z-40 #{if @extra_padding, do: "pr-56"}"}>
       <a class="absolute left-6 top-16 w-14 h-16 z-20 transform-gpu" href="#"></a>
       <div class="h-16 flex items-center pr-12 bg-stone-100 border-b border-stone-200/70">
-        <div class="relative h-full ml-16">
+        <%!-- The box, not the debounced input, opens the results: a debounced
+             click is dropped as soon as the first key follows it. --%>
+        <div
+          id="search-box"
+          class="relative h-full ml-16"
+          phx-click={show_element("#suggest")}
+          phx-click-away={hide_element("#suggest")}
+        >
           <div class="w-64 h-full flex items-center">
             <input
               phx-keyup="search"
               phx-focus="search"
+              phx-debounce="150"
               id="search"
+              value={@search_query}
               class="w-full py-2 px-3 bg-white ring-1 ring-stone-200/50 shadow-sm rounded-md hover:opacity-100 hover:shadow-sm placeholder-stone-400 text-stone-500 text-sm outline-none opacity-50 focus:opacity-100 border-y border-transparent"
               placeholder={gettext("search") |> String.capitalize()}
               spellcheck="false"
-              phx-click={show_element("#suggest")}
-              phx-click-away={hide_element("#suggest")}
             />
           </div>
-          <.suggest suggests={@suggests} />
+          <.suggest suggests={@suggests} search_scope={@search_scope} />
         </div>
         <div class="flex-grow"></div>
         <div

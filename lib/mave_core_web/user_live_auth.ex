@@ -7,6 +7,7 @@ defmodule MaveCoreWeb.UserLiveAuth do
 
   alias MaveCore.Accounts
   alias MaveCore.Embeds
+  alias MaveCore.Embeds.Embed
   alias MaveCore.LegacyShortUUID
   alias MaveCore.SpaceCreation
   alias MaveCore.Spaces.Space
@@ -266,18 +267,13 @@ defmodule MaveCoreWeb.UserLiveAuth do
         end
 
       "search", %{"value" => query}, socket ->
-        archived = Map.get(socket.assigns, :current_tab) == :archive
+        {:halt, socket |> assign(:search_query, query || "") |> assign_suggests()}
 
-        {:halt,
-         assign(
-           socket,
-           :suggests,
-           Embeds.search_video_suggestions(socket.assigns.current_space, query || "",
-             archived: archived
-           )
-         )}
+      "search_scope", %{"scope" => scope}, socket ->
+        scope = if scope == "library", do: :library, else: :collection
+        {:halt, socket |> assign(:search_scope, scope) |> assign_suggests()}
 
-      "search_embed", %{"id" => id}, socket ->
+      "search_embed", %{"id" => id} = params, socket ->
         {:halt,
          socket
          |> assign(:suggests, [])
@@ -286,7 +282,8 @@ defmodule MaveCoreWeb.UserLiveAuth do
              DashboardRoutes.video_path(
                socket.assigns.current_space,
                id,
-               Map.get(socket.assigns, :current_tab, :all)
+               Map.get(socket.assigns, :current_tab, :all),
+               time: search_moment_time(params["t"])
              )
          )}
 
@@ -294,6 +291,47 @@ defmodule MaveCoreWeb.UserLiveAuth do
         {:cont, socket}
     end)
   end
+
+  @doc """
+  The folder the search box is limited to, for the layout: its name and whether
+  the folder or the entire library is selected. `nil` outside a folder page.
+  """
+  def search_scope(%{mode: :collection, resource_embed: %Embed{type: :collection}} = assigns) do
+    %{
+      name: get_in(assigns, [:folder, :name]) || gettext("this folder"),
+      selected: Map.get(assigns, :search_scope, :collection)
+    }
+  end
+
+  def search_scope(_assigns), do: nil
+
+  defp assign_suggests(socket) do
+    collection =
+      case search_scope(socket.assigns) do
+        %{selected: :collection} -> socket.assigns.resource_embed
+        _ -> nil
+      end
+
+    assign(
+      socket,
+      :suggests,
+      Embeds.search_video_suggestions(
+        socket.assigns.current_space,
+        Map.get(socket.assigns, :search_query, ""),
+        archived: Map.get(socket.assigns, :current_tab) == :archive,
+        collection: collection
+      )
+    )
+  end
+
+  defp search_moment_time(value) when is_binary(value) do
+    case Float.parse(value) do
+      {seconds, ""} when seconds >= 0 -> seconds
+      _ -> nil
+    end
+  end
+
+  defp search_moment_time(_value), do: nil
 
   defp resolve_sidebar_usage(%Space{} = space) do
     case Application.get_env(:mave_core, :dashboard_sidebar_usage_provider) do

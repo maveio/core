@@ -256,6 +256,7 @@ const ComponentLoaderHook = {
 
       await window.__maveComponentImports[src]
       this.applyPlaybackSession()
+      this.applyStartTime()
     } catch (error) {
       console.error("Failed to load mave components bundle", error)
     }
@@ -264,6 +265,21 @@ const ComponentLoaderHook = {
   destroyed() {
     clearTimeout(this.playbackRenewal)
     this.playbackDestroyed = true
+  },
+
+  // A search result opens the video at the moment it matched. Each requested
+  // time is applied once, so later updates never move the playhead again.
+  applyStartTime() {
+    const requested = this.el.dataset.startTime
+    const time = Number.parseFloat(requested)
+    if (!Number.isFinite(time) || time < 0 || this.appliedStartTime === requested) return
+
+    const player = document.querySelector("mave-player")
+    if (!player) return
+
+    this.appliedStartTime = requested
+    player.currentTime = time
+    player.play?.()?.catch?.(() => {})
   },
 
   applyPlaybackSession() {

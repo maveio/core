@@ -125,6 +125,13 @@ spaces that opted in. They skip themselves unless the run input has
 `audio_description`, and nothing in the publish path waits for them. See
 [audio description](audio_description.md).
 
+## Searchable video
+
+The publishing presets include the optional background step `index_search`
+(`search.index_video`), which stores what is visible and said in a video as
+searchable moments for spaces that opted in. It skips itself unless the run input
+has `search`. See [searchable video](video_search.md).
+
 ## Execution and recovery
 
 By default:

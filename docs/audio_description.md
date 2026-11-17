@@ -196,7 +196,9 @@ Run input:
 ```
 
 Uploads and the public `input_url` API add this when the space has the feature on
-and the host allows it at that moment (see below). Existing runs keep their
+and the host allows it at that moment (see below). `detect_scenes` also runs,
+and `observations.json` is shared, when a run asks for
+[searchable video](video_search.md). Existing runs keep their
 original versioned flow definition; newly started runs use the single-language preset.
 Videos longer than `MAVE_AUDIO_DESCRIPTION_MAX_SECONDS` (default `600`) are
 skipped with `reason: "video_too_long"`, `video_duration_seconds` and

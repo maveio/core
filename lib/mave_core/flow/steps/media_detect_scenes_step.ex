@@ -5,6 +5,7 @@ defmodule MaveCore.Flow.Steps.MediaDetectScenesStep do
   description model. One decode of the canonical source does both.
 
   Stores the private `audio_description/scenes.json` and `audio_description/stills/*`.
+  Runs when the run asks for audio description or for visual content search.
   """
   @behaviour MaveCore.Flow.Step
 
@@ -24,8 +25,8 @@ defmodule MaveCore.Flow.Steps.MediaDetectScenesStep do
     duration_ms = StepSupport.inspect_duration_ms(ctx.outputs)
 
     cond do
-      AD.check_requested(ctx) != :ok ->
-        {:skip, reason} = AD.check_requested(ctx)
+      requested(ctx) != :ok ->
+        {:skip, reason} = requested(ctx)
         {:ok, AD.skipped(@step_type, ctx, reason), []}
 
       StepSupport.inspect_reports_no_video?(ctx.outputs) ->
@@ -43,6 +44,14 @@ defmodule MaveCore.Flow.Steps.MediaDetectScenesStep do
 
       true ->
         detect(ctx, context, duration_ms / 1000)
+    end
+  end
+
+  # Content search analyses the same stills, with or without audio description.
+  defp requested(ctx) do
+    case AD.check_requested(ctx) do
+      :ok -> :ok
+      skip -> if MaveCore.Search.requested?(ctx.run_input, "visual"), do: :ok, else: skip
     end
   end
 

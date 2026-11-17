@@ -125,6 +125,67 @@ defmodule MaveCore.PublicApi do
     end
   end
 
+  @doc """
+  Content search for an API key: the whole space, or one collection and the
+  collections nested in it. See `MaveCore.Search.search/3`.
+  """
+  def search(%Space{} = space, query, opts \\ []) when is_binary(query) do
+    with {:ok, collection} <- resolve_collection_embed(space, Keyword.get(opts, :collection)) do
+      {:ok, search_response(space, query, collection, opts)}
+    end
+  end
+
+  @doc """
+  Content search for a signed collection token. The token's scope is the limit:
+  a token for one collection never returns videos outside it.
+  """
+  def jwt_search(%Space{} = space, root, query, opts \\ []) when is_binary(query) do
+    with {:ok, collection} <- resolve_jwt_collection_root(space, root) do
+      {:ok, search_response(space, query, collection, opts)}
+    end
+  end
+
+  defp search_response(%Space{} = space, query, collection, opts) do
+    results =
+      MaveCore.Search.search(space, query,
+        collection: collection,
+        limit: Keyword.get(opts, :limit),
+        moments_per_video: Keyword.get(opts, :moments_per_video)
+      )
+
+    %{
+      object: "list",
+      query: query,
+      data: Enum.map(results, &search_result(space, &1))
+    }
+  end
+
+  defp search_result(%Space{} = space, %{embed: %Embed{} = embed} = result) do
+    current_video = current_video(embed)
+
+    %{
+      object: "search_result",
+      id: public_embed_id(space, embed),
+      name: embed_name(embed),
+      visibility: embed.playback_visibility,
+      duration: current_video && current_video.duration,
+      poster_image: poster_image(space, embed),
+      matched_on: result.matched_on,
+      score: Float.round(result.score, 4),
+      moments:
+        Enum.map(result.moments, fn moment ->
+          %{
+            source: moment.source,
+            start: moment.start,
+            end: moment.end,
+            text: moment.text,
+            snippet:
+              Enum.map(moment.snippet, fn {text, match?} -> %{text: text, match: match?} end)
+          }
+        end)
+    }
+  end
+
   def jwt_scoped_video_deletable?(%Space{} = space, %Embed{type: :video} = embed, root) do
     case resolve_jwt_collection_root(space, root) do
       {:ok, nil} ->
@@ -888,6 +949,12 @@ defmodule MaveCore.PublicApi do
       case AudioDescription.run_input(space) do
         nil -> input
         audio_description -> Map.put(input, "audio_description", audio_description)
+      end
+    end)
+    |> then(fn input ->
+      case MaveCore.Search.run_input(space) do
+        nil -> input
+        search -> Map.put(input, "search", search)
       end
     end)
   end

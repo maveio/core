@@ -128,6 +128,8 @@ defmodule MaveCoreWeb.Router do
 
       options "/collection/:token", Api.LegacyEmbedController, :collection
       get "/collection/:token", Api.LegacyEmbedController, :collection
+      options "/collection/:token/search", Api.SearchController, :collection
+      get "/collection/:token/search", Api.SearchController, :collection
 
       options "/videos/:embed_hash/:token", Api.LegacyEmbedController, :delete_video
       delete "/videos/:embed_hash/:token", Api.LegacyEmbedController, :delete_video
@@ -145,6 +147,8 @@ defmodule MaveCoreWeb.Router do
 
       options "/collection/:token", Api.LegacyEmbedController, :collection
       get "/collection/:token", Api.LegacyEmbedController, :collection
+      options "/collection/:token/search", Api.SearchController, :collection
+      get "/collection/:token/search", Api.SearchController, :collection
 
       options "/videos/:embed_hash/:token", Api.LegacyEmbedController, :delete_video
       delete "/videos/:embed_hash/:token", Api.LegacyEmbedController, :delete_video
@@ -168,9 +172,11 @@ defmodule MaveCoreWeb.Router do
 
     scope "/v1" do
       for path <-
-            ~w(/videos /videos/:hash /videos/:hash/data /videos/owner/:hash /collections /collections/:hash /spaces/:space_hash/data) do
+            ~w(/videos /videos/:hash /videos/:hash/data /videos/owner/:hash /collections /collections/:hash /spaces/:space_hash/data /search) do
         options path, Api.VideosController, :index
       end
+
+      get "/search", Api.SearchController, :index
 
       get "/videos", Api.VideosController, :index
       get "/videos/:hash", Api.VideosController, :show
@@ -194,9 +200,11 @@ defmodule MaveCoreWeb.Router do
 
     scope "/v1" do
       for path <-
-            ~w(/videos /videos/:hash /videos/:hash/data /videos/owner/:hash /collections /collections/:hash /spaces/:space_hash/data) do
+            ~w(/videos /videos/:hash /videos/:hash/data /videos/owner/:hash /collections /collections/:hash /spaces/:space_hash/data /search) do
         options path, Api.VideosController, :index
       end
+
+      get "/search", Api.SearchController, :index
 
       get "/videos", Api.VideosController, :index
       get "/videos/:hash", Api.VideosController, :show

@@ -12,12 +12,14 @@ defmodule MaveCore.UsageLimits do
   @callback can_upload_file?(Space.t(), non_neg_integer() | nil) :: :ok | {:error, term()}
   @callback can_manage_audio_description?(Space.t()) :: :ok | {:error, term()}
   @callback can_use_audio_description?(Space.t()) :: :ok | {:error, term()}
+  @callback can_use_video_search?(Space.t()) :: :ok | {:error, term()}
   @callback restriction_copy(atom(), term()) :: %{optional(atom()) => String.t()}
 
   @optional_callbacks can_view_space_data?: 1,
                       can_upload_file?: 2,
                       can_use_audio_description?: 1,
                       can_manage_audio_description?: 1,
+                      can_use_video_search?: 1,
                       restriction_copy: 2
 
   def can_create_video_embed?(%Space{} = space) do
@@ -43,6 +45,15 @@ defmodule MaveCore.UsageLimits do
   @doc "Whether space settings may change audio description. Allowed unless the host manages it."
   def can_manage_audio_description?(%Space{} = space) do
     dispatch(:can_manage_audio_description?, [space])
+  end
+
+  @doc """
+  Whether a space may index new videos for content search, which analyses
+  video stills with the configured vision provider. Allowed when the host has
+  no policy for it.
+  """
+  def can_use_video_search?(%Space{} = space) do
+    dispatch(:can_use_video_search?, [space])
   end
 
   def can_upload_file?(%Space{} = space, size) when is_integer(size) or is_nil(size) do

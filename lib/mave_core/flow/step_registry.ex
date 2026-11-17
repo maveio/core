@@ -28,6 +28,7 @@ defmodule MaveCore.Flow.StepRegistry do
     MediaTranscodeVideoStep,
     MediaTranscodeWaveformStep,
     PassThroughStep,
+    SearchIndexVideoStep,
     SourceResolveStep,
     StorageEnsureSpaceBucketStep
   }
@@ -214,6 +215,15 @@ defmodule MaveCore.Flow.StepRegistry do
       handler: MediaMixAudioDescriptionStep,
       options: [@strict_option],
       executor: :flame
+    },
+    "search.index_video" => %{
+      name: "Index Video For Search",
+      category: "search",
+      description:
+        "Stores searchable moments from visual observations and the transcript, for spaces with content search.",
+      handler: SearchIndexVideoStep,
+      options: [@strict_option],
+      executor: :inline
     },
     "subtitle.upload" => %{
       name: "Upload Subtitle",

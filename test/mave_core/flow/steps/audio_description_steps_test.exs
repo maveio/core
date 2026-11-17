@@ -221,7 +221,11 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
         step = Enum.find(steps, &(&1["id"] == id))
         assert %{"required" => false, "lane" => "background"} = step
         assert StepRegistry.known_type?(step["type"])
-        refute Enum.any?(steps, &(id in Map.get(&1, "depends_on", []) and &1["id"] not in ids))
+        # Only other optional background work may wait for them.
+        refute Enum.any?(
+                 steps,
+                 &(id in Map.get(&1, "depends_on", []) and &1["id"] not in ["index_search" | ids])
+               )
       end
     end
 
