@@ -45,6 +45,16 @@ defmodule MaveCoreWeb.DashboardRoutes do
     )
   end
 
+  def data_performance_path(space_or_user, opts \\ []) do
+    by =
+      case Keyword.get(opts, :by) do
+        dimension when is_binary(dimension) and dimension != "" -> [by: dimension]
+        _ -> []
+      end
+
+    path_for(space_or_user, "/data/performance", period_params(opts) ++ by, opts)
+  end
+
   def settings_path(space_or_user, tab \\ nil, opts \\ []) do
     suffix =
       case tab do

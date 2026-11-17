@@ -114,6 +114,7 @@ Read the relevant reference before changing these contracts:
 - [Flow engine](docs/flow_engine.md): versioned processing, step behavior and debugging.
 - [Webhook delivery](docs/webhook_delivery_outbox.md): delivery state and retries.
 - [Prepared analytics](docs/analytics_sessions.md): activation and data lifecycle.
+- [Playback performance](docs/playback_performance.md): quality events and CDN telemetry.
 - [Private playback](docs/private_playback.md) and [media isolation](docs/media_security.md).
 - [Self-hosting](deploy/self-hosted/README.md) and [encoding boosters](deploy/encoding-booster/README.md).
 

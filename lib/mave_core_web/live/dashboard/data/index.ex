@@ -9,9 +9,11 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   @top_list_query_size 50
 
   alias MaveCore.Analytics.Overview
+  alias MaveCore.Analytics.Performance
   alias MaveCore.Embeds
   alias MaveCore.UsageLimits
   alias MaveCoreWeb.Dashboard.Data.OverviewComponents
+  alias MaveCoreWeb.Dashboard.Data.PerformanceComponents
   alias MaveCoreWeb.Dashboard.Data.TopListComponents
   alias MaveCoreWeb.DashboardRoutes
   alias MaveCoreWeb.Formatter
@@ -28,6 +30,8 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
      |> assign(:sort, TopListComponents.default_sort())
      |> assign(:direction, "desc")
      |> assign(:top_list_key, nil)
+     |> assign(:dimension, PerformanceComponents.default_dimension())
+     |> assign(:performance_key, nil)
      |> assign(:data_access_notice, nil)
      |> assign(:data_access_help, nil)
      |> assign_async_defaults()}
@@ -39,12 +43,19 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
     sort = sort(params)
     direction = direction(params)
 
-    sort_only? =
-      socket.assigns.live_action == :top_list and
-        (sort != socket.assigns.sort or direction != socket.assigns.direction) and
-        socket.assigns[:top_list_key] == {space.hash, period}
+    dimension = dimension(params)
 
-    socket = assign(socket, period: period, sort: sort, direction: direction)
+    # Sorting the top list or regrouping the breakdown reuses the loaded data.
+    sort_only? =
+      (socket.assigns.live_action == :top_list and
+         (sort != socket.assigns.sort or direction != socket.assigns.direction) and
+         socket.assigns[:top_list_key] == {space.hash, period}) or
+        (socket.assigns.live_action == :performance and
+           dimension != socket.assigns.dimension and
+           socket.assigns[:performance_key] == {space.hash, period})
+
+    socket =
+      assign(socket, period: period, sort: sort, direction: direction, dimension: dimension)
 
     socket =
       case UsageLimits.can_view_space_data?(space) do
@@ -74,8 +85,19 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
     socket
     |> assign(:top_videos, AsyncResult.loading())
+    |> assign(:performance_key, nil)
     |> assign(:top_list_key, {space.hash, period})
     |> start_async(:fetch_top_videos, fn -> fetch_top_videos(space, period) end)
+  end
+
+  defp start_tab_fetch(socket, :performance, space) do
+    period = socket.assigns.period
+
+    socket
+    |> assign(:top_list_key, nil)
+    |> assign(:performance, AsyncResult.loading())
+    |> assign(:performance_key, {space.hash, period})
+    |> start_async(:fetch_performance, fn -> fetch_performance(space, period) end)
   end
 
   defp start_tab_fetch(socket, _overview, space) do
@@ -83,6 +105,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
     socket
     |> assign(:top_list_key, nil)
+    |> assign(:performance_key, nil)
     |> assign_async_defaults()
     |> start_async(:fetch_overview, fn -> Overview.space_overview(space.hash, period) end)
   end
@@ -99,6 +122,57 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
 
       {:ok, Enum.take(top_videos, @top_list_size)}
     end
+  end
+
+  # Names the report's segments; analytics of deleted videos are left out.
+  defp fetch_performance(space, period) do
+    with {:ok, report} <- Performance.report(space.hash, period) do
+      videos =
+        Embeds.dashboard_videos_by_hash(space, Enum.map(report.breakdowns.video, & &1.key))
+
+      breakdowns =
+        Map.new(report.breakdowns, fn
+          {:video, rows} ->
+            {:video,
+             for(
+               %{key: hash} = row <- rows,
+               video = videos[hash],
+               do: Map.merge(row, %{id: video.id, label: video.name})
+             )}
+
+          {dimension, rows} ->
+            {dimension, Enum.map(rows, &Map.put(&1, :label, segment_label(dimension, &1.key)))}
+        end)
+
+      findings =
+        for finding <- report.findings,
+            row = Enum.find(breakdowns[finding.dimension], &(&1.key == finding.key)),
+            do: Map.put(finding, :label, row.label)
+
+      {:ok, %{report | breakdowns: breakdowns, findings: findings}}
+    end
+  end
+
+  defp segment_label(_dimension, ""), do: gettext("Unknown")
+  defp segment_label(:device, "tv"), do: "TV"
+  defp segment_label(:device, key), do: String.capitalize(key)
+  defp segment_label(_dimension, key), do: key
+
+  def handle_async(:fetch_performance, {:ok, {:ok, report}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:analytics_preparing, false)
+     |> assign(:performance, AsyncResult.ok(socket.assigns.performance, report))}
+  end
+
+  def handle_async(:fetch_performance, _result, socket) do
+    {:noreply,
+     socket
+     |> assign(:performance_key, nil)
+     |> assign(
+       :performance,
+       AsyncResult.failed(socket.assigns.performance, :analytics_unavailable)
+     )}
   end
 
   def handle_async(:fetch_overview, {:ok, {:ok, overview}}, socket) do
@@ -169,7 +243,7 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
                 period: period_param(@period)
               )
             }
-            active={@live_action != :top_list}
+            active={@live_action not in [:top_list, :performance]}
           >
             {gettext("Overview")}
           </.menubar_item>
@@ -184,6 +258,18 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
             active={@live_action == :top_list}
           >
             {gettext("Top list")}
+          </.menubar_item>
+          <.menubar_item
+            icon="hero-bolt-mini"
+            path={
+              DashboardRoutes.data_performance_path(@current_space,
+                scope: @route_scope,
+                period: period_param(@period)
+              )
+            }
+            active={@live_action == :performance}
+          >
+            {gettext("Playback")}
           </.menubar_item>
           <div class="flex-grow"></div>
           <OverviewComponents.period_switch period={@period} path={&period_path(assigns, &1)} />
@@ -211,16 +297,25 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
             >
               {gettext("Analytics are being prepared. Please check back shortly.")}
             </p>
-            <%= if @live_action == :top_list do %>
-              <TopListComponents.top_list
-                top_videos={@top_videos}
-                current_space={@current_space}
-                route_scope={@route_scope}
-                sort={@sort}
-                direction={@direction}
-                sort_path={&top_list_path(assigns, @period, &1, &2)}
-              />
-            <% else %>
+            <PerformanceComponents.performance
+              :if={@live_action == :performance}
+              report={@performance}
+              period={@period}
+              dimension={@dimension}
+              dimension_path={&performance_path(assigns, @period, &1)}
+              current_space={@current_space}
+              route_scope={@route_scope}
+            />
+            <TopListComponents.top_list
+              :if={@live_action == :top_list}
+              top_videos={@top_videos}
+              current_space={@current_space}
+              route_scope={@route_scope}
+              sort={@sort}
+              direction={@direction}
+              sort_path={&top_list_path(assigns, @period, &1, &2)}
+            />
+            <%= if @live_action not in [:top_list, :performance] do %>
               <OverviewComponents.kpis overview={@overview} period={@period} />
 
               <.divider />
@@ -404,6 +499,9 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
   defp period_path(%{live_action: :top_list} = assigns, period),
     do: top_list_path(assigns, period, assigns.sort, assigns.direction)
 
+  defp period_path(%{live_action: :performance} = assigns, period),
+    do: performance_path(assigns, period, assigns.dimension)
+
   defp period_path(assigns, period) do
     DashboardRoutes.data_path(assigns.current_space,
       scope: assigns.route_scope,
@@ -419,6 +517,22 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
       direction: if(direction == "asc", do: direction)
     )
   end
+
+  defp performance_path(assigns, period, dimension) do
+    DashboardRoutes.data_performance_path(assigns.current_space,
+      scope: assigns.route_scope,
+      period: period_param(period),
+      by: if(dimension != PerformanceComponents.default_dimension(), do: dimension)
+    )
+  end
+
+  defp dimension(%{"by" => dimension}) do
+    if dimension in PerformanceComponents.dimensions(),
+      do: dimension,
+      else: PerformanceComponents.default_dimension()
+  end
+
+  defp dimension(_params), do: PerformanceComponents.default_dimension()
 
   defp sort(%{"sort" => sort}) do
     if sort in TopListComponents.sorts(), do: sort, else: TopListComponents.default_sort()
@@ -456,16 +570,22 @@ defmodule MaveCoreWeb.Dashboard.Data.Index do
     socket
     |> assign(:top_videos, AsyncResult.loading())
     |> assign(:overview, AsyncResult.loading())
+    |> assign(:performance, AsyncResult.loading())
   end
 
   defp assign_empty_stats(socket) do
     socket
     |> assign(:top_list_key, nil)
+    |> assign(:performance_key, nil)
     |> assign(
       :overview,
       AsyncResult.ok(AsyncResult.loading(), Overview.empty(socket.assigns.period))
     )
     |> assign(:top_videos, AsyncResult.ok(AsyncResult.loading(), []))
+    |> assign(
+      :performance,
+      AsyncResult.ok(AsyncResult.loading(), Performance.empty(socket.assigns.period))
+    )
   end
 
   defp data_access_notice(reason) do

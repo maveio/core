@@ -6,6 +6,8 @@ defmodule MaveCore.Metrics.IngestionBuffer do
   alias Broadway.Message
   alias MaveCore.ClickHouseRepo
   alias MaveCore.EmbedId
+  alias MaveCore.Metrics.CdnRequest
+  alias MaveCore.Metrics.PlaybackQuality
 
   def start_link(_opts) do
     batch_timeout =
@@ -26,6 +28,16 @@ defmodule MaveCore.Metrics.IngestionBuffer do
           batch_size: 1000,
           batch_timeout: batch_timeout,
           concurrency: 2
+        ],
+        playback_quality: [
+          batch_size: 1000,
+          batch_timeout: batch_timeout,
+          concurrency: 1
+        ],
+        cdn_requests: [
+          batch_size: 5000,
+          batch_timeout: batch_timeout,
+          concurrency: 1
         ]
       ]
     )
@@ -45,7 +57,16 @@ defmodule MaveCore.Metrics.IngestionBuffer do
 
   def push(event), do: push([event])
 
+  @doc "Queues normalized `MaveCore.Metrics.CdnRequest` rows."
+  def push_cdn_requests(rows) when is_list(rows), do: push(Enum.map(rows, &{:cdn_request, &1}))
+
   @impl true
+  def handle_message(_, %Message{data: {:cdn_request, row}} = message, _) do
+    message
+    |> Message.put_data(row)
+    |> Message.put_batcher(:cdn_requests)
+  end
+
   def handle_message(_, message, _) do
     # Validate or transform message
     event = message.data
@@ -53,13 +74,23 @@ defmodule MaveCore.Metrics.IngestionBuffer do
     # Ensure timestamp exists or default to now
     timestamp = Map.get(event, "timestamp", DateTime.utc_now() |> DateTime.to_unix(:millisecond))
 
+    batcher = if PlaybackQuality.event?(event), do: :playback_quality, else: :clickhouse
+
     # Store prepared event
     message
     |> Message.put_data(Map.put(event, "timestamp", timestamp))
-    |> Message.put_batcher(:clickhouse)
+    |> Message.put_batcher(batcher)
   end
 
   @impl true
+  def handle_batch(:playback_quality, messages, _batch_info, _context) do
+    insert_batch(PlaybackQuality, Enum.map(messages, &format_quality_row(&1.data)), messages)
+  end
+
+  def handle_batch(:cdn_requests, messages, _batch_info, _context) do
+    insert_batch(CdnRequest, Enum.map(messages, & &1.data), messages)
+  end
+
   def handle_batch(:clickhouse, messages, _batch_info, _context) do
     formatted_rows = Enum.map(messages, &format_row(&1.data))
 
@@ -85,6 +116,33 @@ defmodule MaveCore.Metrics.IngestionBuffer do
         Logger.error("Failed to insert metrics batch: #{inspect(e)}")
         Enum.map(messages, &Message.failed(&1, e))
     end
+  end
+
+  defp insert_batch(schema, rows, messages) do
+    db_name = ClickHouseRepo.config()[:database] || "mave_metrics"
+    {_count, _} = ClickHouseRepo.insert_all(schema, rows, prefix: db_name)
+    messages
+  rescue
+    e ->
+      require Logger
+      Logger.error("Failed to insert #{inspect(schema)} batch: #{inspect(e)}")
+      Enum.map(messages, &Message.failed(&1, e))
+  end
+
+  defp format_quality_row(row) do
+    %{space_hash: space_hash, embed_hash: embed_hash} = split_embed_id(row["embed_id"])
+    %{client: client, os: os, device: device} = parse_user_agent(row["user_agent"])
+
+    Map.merge(PlaybackQuality.measurements(row), %{
+      timestamp: DateTime.from_unix!(row["timestamp"] * 1000, :microsecond),
+      name: row["name"],
+      session_id: row["session_id"],
+      space_hash: space_hash,
+      embed_hash: embed_hash,
+      browser: sanitize(client.name),
+      os: sanitize(os.name),
+      device: sanitize(device.type, "desktop")
+    })
   end
 
   defp format_row(row) do

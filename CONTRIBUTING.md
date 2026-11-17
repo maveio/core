@@ -193,6 +193,8 @@ Technical reference, as needed:
 - [Flow engine](docs/flow_engine.md): templates, execution, retries and debugging.
 - [Audio description](docs/audio_description.md): steps, outputs, providers and host policy.
 - [Prepared analytics](docs/analytics_sessions.md): setup and data lifecycle.
+- [Playback performance](docs/playback_performance.md): player quality events and
+  CDN delivery telemetry.
 - [Webhook delivery](docs/webhook_delivery_outbox.md): signed lifecycle events.
 - [Encoding boosters](deploy/encoding-booster/README.md): optional remote compute;
   not needed for the single-host installation.
