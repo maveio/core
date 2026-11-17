@@ -2,19 +2,31 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
   @moduledoc """
   Visual editor for a space's encoding pipeline.
 
-  Shows the steps an upload goes through, lets a member turn optional steps off
-  and change editable step settings, and saves the result as a new pipeline
-  version through `MaveCore.Flow.Pipelines`.
+  Shows the steps an upload goes through, lets a member turn optional steps
+  off, add the steps that step plugins offer and change editable step settings,
+  and saves the result as a new pipeline version through
+  `MaveCore.Flow.Pipelines`. Plugin steps show their progress and results from
+  the space's most recent uploads.
   """
 
   use MaveCoreWeb, :live_component
   import MaveCoreWeb.DashboardComponents, except: [icon: 1]
 
-  alias MaveCore.Flow.{Pipeline, Pipelines}
+  alias MaveCore.Flow.{Pipeline, Pipelines, StepRegistry}
   alias MaveCore.UsageLimits
   alias MaveCoreWeb.Dashboard.Settings.PipelineGraph
 
+  @activity_refresh_ms 3_000
+
   @impl true
+  def update(%{refresh_activity: token}, socket) do
+    if token == socket.assigns[:activity_token] do
+      {:ok, socket |> assign_activity() |> schedule_activity_refresh()}
+    else
+      {:ok, socket}
+    end
+  end
+
   def update(assigns, socket) do
     socket =
       socket
@@ -36,13 +48,40 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
     |> assign(:loaded_space_id, space.id)
     |> assign(:base, base(space))
     |> assign(:edit_access, Pipelines.can_edit?(space))
+    |> assign(:unavailable, Pipelines.unavailable_steps(space))
     |> assign(:saved, saved)
     |> assign(:draft, saved)
     |> assign(:selected, nil)
     |> assign(:note, "")
     |> assign_versions()
     |> resolve()
+    |> assign_activity()
+    |> schedule_activity_refresh()
   end
+
+  defp assign_activity(socket) do
+    assign(socket, :activity, Pipelines.step_activity(socket.assigns.current_space))
+  end
+
+  # Results of plugin steps arrive while the editor is open, so it looks again
+  # every few seconds for as long as the pipeline has such steps. The parent
+  # LiveView forwards the message back to this component.
+  defp schedule_activity_refresh(socket) do
+    token = System.unique_integer([:positive])
+
+    if connected?(socket) and plugin_steps?(socket.assigns[:resolution]) do
+      Process.send_after(
+        self(),
+        {:settings_component_update, __MODULE__, socket.assigns.id, %{refresh_activity: token}},
+        @activity_refresh_ms
+      )
+    end
+
+    assign(socket, :activity_token, token)
+  end
+
+  defp plugin_steps?(nil), do: false
+  defp plugin_steps?(resolution), do: Enum.any?(resolution.steps, & &1.results?)
 
   defp base(space) do
     case Pipelines.base(space) do
@@ -68,7 +107,12 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
 
   defp resolve(socket) do
     %{base: base, draft: draft, selected: selected} = socket.assigns
-    resolution = Pipeline.resolve(base.definition, draft)
+
+    resolution =
+      base.definition
+      |> Pipeline.resolve(draft, unavailable: socket.assigns.unavailable)
+      |> Map.update!(:steps, fn steps -> Enum.map(steps, &with_contract/1) end)
+
     selected_step = Enum.find(resolution.steps, &(&1.id == selected))
 
     also_disabled =
@@ -82,6 +126,17 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
     |> assign(:also_disabled, also_disabled)
     |> assign(:related, related(selected_step, also_disabled))
     |> assign(:graph, PipelineGraph.layout(resolution.steps, selected_step && selected_step.id))
+  end
+
+  # What a plugin step type declares about itself, for the inspector.
+  defp with_contract(step) do
+    type = StepRegistry.fetch(step.type) || %{}
+
+    Map.merge(step, %{
+      plugin: Map.get(type, :plugin, false),
+      inputs: Map.get(type, :inputs, []),
+      results?: Map.get(type, :results, []) != []
+    })
   end
 
   # How each step relates to the selected one, for row highlighting.
@@ -106,9 +161,14 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
 
   def handle_event("toggle_step", %{"id" => step_id}, socket) do
     with true <- editable?(socket),
-         %{locked: false, state: state} when state != :auto_disabled <-
-           Enum.find(socket.assigns.resolution.steps, &(&1.id == step_id)) do
-      draft = Pipeline.put_step_enabled(socket.assigns.draft, step_id, state == :disabled)
+         %{locked: false, state: state} = step when state != :auto_disabled <-
+           Enum.find(socket.assigns.resolution.steps, &(&1.id == step_id)),
+         true <- step.available or state == :enabled do
+      draft =
+        if step.addon,
+          do: Pipeline.put_step_added(socket.assigns.draft, step_id, state == :disabled),
+          else: Pipeline.put_step_enabled(socket.assigns.draft, step_id, state == :disabled)
+
       {:noreply, socket |> assign(:draft, draft) |> resolve()}
     else
       _ -> {:noreply, socket}
@@ -241,7 +301,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
       <% else %>
         <p class="mt-3 max-w-3xl text-sm text-stone-400">
           {gettext(
-            "This is the path every upload in this space takes, from the original file to playback. Select a step to see what it does, change its settings, or turn optional steps off."
+            "This is the path every upload in this space takes, from the original file to playback. Select a step to see what it does, change its settings, turn optional steps off or add extra ones."
           )}
         </p>
 
@@ -273,6 +333,14 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
             <span class="flex items-center gap-1">
               <.icon name="hero-lock-closed-micro" class="h-3.5 w-3.5 text-stone-300" />
               {gettext("Required")}
+            </span>
+            <span
+              :if={Enum.any?(@resolution.steps, & &1.addon)}
+              id="pipeline-legend-addon"
+              class="flex items-center gap-1"
+            >
+              <.icon name="hero-puzzle-piece-micro" class="h-3.5 w-3.5 text-violet-400" />
+              {gettext("Add-on")}
             </span>
           </span>
         </div>
@@ -330,10 +398,15 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
                   <.state_dot state={member.step.state} />
                   <span class={[
                     "min-w-0 flex-1 truncate",
-                    member.step.state != :enabled && "line-through"
+                    member.step.state != :enabled && !member.step.addon && "line-through"
                   ]}>
                     {member.label}
                   </span>
+                  <.row_activity
+                    :if={member.step.state == :enabled}
+                    id={"pipeline-step-result-#{member.step.id}"}
+                    activity={Map.get(@activity, member.step.id)}
+                  />
                   <span
                     :if={Enum.any?(member.step.settings, & &1.changed)}
                     class="h-1.5 w-1.5 flex-none rounded-full bg-amber-400"
@@ -343,6 +416,14 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
                     :if={member.step.locked}
                     name="hero-lock-closed-micro"
                     class="h-3 w-3 flex-none text-stone-300"
+                  />
+                  <.icon
+                    :if={member.step.addon}
+                    name="hero-puzzle-piece-micro"
+                    class={[
+                      "h-3 w-3 flex-none",
+                      if(member.step.state == :enabled, do: "text-violet-400", else: "text-stone-300")
+                    ]}
                   />
                 </button>
               </div>
@@ -377,6 +458,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
                 step={@selected_step}
                 steps={@resolution.steps}
                 also_disabled={@also_disabled}
+                activity={Map.get(@activity, @selected_step.id)}
                 can_edit={@can_edit}
                 myself={@myself}
               />
@@ -481,6 +563,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
   attr :step, :map, required: true
   attr :steps, :list, required: true
   attr :also_disabled, :list, required: true
+  attr :activity, :map, default: nil
   attr :can_edit, :boolean, required: true
   attr :myself, :any, required: true
 
@@ -511,7 +594,15 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
       <div class="space-y-4 px-4 py-4 text-sm">
         <p :if={@step.description} class="text-stone-500">{@step.description}</p>
 
-        <div :if={badges(@step) != []} class="flex flex-wrap gap-1.5">
+        <div :if={badges(@step) != [] or @step.plugin} class="flex flex-wrap gap-1.5">
+          <span
+            :if={@step.plugin}
+            id="pipeline-step-plugin"
+            class="flex items-center gap-1 rounded bg-violet-50 px-2 py-0.5 text-xs text-violet-600"
+          >
+            <.icon name="hero-puzzle-piece-micro" class="h-3 w-3" />
+            {if @step.addon, do: gettext("Add-on"), else: gettext("Plugin")}
+          </span>
           <span
             :for={badge <- badges(@step)}
             class="rounded bg-stone-100 px-2 py-0.5 text-xs text-stone-500"
@@ -526,6 +617,10 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
               <%= cond do %>
                 <% @step.locked -> %>
                   {gettext("Always on")}
+                <% @step.addon and @step.state == :enabled -> %>
+                  {gettext("Added")}
+                <% @step.addon -> %>
+                  {gettext("Not added")}
                 <% @step.state == :enabled -> %>
                   {gettext("On")}
                 <% true -> %>
@@ -541,7 +636,10 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
               :if={!@step.locked}
               id={"pipeline-toggle-#{@step.id}"}
               enabled={@step.state == :enabled}
-              disabled={!@can_edit or @step.state == :auto_disabled}
+              disabled={
+                !@can_edit or @step.state == :auto_disabled or
+                  (!@step.available and @step.state != :enabled)
+              }
               phx-click="toggle_step"
               phx-value-id={@step.id}
               phx-target={@myself}
@@ -551,10 +649,14 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
             <%= cond do %>
               <% @step.locked -> %>
                 {gettext("Playback depends on this step, so it cannot be turned off.")}
+              <% !@step.available -> %>
+                {@step.unavailable_reason}
               <% @step.state == :auto_disabled -> %>
                 {gettext("Off because it needs %{steps}.",
                   steps: join_names(@step.disabled_by, @names)
                 )}
+              <% @step.addon and @step.state == :disabled -> %>
+                {gettext("Add this step to run it for new uploads.")}
               <% @step.state == :disabled -> %>
                 {gettext("New uploads skip this step.")}
               <% @also_disabled != [] -> %>
@@ -565,6 +667,13 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
                 {gettext("Nothing else depends on this step.")}
             <% end %>
           </p>
+        </div>
+
+        <div :if={@step.results? and @step.state == :enabled} id="pipeline-step-results">
+          <div class="text-xs font-medium uppercase tracking-wide text-stone-400">
+            {gettext("Latest result")}
+          </div>
+          <.step_activity activity={@activity} />
         </div>
 
         <.form
@@ -624,6 +733,15 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
           </div>
         </.form>
 
+        <div :if={@step.inputs != []} id="pipeline-step-inputs">
+          <div class="text-xs font-medium uppercase tracking-wide text-stone-400">
+            {gettext("Connects to")}
+          </div>
+          <ul class="mt-1.5 space-y-0.5 text-stone-500">
+            <li :for={input <- @step.inputs}>{input["label"]}</li>
+          </ul>
+        </div>
+
         <.connections
           :if={@step.dependencies != []}
           label={gettext("Needs")}
@@ -668,14 +786,101 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
     """
   end
 
+  attr :activity, :map, default: nil
+
+  defp step_activity(assigns) do
+    ~H"""
+    <%= cond do %>
+      <% @activity == nil -> %>
+        <p class="mt-1.5 text-stone-400">
+          {gettext("No results yet. They appear here after the next upload.")}
+        </p>
+      <% @activity.status == "executing" -> %>
+        <div class="mt-1.5 text-blue-500" id="pipeline-step-progress">
+          {progress_text(@activity)}
+          <div class="mt-1 h-1.5 overflow-hidden rounded-full bg-stone-200">
+            <div
+              class="h-full rounded-full bg-blue-500 transition-[width] duration-300"
+              style={"width: #{progress_percent(@activity)}%"}
+            >
+            </div>
+          </div>
+        </div>
+      <% @activity.status == "failed" -> %>
+        <p class="mt-1.5 text-stone-400">
+          {gettext("The step failed on the latest upload. The video itself is not affected.")}
+        </p>
+      <% @activity.results == [] -> %>
+        <p class="mt-1.5 text-stone-400">
+          {gettext("Skipped on the latest upload: %{reason}.",
+            reason: @activity.reason || gettext("nothing to do")
+          )}
+        </p>
+      <% true -> %>
+        <dl class="mt-1.5 space-y-1 text-stone-500">
+          <div :for={result <- @activity.results} class="flex justify-between gap-3">
+            <dt>{result.label}</dt>
+            <dd class={["tabular-nums", result.primary && "font-medium text-stone-700"]}>
+              {result.text}
+            </dd>
+          </div>
+        </dl>
+        <p class="mt-1.5 text-xs text-stone-400">
+          {gettext("Latest upload, %{time}", time: Calendar.strftime(@activity.at, "%d %b %H:%M UTC"))}
+        </p>
+    <% end %>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :activity, :map, default: nil
+
+  defp row_activity(assigns) do
+    assigns = assign(assigns, :primary, primary_result(assigns.activity))
+
+    ~H"""
+    <span
+      :if={@activity && @activity.status == "executing"}
+      id={@id}
+      class="flex-none text-[11px] tabular-nums text-blue-500"
+    >
+      {progress_percent(@activity)}%
+    </span>
+    <span
+      :if={@primary}
+      id={@id}
+      title={@primary.label}
+      class="flex-none text-[11px] font-medium tabular-nums text-stone-600"
+    >
+      {@primary.text}
+    </span>
+    """
+  end
+
+  defp primary_result(%{status: "succeeded", results: results}),
+    do: Enum.find(results, & &1.primary)
+
+  defp primary_result(_activity), do: nil
+
+  defp progress_percent(%{progress: percent}) when is_number(percent),
+    do: percent |> max(0) |> min(100) |> round()
+
+  defp progress_percent(_activity), do: 0
+
+  defp progress_text(activity) do
+    label = activity.progress_label || gettext("processing")
+    "#{progress_percent(activity)}% #{label}"
+  end
+
   attr :resolution, :map, required: true
 
   defp overview(assigns) do
-    steps = assigns.resolution.steps
+    steps = Enum.reject(assigns.resolution.steps, &(&1.addon and &1.state != :enabled))
 
     assigns =
       assigns
       |> assign(:total, length(steps))
+      |> assign(:added, Enum.filter(steps, & &1.addon))
       |> assign(:off, Enum.filter(steps, &(&1.state != :enabled)))
       |> assign(
         :changed,
@@ -700,6 +905,10 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
         <div class="flex justify-between">
           <dt>{gettext("Settings changed")}</dt>
           <dd class="tabular-nums" id="pipeline-count-changed">{length(@changed)}</dd>
+        </div>
+        <div :if={Enum.any?(@resolution.steps, & &1.addon)} class="flex justify-between">
+          <dt>{gettext("Add-ons added")}</dt>
+          <dd class="tabular-nums" id="pipeline-count-added">{length(@added)}</dd>
         </div>
       </dl>
       <div :if={@off != []} class="mt-4">
@@ -760,7 +969,8 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
   defp stage_label("audio_description"), do: gettext("Audio description")
   defp stage_label("publish"), do: gettext("Playback")
   defp stage_label("deliver"), do: gettext("Delivery")
-  defp stage_label(stage), do: stage
+  defp stage_label("quality"), do: gettext("Quality")
+  defp stage_label(stage), do: stage |> String.replace("_", " ") |> String.capitalize()
 
   @size_labels %{
     "sd" => "480p",
@@ -792,13 +1002,14 @@ defmodule MaveCoreWeb.Dashboard.Settings.EncodingTab do
   defp join_names(step_ids, names), do: Enum.map_join(step_ids, ", ", &Map.get(names, &1, &1))
 
   defp version_summary(base, version) do
-    %{steps_off: off, settings_changed: changed} =
+    %{steps_off: off, steps_added: added, settings_changed: changed} =
       Pipeline.summary(base.definition, version.overrides)
 
     parts =
       Enum.filter(
         [
           off > 0 && ngettext("%{count} step off", "%{count} steps off", off),
+          added > 0 && ngettext("%{count} add-on added", "%{count} add-ons added", added),
           changed > 0 &&
             ngettext("%{count} setting changed", "%{count} settings changed", changed)
         ],

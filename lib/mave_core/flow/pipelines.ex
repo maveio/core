@@ -14,7 +14,18 @@ defmodule MaveCore.Flow.Pipelines do
   import Ecto.Query
 
   alias MaveCore.Flow
-  alias MaveCore.Flow.{Pipeline, PipelineVersion, Presets, Template, Version}
+
+  alias MaveCore.Flow.{
+    Pipeline,
+    PipelineVersion,
+    Presets,
+    Run,
+    StepRegistry,
+    StepRun,
+    Template,
+    Version
+  }
+
   alias MaveCore.LegacyShortUUID
   alias MaveCore.Repo
   alias MaveCore.Spaces.Space
@@ -27,6 +38,78 @@ defmodule MaveCore.Flow.Pipelines do
 
   @doc "Whether the space may change its pipeline. Allowed unless the host manages it."
   def can_edit?(%Space{} = space), do: UsageLimits.can_edit_encoding_pipeline?(space)
+
+  @doc """
+  Plugin step types the space cannot add to its pipeline, with the reason:
+  the installation cannot run the step, or the host does not allow it.
+  """
+  def unavailable_steps(%Space{} = space) do
+    for %{"type" => type, "plugin" => true} <- StepRegistry.all(),
+        reason = unavailable_reason(space, type),
+        into: %{},
+        do: {type, reason}
+  end
+
+  defp unavailable_reason(space, type) do
+    with :ok <- StepRegistry.availability(type),
+         :ok <- UsageLimits.can_use_encoding_step?(space, type) do
+      nil
+    else
+      {:unavailable, reason} ->
+        reason
+
+      {:error, reason} ->
+        Map.get(
+          UsageLimits.restriction_copy(:encoding_step, reason),
+          :notice,
+          "This step is not included for this space."
+        )
+    end
+  end
+
+  @recent_step_runs 60
+
+  @doc """
+  What the plugin steps of the space's most recent uploads did, by step id:
+  `%{status, progress, results, reason, at}`. `results` are the values the step
+  type asks to show (`MaveCore.Flow.StepRegistry.results/2`); `progress` is a
+  percentage while the step runs.
+  """
+  def step_activity(%Space{hash: space_hash}) do
+    case for %{"type" => type, "plugin" => true} <- StepRegistry.all(), do: type do
+      [] ->
+        %{}
+
+      types ->
+        StepRun
+        |> join(:inner, [step_run], run in Run, on: run.id == step_run.flow_run_id)
+        |> where(
+          [step_run, run],
+          step_run.step_type in ^types and
+            step_run.status in ["executing", "succeeded", "failed"] and
+            fragment("?->>'space_hash' = ?", run.input, ^space_hash)
+        )
+        |> order_by([step_run], desc: step_run.updated_at)
+        |> limit(@recent_step_runs)
+        |> Repo.all()
+        |> Enum.reduce(%{}, fn step_run, activity ->
+          Map.put_new(activity, step_run.step_id, describe_activity(step_run))
+        end)
+    end
+  end
+
+  defp describe_activity(%StepRun{} = step_run) do
+    output = step_run.output || %{}
+
+    %{
+      status: step_run.status,
+      progress: get_in(step_run.execution_metadata || %{}, ["progress", "percent"]),
+      progress_label: StepRegistry.progress_label(step_run.step_type),
+      results: StepRegistry.results(step_run.step_type, output),
+      reason: if(output["status"] in ["skipped", "unavailable"], do: output["reason"]),
+      at: step_run.completed_at || step_run.updated_at
+    }
+  end
 
   @doc """
   The flow new uploads of the space start from, before overrides: its template
@@ -89,7 +172,7 @@ defmodule MaveCore.Flow.Pipelines do
 
     with :ok <- can_edit?(space),
          {:ok, base} <- base(space),
-         {:ok, _definition} <- validate(base.definition, overrides),
+         {:ok, _definition} <- validate(space, base.definition, overrides),
          :ok <- ensure_changed(space, overrides) do
       insert_version(space, overrides, opts, @save_attempts)
     end
@@ -101,7 +184,8 @@ defmodule MaveCore.Flow.Pipelines do
   Runs started with `space_pipeline: %Space{}` get the space's overrides applied
   to the selected version. Runs without the option, with a pinned `:version`, or
   for a space without overrides use the selected version unchanged. Overrides
-  that no longer fit the flow are skipped rather than failing the upload.
+  that no longer fit the flow are skipped rather than failing the upload, and
+  add-on steps that became unavailable are left out.
   """
   def for_run(%Template{} = template, %Version{} = version, opts) do
     with %Space{} = space <- Keyword.get(opts, :space_pipeline),
@@ -116,6 +200,8 @@ defmodule MaveCore.Flow.Pipelines do
   end
 
   defp apply_to_run(space, pipeline, overrides, template, version) do
+    overrides = drop_unavailable_steps(space, version.definition, overrides)
+
     case Pipeline.apply(version.definition, overrides) do
       {:ok, definition} when definition == version.definition ->
         {template, version}
@@ -149,6 +235,19 @@ defmodule MaveCore.Flow.Pipelines do
 
         {template, version}
     end
+  end
+
+  defp drop_unavailable_steps(_space, _definition, %{"added_steps" => []} = overrides),
+    do: overrides
+
+  defp drop_unavailable_steps(space, definition, overrides) do
+    unavailable = unavailable_steps(space)
+
+    definition
+    |> Pipeline.resolve(overrides, unavailable: unavailable)
+    |> Map.fetch!(:steps)
+    |> Enum.filter(&(&1.addon and &1.state == :enabled and not &1.available))
+    |> Enum.reduce(overrides, &Pipeline.put_step_added(&2, &1.id, false))
   end
 
   defp derive_version(space, template, definition) do
@@ -213,8 +312,8 @@ defmodule MaveCore.Flow.Pipelines do
     |> Repo.one()
   end
 
-  defp validate(definition, overrides) do
-    case Pipeline.apply(definition, overrides) do
+  defp validate(space, definition, overrides) do
+    case Pipeline.apply(definition, overrides, unavailable: unavailable_steps(space)) do
       {:ok, definition} -> {:ok, definition}
       {:error, issues} -> {:error, {:invalid, issues}}
     end

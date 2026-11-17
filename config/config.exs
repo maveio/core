@@ -159,6 +159,9 @@ config :mave_core, :flow_step_retry_policy,
 
 config :mave_core, :flow_direct_storage_ffmpeg_input, true
 
+# Step types added on top of the built-in ones; see MaveCore.Flow.StepPlugin.
+config :mave_core, :flow_step_plugins, [MaveCore.Flow.Plugins.VmafQualityCheck]
+
 config :mave_core, :encoding_booster,
   enabled: false,
   endpoint: nil,

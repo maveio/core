@@ -3,8 +3,10 @@ defmodule MaveCore.Flow.Pipeline do
   Space-level changes to a flow definition.
 
   A pipeline is a small set of overrides on top of a flow definition: optional
-  steps that are turned off, and values for the step options a step type marks
-  as editable. Applying the overrides yields a regular flow definition that the
+  steps that are turned off, add-on steps that are turned on, and values for
+  the step options a step type marks as editable. Add-on steps are the steps
+  that step plugins offer for the flow (`MaveCore.Flow.StepRegistry.offered_steps/1`);
+  they are off until a space adds them. Applying the overrides yields a regular flow definition that the
   engine runs like any other, so the editor and the engine share one set of
   dependency rules:
 
@@ -28,7 +30,7 @@ defmodule MaveCore.Flow.Pipeline do
   @max_text_length 2_000
 
   @doc "Overrides that change nothing."
-  def empty, do: %{"disabled_steps" => [], "settings" => %{}}
+  def empty, do: %{"disabled_steps" => [], "added_steps" => [], "settings" => %{}}
 
   def empty?(overrides) do
     normalize(overrides) == empty()
@@ -39,13 +41,8 @@ defmodule MaveCore.Flow.Pipeline do
   non-empty string-keyed settings. Unknown keys are dropped.
   """
   def normalize(overrides) when is_map(overrides) do
-    disabled =
-      overrides
-      |> fetch_key("disabled_steps")
-      |> List.wrap()
-      |> Enum.filter(&(is_binary(&1) and &1 != ""))
-      |> Enum.uniq()
-      |> Enum.sort()
+    disabled = normalize_ids(fetch_key(overrides, "disabled_steps"))
+    added = normalize_ids(fetch_key(overrides, "added_steps"))
 
     settings =
       case fetch_key(overrides, "settings") do
@@ -53,10 +50,18 @@ defmodule MaveCore.Flow.Pipeline do
         _ -> %{}
       end
 
-    %{"disabled_steps" => disabled, "settings" => settings}
+    %{"disabled_steps" => disabled, "added_steps" => added, "settings" => settings}
   end
 
   def normalize(_overrides), do: empty()
+
+  defp normalize_ids(ids) do
+    ids
+    |> List.wrap()
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
 
   @doc "Turns a step off or back on in the overrides."
   def put_step_enabled(overrides, step_id, enabled?) when is_binary(step_id) do
@@ -70,6 +75,18 @@ defmodule MaveCore.Flow.Pipeline do
     normalize(%{overrides | "disabled_steps" => disabled})
   end
 
+  @doc "Adds an add-on step to the pipeline or removes it again."
+  def put_step_added(overrides, step_id, added?) when is_binary(step_id) do
+    overrides = normalize(overrides)
+
+    added =
+      if added?,
+        do: [step_id | overrides["added_steps"]],
+        else: List.delete(overrides["added_steps"], step_id)
+
+    normalize(%{overrides | "added_steps" => added})
+  end
+
   @doc "Sets one editable option of a step. `nil` and blank text restore the default."
   def put_setting(overrides, step_id, key, value) when is_binary(step_id) and is_binary(key) do
     overrides = normalize(overrides)
@@ -81,11 +98,11 @@ defmodule MaveCore.Flow.Pipeline do
   Applies overrides to a definition.
 
   Returns the definition the engine should run, or the issues that make the
-  overrides invalid for this definition.
+  overrides invalid for this definition. See `resolve/3` for the options.
   """
-  @spec apply(map(), overrides()) :: {:ok, map()} | {:error, [issue()]}
-  def apply(definition, overrides) do
-    case resolve(definition, overrides) do
+  @spec apply(map(), overrides(), keyword()) :: {:ok, map()} | {:error, [issue()]}
+  def apply(definition, overrides, opts \\ []) do
+    case resolve(definition, overrides, opts) do
       %{issues: [], definition: effective} -> {:ok, effective}
       %{issues: issues} -> {:error, issues}
     end
@@ -100,17 +117,35 @@ defmodule MaveCore.Flow.Pipeline do
   - `:disabled`: turned off by the overrides.
   - `:auto_disabled`: turned off because of the steps in `disabled_by`.
 
-  `locked` steps are required and cannot be turned off. `definition` is the
-  resulting flow definition, or `nil` when there are `issues`.
+  `locked` steps are required and cannot be turned off. `addon` steps come
+  from a step plugin and are `:disabled` until the overrides add them.
+  `definition` is the resulting flow definition, or `nil` when there are
+  `issues`.
+
+  Pass `unavailable: %{step_type => reason}` for step types that cannot be
+  used here; adding an add-on step of such a type is an issue.
   """
-  def resolve(definition, overrides) do
+  def resolve(definition, overrides, opts \\ []) do
     overrides = normalize(overrides)
-    steps = Definition.steps(definition)
+    unavailable = Keyword.get(opts, :unavailable, %{})
+    offered = StepRegistry.offered_steps(definition)
+    addons = MapSet.new(offered, & &1["id"])
+    steps = Definition.steps(definition) ++ offered
     by_id = Map.new(steps, &{&1["id"], &1})
+    added = MapSet.new(overrides["added_steps"], & &1) |> MapSet.intersection(addons)
+
+    unavailable_issues =
+      for step_id <- Enum.sort(added), reason = unavailable[by_id[step_id]["type"]] do
+        issue(
+          :step_unavailable,
+          step_id,
+          "#{step_name(by_id[step_id])} is not available: #{reason}"
+        )
+      end
 
     requested =
       overrides["disabled_steps"]
-      |> Enum.filter(&Map.has_key?(by_id, &1))
+      |> Enum.filter(&(Map.has_key?(by_id, &1) and not MapSet.member?(addons, &1)))
       |> MapSet.new()
 
     locked_issues =
@@ -118,11 +153,15 @@ defmodule MaveCore.Flow.Pipeline do
         issue(:required_step, step_id, "#{step_name(by_id[step_id])} is required and stays on.")
       end
 
-    requested = MapSet.reject(requested, &Definition.required?(by_id[&1]))
+    requested =
+      requested
+      |> MapSet.reject(&Definition.required?(by_id[&1]))
+      |> MapSet.union(MapSet.difference(addons, added))
+
     {disabled, causes, blocked_issues} = cascade(steps, by_id, requested)
 
     {settings_by_step, setting_issues} = resolve_settings(steps, overrides["settings"])
-    issues = locked_issues ++ blocked_issues ++ setting_issues
+    issues = locked_issues ++ unavailable_issues ++ blocked_issues ++ setting_issues
 
     effective = effective_definition(definition, steps, by_id, disabled, settings_by_step)
 
@@ -136,7 +175,18 @@ defmodule MaveCore.Flow.Pipeline do
       definition: if(issues == [], do: effective),
       issues: issues,
       overrides: overrides,
-      steps: describe_steps(steps, requested, disabled, causes, settings_by_step, overrides)
+      steps:
+        steps
+        |> describe_steps(requested, disabled, causes, settings_by_step, overrides)
+        |> Enum.map(fn step ->
+          reason = unavailable[step.type]
+
+          Map.merge(step, %{
+            addon: MapSet.member?(addons, step.id),
+            available: is_nil(reason),
+            unavailable_reason: reason
+          })
+        end)
     }
   end
 
@@ -145,8 +195,15 @@ defmodule MaveCore.Flow.Pipeline do
   the current overrides.
   """
   def also_disabled(definition, overrides, step_id) do
-    before = disabled_ids(resolve(definition, overrides))
-    after_toggle = disabled_ids(resolve(definition, put_step_enabled(overrides, step_id, false)))
+    current = resolve(definition, overrides)
+    before = disabled_ids(current)
+
+    off =
+      if Enum.any?(current.steps, &(&1.id == step_id and &1.addon)),
+        do: put_step_added(overrides, step_id, false),
+        else: put_step_enabled(overrides, step_id, false)
+
+    after_toggle = disabled_ids(resolve(definition, off))
 
     after_toggle
     |> MapSet.difference(before)
@@ -157,14 +214,15 @@ defmodule MaveCore.Flow.Pipeline do
   @doc "A short human summary of what the overrides change in the definition."
   def summary(definition, overrides) do
     resolution = resolve(definition, overrides)
-    off = Enum.count(resolution.steps, &(&1.state != :enabled))
+    off = Enum.count(resolution.steps, &(not &1.addon and &1.state != :enabled))
+    added = Enum.count(resolution.steps, &(&1.addon and &1.state == :enabled))
 
     changed =
       resolution.steps
       |> Enum.flat_map(& &1.settings)
       |> Enum.count(& &1.changed)
 
-    %{steps_off: off, settings_changed: changed}
+    %{steps_off: off, steps_added: added, settings_changed: changed}
   end
 
   defp disabled_ids(resolution) do
@@ -477,6 +535,9 @@ defmodule MaveCore.Flow.Pipeline do
 
   defp fetch_key(map, "disabled_steps"),
     do: Map.get(map, "disabled_steps") || Map.get(map, :disabled_steps)
+
+  defp fetch_key(map, "added_steps"),
+    do: Map.get(map, "added_steps") || Map.get(map, :added_steps)
 
   defp fetch_key(map, "settings"), do: Map.get(map, "settings") || Map.get(map, :settings)
 

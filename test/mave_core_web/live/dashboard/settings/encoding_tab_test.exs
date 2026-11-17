@@ -4,6 +4,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.EncodingTabTest do
   import Phoenix.LiveViewTest
 
   alias MaveCore.Accounts
+  alias MaveCore.Flow
   alias MaveCore.Flow.Pipelines
 
   defmodule ManagedPipeline do
@@ -18,10 +19,29 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.EncodingTabTest do
     def restriction_copy(_operation, _reason), do: %{}
   end
 
+  defmodule PaidSteps do
+    @behaviour MaveCore.UsageLimits
+    def can_create_video_embed?(_space), do: :ok
+    def can_add_space_member?(_space, _role), do: :ok
+    def can_use_encoding_step?(_space, _type), do: {:error, :plan}
+    def restriction_copy(:encoding_step, :plan), do: %{notice: "Included from the Pro plan."}
+    def restriction_copy(_operation, _reason), do: %{}
+  end
+
   setup do
     old_backend = Application.get_env(:mave_core, :usage_limits_backend)
+    old_plugins = Application.get_env(:mave_core, :flow_step_plugins)
+    old_storage = Application.get_env(:mave_core, :flow_storage_adapter)
+    Application.put_env(:mave_core, :flow_step_plugins, [MaveCore.TestSupport.StepPluginStub])
 
     on_exit(fn ->
+      Application.put_env(:mave_core, :flow_step_plugins, old_plugins)
+      Application.delete_env(:mave_core, :step_plugin_stub_availability)
+
+      if old_storage,
+        do: Application.put_env(:mave_core, :flow_storage_adapter, old_storage),
+        else: Application.delete_env(:mave_core, :flow_storage_adapter)
+
       if old_backend,
         do: Application.put_env(:mave_core, :usage_limits_backend, old_backend),
         else: Application.delete_env(:mave_core, :usage_limits_backend)
@@ -154,6 +174,115 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.EncodingTabTest do
 
     assert has_element?(view, "#pipeline-step-video_h264_uhd[data-state=enabled]")
     assert Pipelines.current(space) == nil
+  end
+
+  describe "plugin steps" do
+    test "are offered as add-ons that a space can add and configure", %{conn: conn} do
+      {conn, space} = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, "/settings/encoding")
+
+      assert has_element?(view, "#pipeline-stage-checks", "Checks")
+      assert has_element?(view, "#pipeline-legend-addon")
+      assert has_element?(view, "#pipeline-step-count_source[data-state=disabled]")
+      assert has_element?(view, "#pipeline-count-added", "0")
+
+      view |> element("#pipeline-step-count_source") |> render_click()
+      assert has_element?(view, "#pipeline-step-plugin", "Add-on")
+      assert has_element?(view, "#pipeline-step-state", "Not added")
+      assert has_element?(view, "#pipeline-step-inputs", "Source file")
+      refute has_element?(view, "#pipeline-step-results")
+
+      view |> element("#pipeline-toggle-count_source") |> render_click()
+      assert has_element?(view, "#pipeline-step-count_source[data-state=enabled]")
+      assert has_element?(view, "#pipeline-step-state", "Added")
+      assert has_element?(view, "#pipeline-step-results", "No results yet")
+
+      view
+      |> form("#pipeline-settings-count_source", %{"setting" => %{"limit" => "5"}})
+      |> render_change()
+
+      view |> form("#pipeline-save-form") |> render_submit()
+
+      assert %{version: 1, overrides: overrides} = Pipelines.current(space)
+      assert overrides["added_steps"] == ["count_source"]
+      assert overrides["settings"] == %{"count_source" => %{"limit" => "5"}}
+      assert has_element?(view, "#pipeline-version-1", "1 add-on added")
+    end
+
+    test "show the results of the latest upload", %{conn: conn} do
+      {conn, space} = authenticated_conn(conn)
+      {:ok, _} = Pipelines.save(space, %{"added_steps" => ["count_source"]})
+      run_upload(space)
+
+      {:ok, view, _html} = live(conn, "/settings/encoding")
+      assert has_element?(view, "#pipeline-step-result-count_source", "15 B")
+
+      view |> element("#pipeline-step-count_source") |> render_click()
+      assert has_element?(view, "#pipeline-step-results", "Size")
+      assert has_element?(view, "#pipeline-step-results", "15 B")
+      assert has_element?(view, "#pipeline-step-results", "Within limit")
+    end
+
+    test "cannot be added when the installation cannot run them", %{conn: conn} do
+      {conn, space} = authenticated_conn(conn)
+
+      Application.put_env(
+        :mave_core,
+        :step_plugin_stub_availability,
+        {:unavailable, "No counter."}
+      )
+
+      {:ok, view, _html} = live(conn, "/settings/encoding")
+
+      view |> element("#pipeline-step-count_source") |> render_click()
+      assert has_element?(view, "#pipeline-step-effect", "No counter.")
+      assert has_element?(view, "#pipeline-toggle-count_source.pointer-events-none")
+
+      render_hook_toggle(view, "count_source")
+      assert has_element?(view, "#pipeline-step-count_source[data-state=disabled]")
+      refute has_element?(view, "#pipeline-dirty")
+      assert Pipelines.current(space) == nil
+    end
+
+    test "explain when the host does not include them", %{conn: conn} do
+      {conn, _space} = authenticated_conn(conn)
+      Application.put_env(:mave_core, :usage_limits_backend, PaidSteps)
+      {:ok, view, _html} = live(conn, "/settings/encoding")
+
+      view |> element("#pipeline-step-count_source") |> render_click()
+      assert has_element?(view, "#pipeline-step-effect", "Included from the Pro plan.")
+      assert has_element?(view, "#pipeline-toggle-count_source.pointer-events-none")
+    end
+  end
+
+  defp run_upload(space) do
+    Application.put_env(
+      :mave_core,
+      :flow_storage_adapter,
+      MaveCore.TestSupport.FlowStorageAdapterStub
+    )
+
+    assert {:ok, %{status: "succeeded"}} =
+             Flow.run_inline(
+               "publish_default",
+               %{
+                 "space_hash" => space.hash,
+                 "embed_hash" => "LeDE9v86ye",
+                 "input_url" => "https://example.com/video.mp4",
+                 "source_body" => "stub-media-body",
+                 "source_content_type" => "video/mp4",
+                 "media_package_hls_variant_strict" => false,
+                 "media_package_hls_audio_strict" => false,
+                 "media_probe" => %{
+                   "duration" => 10.0,
+                   "size_bytes" => 15,
+                   "filetype" => "mp4",
+                   "aspect_ratio" => "16 / 9",
+                   "streams" => []
+                 }
+               },
+               space_pipeline: space
+             )
   end
 
   # Sends the toggle event directly, as a crafted client could.

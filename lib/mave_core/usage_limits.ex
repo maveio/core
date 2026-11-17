@@ -13,6 +13,7 @@ defmodule MaveCore.UsageLimits do
   @callback can_manage_audio_description?(Space.t()) :: :ok | {:error, term()}
   @callback can_use_audio_description?(Space.t()) :: :ok | {:error, term()}
   @callback can_edit_encoding_pipeline?(Space.t()) :: :ok | {:error, term()}
+  @callback can_use_encoding_step?(Space.t(), String.t()) :: :ok | {:error, term()}
   @callback restriction_copy(atom(), term()) :: %{optional(atom()) => String.t()}
 
   @optional_callbacks can_view_space_data?: 1,
@@ -20,6 +21,7 @@ defmodule MaveCore.UsageLimits do
                       can_use_audio_description?: 1,
                       can_manage_audio_description?: 1,
                       can_edit_encoding_pipeline?: 1,
+                      can_use_encoding_step?: 2,
                       restriction_copy: 2
 
   def can_create_video_embed?(%Space{} = space) do
@@ -53,6 +55,15 @@ defmodule MaveCore.UsageLimits do
   """
   def can_edit_encoding_pipeline?(%Space{} = space) do
     dispatch(:can_edit_encoding_pipeline?, [space])
+  end
+
+  @doc """
+  Whether a space may add a plugin step type, such as `"quality.vmaf"`, to its
+  encoding pipeline. Allowed when the host has no policy for it. Hosts explain
+  a refusal with `restriction_copy(:encoding_step, reason)`.
+  """
+  def can_use_encoding_step?(%Space{} = space, step_type) when is_binary(step_type) do
+    dispatch(:can_use_encoding_step?, [space, step_type])
   end
 
   def can_upload_file?(%Space{} = space, size) when is_integer(size) or is_nil(size) do

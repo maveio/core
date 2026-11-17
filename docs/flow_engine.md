@@ -133,7 +133,9 @@ lets a member:
 
 - turn optional steps off, for example the 4K rendition;
 - change the step options a step type marks as editable, such as the
-  transcription vocabulary or the number of storyboard frames.
+  transcription vocabulary or the number of storyboard frames;
+- add the steps that [step plugins](#step-plugins) offer, such as a VMAF
+  quality check.
 
 ![Encoding settings with the 4K rendition turned off, the steps it needs and feeds, and the steps that turned off with it.](images/dashboard-encoding-pipeline.png)
 
@@ -152,6 +154,7 @@ It stores only the overrides, keyed by step id:
 ```json
 {
   "disabled_steps": ["video_h264_uhd"],
+  "added_steps": ["vmaf_h264_fhd"],
   "settings": {"transcribe_audio": {"context": "Mave, Hovercraft"}}
 }
 ```
@@ -181,6 +184,100 @@ The text is split into single words (at most 100) and passed to the
 transcription provider as the `:context` option; the built-in Mistral provider
 sends it as `context_bias`, and transcribes without it when the configured
 model rejects the option. Custom providers may ignore `:context`.
+
+## Step plugins
+
+A step plugin adds a step type to Mave without changing Core. It is a module
+that brings its own contract and execution
+([`StepPlugin`](../lib/mave_core/flow/step_plugin.ex)):
+
+```elixir
+defmodule MyApp.Steps.Watermark do
+  @behaviour MaveCore.Flow.Step
+  @behaviour MaveCore.Flow.StepPlugin
+
+  @impl MaveCore.Flow.StepPlugin
+  def contract do
+    %{
+      type: "branding.watermark",
+      name: "Watermark",
+      description: "Burns a logo into a rendition.",
+      stage: "video",
+      executor: :flame,
+      inputs: [
+        %{
+          "key" => "rendition",
+          "label" => "Rendition",
+          "accepts" => ["media.transcode_h264_ladder"]
+        }
+      ],
+      outputs: [%{"key" => "video", "label" => "Watermarked video"}],
+      options: [
+        %{
+          "key" => "opacity",
+          "type" => "integer",
+          "label" => "Opacity",
+          "default" => 60,
+          "min" => 10,
+          "max" => 100,
+          "editable" => true
+        }
+      ],
+      progress: %{"label" => "watermarking"},
+      results: [
+        %{"key" => "file_size", "label" => "File size", "format" => "integer", "unit" => "bytes"}
+      ]
+    }
+  end
+
+  @impl MaveCore.Flow.Step
+  def run(step, context), do: {:ok, %{"file_size" => 0}, []}
+end
+```
+
+```elixir
+config :mave_core, :flow_step_plugins, [
+  MaveCore.Flow.Plugins.VmafQualityCheck,
+  MyApp.Steps.Watermark
+]
+```
+
+A registered type validates in flow definitions, runs in the engine and is
+listed by `GET /v1/flow/step-types` with its `inputs`, `outputs`, `progress`
+and `results`. The encoding editor uses the same contract: `stage` places the
+step, `inputs` name its connections, editable `options` become its settings,
+the `progress` label names the work while it runs, and `results` are read from
+the step output and shown on the step and on the flow runs page. A contract
+that is invalid or reuses a built-in type is ignored with a warning.
+
+Two optional callbacks cover the rest:
+
+- `placements/1` returns steps of this type that fit a given flow. The editor
+  offers them as add-ons that are off until a space adds them; added steps are
+  stored as `"added_steps"` in the pipeline overrides and are always optional.
+  Without placements, a plugin step can still be used in custom templates.
+- `availability/0` reports whether this installation can run the step.
+
+Whether a customer may use a step is a host decision: implement
+`can_use_encoding_step?/2` in the `:usage_limits_backend` and explain a refusal
+with `restriction_copy(:encoding_step, reason)`. The editor shows the reason
+instead of the toggle, saving is rejected, and a step that became unavailable
+is left out of new runs.
+
+### VMAF quality check
+
+[`VmafQualityCheck`](../lib/mave_core/flow/plugins/vmaf_quality_check.ex) is the
+reference plugin and is registered by default. It offers one check per H.264
+rendition. An added check runs in the background once its rendition exists,
+scores it against the original with VMAF (both scaled to the source size,
+within 1080p) and records the score, the lowest frame and whether it meets the
+target. A low score never fails the run.
+
+![Encoding settings with VMAF checks added for 720p and 1080p and the scores of the latest upload.](images/dashboard-encoding-step-plugin.png)
+
+The step needs an FFmpeg with the `libvmaf` filter and its built-in models
+(`--enable-libvmaf`). The FFmpeg in Core's Docker image is built without it, so
+the checks show as unavailable there until FFmpeg is rebuilt with libvmaf.
 
 ## Execution and recovery
 

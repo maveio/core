@@ -15,9 +15,22 @@ defmodule MaveCore.Flow.PipelinesTest do
     def can_edit_encoding_pipeline?(_space), do: {:error, :managed_pipeline}
   end
 
+  defmodule PaidSteps do
+    @behaviour MaveCore.UsageLimits
+    def can_create_video_embed?(_space), do: :ok
+    def can_add_space_member?(_space, _role), do: :ok
+    def can_use_encoding_step?(_space, "test.count_bytes"), do: {:error, :plan}
+    def can_use_encoding_step?(_space, _type), do: :ok
+
+    def restriction_copy(:encoding_step, :plan), do: %{notice: "Included from the Pro plan."}
+    def restriction_copy(_operation, _reason), do: %{}
+  end
+
   setup do
     old_storage_adapter = Application.get_env(:mave_core, :flow_storage_adapter)
     old_backend = Application.get_env(:mave_core, :usage_limits_backend)
+    old_plugins = Application.get_env(:mave_core, :flow_step_plugins)
+    Application.put_env(:mave_core, :flow_step_plugins, [MaveCore.TestSupport.StepPluginStub])
 
     Application.put_env(
       :mave_core,
@@ -28,6 +41,8 @@ defmodule MaveCore.Flow.PipelinesTest do
     on_exit(fn ->
       restore_env(:flow_storage_adapter, old_storage_adapter)
       restore_env(:usage_limits_backend, old_backend)
+      restore_env(:flow_step_plugins, old_plugins)
+      Application.delete_env(:mave_core, :step_plugin_stub_availability)
     end)
 
     {:ok, user} =
@@ -228,6 +243,90 @@ defmodule MaveCore.Flow.PipelinesTest do
       refute Repo.get_by(StepRun, flow_run_id: run.id, step_id: "transcribe_audio")
       refute Repo.get_by(StepRun, flow_run_id: run.id, step_id: "hls_master_high")
     end
+  end
+
+  describe "add-on steps" do
+    test "run for new uploads once a space adds them and report their results", %{space: space} do
+      assert Pipelines.unavailable_steps(space) == %{}
+      assert Pipelines.step_activity(space) == %{}
+
+      {:ok, _} =
+        Pipelines.save(space, %{
+          "added_steps" => ["count_source"],
+          "settings" => %{"count_source" => %{"limit" => "5"}}
+        })
+
+      assert {:ok, run} = run_inline(space)
+      assert run.status == "succeeded"
+
+      step_run = Repo.get_by!(StepRun, flow_run_id: run.id, step_id: "count_source")
+      assert step_run.step_type == "test.count_bytes"
+      assert step_run.input["params"] == %{"limit" => 5}
+
+      assert %{
+               "count_source" => %{
+                 status: "succeeded",
+                 results: [
+                   %{label: "Size", text: "15 B", primary: true},
+                   %{label: "Within limit", text: "No"}
+                 ]
+               }
+             } = Pipelines.step_activity(space)
+    end
+
+    test "cannot be added when the installation cannot run them", %{space: space} do
+      Application.put_env(
+        :mave_core,
+        :step_plugin_stub_availability,
+        {:unavailable, "No counter."}
+      )
+
+      assert Pipelines.unavailable_steps(space) == %{"test.count_bytes" => "No counter."}
+
+      assert {:error, {:invalid, [%{code: :step_unavailable, step_id: "count_source"}]}} =
+               Pipelines.save(space, %{"added_steps" => ["count_source"]})
+    end
+
+    test "follow the host's policy, also for a pipeline that was saved earlier", %{space: space} do
+      {:ok, _} =
+        Pipelines.save(space, %{
+          "added_steps" => ["count_source"],
+          "disabled_steps" => ["video_h264_uhd"]
+        })
+
+      Application.put_env(:mave_core, :usage_limits_backend, PaidSteps)
+
+      assert Pipelines.unavailable_steps(space) ==
+               %{"test.count_bytes" => "Included from the Pro plan."}
+
+      assert {:error, {:invalid, [%{code: :step_unavailable}]}} =
+               Pipelines.save(space, %{"added_steps" => ["count_source"]})
+
+      assert {:ok, run} = start_run(space)
+      step_ids = Enum.map(Definition.steps(run.flow_version.definition), & &1["id"])
+      refute "count_source" in step_ids
+      refute "video_h264_uhd" in step_ids
+    end
+  end
+
+  defp run_inline(space) do
+    Flow.run_inline(
+      "publish_default",
+      Map.merge(input(space), %{
+        "source_body" => "stub-media-body",
+        "source_content_type" => "video/mp4",
+        "media_package_hls_variant_strict" => false,
+        "media_package_hls_audio_strict" => false,
+        "media_probe" => %{
+          "duration" => 10.0,
+          "size_bytes" => 15,
+          "filetype" => "mp4",
+          "aspect_ratio" => "16 / 9",
+          "streams" => []
+        }
+      }),
+      space_pipeline: space
+    )
   end
 
   defp start_run(space) do
