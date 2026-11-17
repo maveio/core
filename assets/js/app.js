@@ -28,6 +28,7 @@ import topbar from "../vendor/topbar"
 import "@lottiefiles/lottie-player"
 import { ChartHook } from "./hooks/chart"
 import { cdn } from "./upload"
+import { LanguagePickerHook } from "./hooks/language_picker"
 import { FileMenuHook } from "./hooks/file_menu"
 import { TextEditorPreviewHook } from "./hooks/text_editor_preview"
 import { ModalResizeHook } from "./hooks/modal_resize"
@@ -723,6 +724,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
     thumbnail_preview: ThumbnailPreviewHook,
     auto_open_file_picker: AutoOpenFilePickerHook,
     file_menu: FileMenuHook,
+    language_picker: LanguagePickerHook,
     text_editor_preview: TextEditorPreviewHook,
     modal_resize: ModalResizeHook,
     description_document: DescriptionDocumentHook,

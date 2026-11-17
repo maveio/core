@@ -376,7 +376,7 @@ defmodule MaveCoreWeb.DashboardComponents.Settings do
 
       <div
         id={"#{@id}-dropdown"}
-        class="absolute z-10 top-8 -left-1.5 w-56 pr-3.5 hidden"
+        class="dashboard-menu-panel absolute z-50 top-full left-0 mt-2 hidden p-2"
         phx-click-away={
           JS.hide(
             to: "##{@id}-dropdown",
@@ -384,10 +384,7 @@ defmodule MaveCoreWeb.DashboardComponents.Settings do
           )
         }
       >
-        <div class={[
-          "w-full h-full p-1 bg-stone-900 rounded shadow border border-stone-800 ring-1 ring-inset ring-stone-700/50",
-          "grid grid-cols-8"
-        ]}>
+        <div class="grid grid-cols-7 justify-items-center gap-y-1">
           <div :for={{hex, _class} <- @colors} class="p-1">
             <div
               phx-click={

@@ -2203,8 +2203,27 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
       })
       |> Repo.insert!()
 
+    japanese =
+      Repo.insert!(%Subtitle{
+        video_id: video.asset.current_video_id,
+        language: "ja",
+        path: "subtitle_ja.vtt"
+      })
+
     {:ok, view, html} = live(conn, "/videos/#{video.id}")
     subtitle_download_path = "/#{space.id}/videos/#{video.id}/subtitles/#{subtitle.id}/download"
+
+    language_form = "#subtitle-language-form-#{subtitle.id}"
+    assert has_element?(view, "#{language_form} option[value=nl]", "Dutch")
+    assert has_element?(view, "#{language_form} [phx-hook=language_picker][data-preferred~=nl]")
+
+    assert has_element?(
+             view,
+             "#subtitle-language-form-#{japanese.id} option[value=ja][selected]",
+             "Japanese"
+           )
+
+    assert has_element?(view, "#subtitle-language-#{japanese.id} button", "Japanese")
 
     assert html =~ "subtitles"
     assert html =~ "English"
@@ -2286,6 +2305,50 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     assert {:ok, saved} = FlowStorageAdapterStub.get(bucket, updated.path, space.region)
     assert saved == pasted
     assert {:ok, ^body} = FlowStorageAdapterStub.get(bucket, key, space.region)
+
+    version = MaveCore.Embeds.current_video_version(embed)
+    prefix = if version > 0, do: "#{embed.hash}/v#{version}", else: embed.hash
+
+    assert {:ok, json} =
+             FlowStorageAdapterStub.get(bucket, "#{prefix}/subtitle_en.json", space.region)
+
+    assert {:ok, ^json} =
+             FlowStorageAdapterStub.get(bucket, "#{prefix}/subtitle.json", space.region)
+
+    assert %{
+             "text" => "Hello again Second line",
+             "segments" => [%{"start" => 2.0, "end" => 4.5, "words" => words}]
+           } = Jason.decode!(json)
+
+    assert Enum.map(words, & &1["word"]) == ~w(Hello again Second line)
+
+    translated =
+      Repo.insert!(%Subtitle{
+        video_id: embed.asset.current_video_id,
+        language: "nl",
+        path: "#{prefix}/subtitle_nl.vtt"
+      })
+
+    {:ok, _} =
+      FlowStorageAdapterStub.put_public(bucket, translated.path, body, "text/vtt", space.region)
+
+    {:ok, editor} = MaveCore.Assets.load_subtitle_document(embed, translated.id)
+
+    assert {:ok, _} =
+             MaveCore.Assets.save_subtitle_document(
+               embed,
+               translated.id,
+               editor.revision,
+               String.replace(body, "Hello world", "Hallo wereld")
+             )
+
+    assert {:ok, nl} =
+             FlowStorageAdapterStub.get(bucket, "#{prefix}/subtitle_nl.json", space.region)
+
+    assert Jason.decode!(nl)["text"] == "Hallo wereld"
+
+    assert {:ok, ^json} =
+             FlowStorageAdapterStub.get(bucket, "#{prefix}/subtitle.json", space.region)
 
     view |> element("#subtitle-edit-text-#{subtitle.id}") |> render_click()
 

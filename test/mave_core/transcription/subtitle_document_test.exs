@@ -82,6 +82,23 @@ defmodule MaveCore.Transcription.SubtitleDocumentTest do
     end
   end
 
+  test "edited transcript JSON preserves word timings for unchanged cues" do
+    {:ok, document} = SubtitleDocument.parse(@vtt)
+    previous = Jason.decode!(SubtitleDocument.transcript_json(document, %{}))
+    original = put_in(previous, ["segments", Access.at(0), "words", Access.at(0), "end"], 1.123)
+    first = hd(original["segments"])
+
+    {:ok, changed} =
+      SubtitleDocument.parse(String.replace(@vtt, "Second line", "Different words"))
+
+    json = Jason.decode!(SubtitleDocument.transcript_json(changed, original))
+
+    assert [^first, %{"start" => 4.0, "end" => 6.0, "text" => "Different words"}] =
+             json["segments"]
+
+    assert json["text"] == "Hello & welcome Different words"
+  end
+
   test "existing simultaneous subtitles remain editable" do
     source = String.replace(@vtt, "00:04.000", "00:01.000")
     {:ok, document} = SubtitleDocument.parse(source)

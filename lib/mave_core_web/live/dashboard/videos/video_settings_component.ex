@@ -1138,7 +1138,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           <p :if={@subtitle_editor.error} role="alert" class="mt-6 text-sm text-red-400">
             {@subtitle_editor.error}
           </p>
-          <div class="flex shrink-0 items-center justify-between gap-4 border-t border-stone-800 bg-stone-900 py-3">
+          <div class="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-stone-800 bg-stone-900 py-3">
             <.dash_button
               variant="link"
               type="button"
@@ -1162,14 +1162,14 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             <.dash_button
               variant="primary"
               loading_on_submit
+              loading_label={gettext("Saving…")}
+              class="min-w-28 shrink-0 justify-center whitespace-nowrap"
               disabled={
                 !subtitle_editor_changed?(@subtitle_editor) or
                   !valid_editor_labels?(@subtitle_editor)
               }
             >
-              {if @subtitle_editor.kind == :audio_description,
-                do: gettext("Save draft"),
-                else: gettext("Save changes")}
+              {gettext("Save")}
             </.dash_button>
           </div>
           <template data-preview-template>
@@ -2494,7 +2494,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         aria-labelledby={@trigger_id}
         data-file-menu-panel
         style="display: none;"
-        class="fixed z-[100] w-52 overflow-hidden rounded-lg bg-stone-800 text-sm shadow-xl shadow-black/40 ring-1 ring-white/10"
+        class="dashboard-menu-panel fixed z-[100] overflow-hidden text-sm"
       >
         <div :for={item <- @items} class={item.separator && "border-t border-white/10"}>
           <a
@@ -2744,30 +2744,12 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
                 phx-target={@myself}
               >
                 <input type="hidden" name="_track_id" value={track.id} />
-                <select
+                <.language_picker
+                  id={"#{@control_prefix}-language-#{track.id}"}
                   name="audio_track[language]"
-                  class="w-full h-6 bg-stone-800 border-b border-stone-800 px-2 py-0.5 pr-7 text-sm text-stone-400 outline-none focus:ring-blue-600 ring-1 rounded-sm ring-transparent appearance-none"
-                >
-                  {Phoenix.HTML.Form.options_for_select(@language_options, track.language || "")}
-                </select>
-                <div class="absolute right-0 top-0 w-6 h-6 bg-stone-800 flex items-center justify-center text-stone-500 opacity-60 pointer-events-none">
-                  <svg
-                    class="w-3"
-                    width="24"
-                    height="24"
-                    stroke-width="2.5"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      d="M6 9L12 15L18 9"
-                      stroke="currentColor"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </div>
+                  value={track.language}
+                  options={@language_options}
+                />
               </form>
             </div>
           </div>
@@ -2845,33 +2827,12 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
                   class="w-full h-6 bg-stone-800 border-b border-stone-800 px-2 py-0.5 text-sm text-stone-400 outline-none focus:ring-blue-600 ring-1 rounded-sm ring-transparent"
                 />
                 <div class="relative">
-                  <select
+                  <.language_picker
+                    id={"new-#{@control_prefix}-language"}
                     name="audio_track[language]"
-                    class="w-full h-6 bg-stone-800 border-b border-stone-800 px-2 py-0.5 pr-7 text-sm text-stone-400 outline-none focus:ring-blue-600 ring-1 rounded-sm ring-transparent appearance-none"
-                  >
-                    {Phoenix.HTML.Form.options_for_select(
-                      @language_options,
-                      @audio_track_form.language || ""
-                    )}
-                  </select>
-                  <div class="absolute right-0 top-0 w-6 h-6 bg-stone-800 flex items-center justify-center text-stone-500 opacity-60 pointer-events-none">
-                    <svg
-                      class="w-3"
-                      width="24"
-                      height="24"
-                      stroke-width="2.5"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                    >
-                      <path
-                        d="M6 9L12 15L18 9"
-                        stroke="currentColor"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      />
-                    </svg>
-                  </div>
+                    value={@audio_track_form.language}
+                    options={@language_options}
+                  />
                 </div>
               </form>
             </div>
@@ -2975,30 +2936,12 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             >
               <input type="hidden" name="subtitle[id]" value={subtitle.id} />
               <div class="relative">
-                <select
+                <.language_picker
+                  id={"subtitle-language-#{subtitle.id}"}
                   name="subtitle[language]"
-                  class="w-full h-6 bg-stone-800 border-b border-stone-800 px-2 py-0.5 pr-7 text-sm text-stone-400 outline-none focus:ring-blue-600 ring-1 rounded-sm ring-transparent appearance-none"
-                >
-                  {Phoenix.HTML.Form.options_for_select(@language_options, subtitle.language || "")}
-                </select>
-                <div class="absolute right-0 top-0 w-6 h-6 bg-stone-800 flex items-center justify-center text-stone-500 opacity-60 pointer-events-none">
-                  <svg
-                    class="w-3"
-                    width="24"
-                    height="24"
-                    stroke-width="2.5"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      d="M6 9L12 15L18 9"
-                      stroke="currentColor"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </div>
+                  value={subtitle.language}
+                  options={@language_options}
+                />
               </div>
             </form>
           </div>
@@ -3051,33 +2994,12 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
                 class="w-full"
               >
                 <div class="relative">
-                  <select
+                  <.language_picker
+                    id="new-subtitle-language"
                     name="subtitle[language]"
-                    class="w-full h-6 bg-stone-800 border-b border-stone-800 px-2 py-0.5 pr-7 text-sm text-stone-400 outline-none focus:ring-blue-600 ring-1 rounded-sm ring-transparent appearance-none"
-                  >
-                    {Phoenix.HTML.Form.options_for_select(
-                      @language_options,
-                      @subtitle_form.language || ""
-                    )}
-                  </select>
-                  <div class="absolute right-0 top-0 w-6 h-6 bg-stone-800 flex items-center justify-center text-stone-500 opacity-60 pointer-events-none">
-                    <svg
-                      class="w-3"
-                      width="24"
-                      height="24"
-                      stroke-width="2.5"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                    >
-                      <path
-                        d="M6 9L12 15L18 9"
-                        stroke="currentColor"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      />
-                    </svg>
-                  </div>
+                    value={@subtitle_form.language}
+                    options={@language_options}
+                  />
                 </div>
               </form>
             </div>
@@ -3710,8 +3632,62 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     if Enum.any?(renditions, &(&1.status == "failed")), do: "failed", else: nil
   end
 
-  defp language_options do
-    [{"Select language", ""} | Languages.spoken_languages()]
+  @preferred_media_languages ~w(nl en fr de es it pt da fi no sv pl cs el ro uk)
+  defp language_options, do: [{gettext("Select language"), ""} | Languages.spoken_languages()]
+
+  attr :id, :string, required: true
+  attr :name, :string, required: true
+  attr :value, :string, default: nil
+  attr :options, :list, required: true
+
+  defp language_picker(assigns) do
+    assigns = assign(assigns, :preferred, Enum.join(@preferred_media_languages, " "))
+
+    ~H"""
+    <div id={@id} phx-hook="language_picker" data-preferred={@preferred} class="relative">
+      <select name={@name} class="w-full h-6 bg-stone-800 px-2 text-sm text-stone-400">
+        {Phoenix.HTML.Form.options_for_select(@options, @value || "")}
+      </select>
+      <button
+        type="button"
+        hidden
+        data-file-menu-trigger="true"
+        aria-haspopup="dialog"
+        aria-expanded="false"
+        aria-controls={"#{@id}-panel"}
+        class="w-full h-6 items-center justify-between rounded-sm bg-stone-800 px-2 text-sm text-stone-400 cursor-pointer focus-visible:ring-1 focus-visible:ring-blue-500"
+      >
+        <span>{Languages.spoken_language(@value) || blank_to_nil(@value) || gettext("Select language")}</span>
+        <.icon name="hero-chevron-down" class="h-3 w-3" />
+      </button>
+      <div
+        id={"#{@id}-panel"}
+        data-file-menu-panel
+        style="display: none;"
+        role="dialog"
+        aria-label={gettext("Select language")}
+        class="dashboard-menu-panel fixed z-[100] p-1 text-sm text-stone-200"
+      >
+        <input
+          type="search"
+          aria-label={gettext("Search languages")}
+          placeholder={gettext("Search languages…")}
+          autocomplete="off"
+          class="w-full rounded bg-stone-900 px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-blue-500"
+        />
+        <div
+          data-language-results
+          role="menu"
+          aria-label={gettext("Languages")}
+          class="mt-1 max-h-[min(14rem,45vh)] overflow-y-auto"
+        >
+        </div>
+        <p data-empty hidden class="px-2 py-1 text-xs text-stone-400">
+          {gettext("No matching languages")}
+        </p>
+      </div>
+    </div>
+    """
   end
 
   defp active_audio_upload_target?(%{audio_track_id: id}, %{id: id}), do: true
