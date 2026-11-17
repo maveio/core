@@ -5,6 +5,37 @@ defmodule MaveCore.AudioDescription.SpeechTiming do
   @vowels ~r/[aeiouyáéíóúàèìòùäëïöü]+/iu
   @tokens ~r/\p{L}+|\d+(?:[.,:]\d+)*/u
 
+  @doc "Estimate an edit relative to the published text's existing audio timing."
+  def estimate_edit(text, original, duration, language) do
+    text = editor_spoken_text(text)
+    original = editor_spoken_text(original)
+
+    cond do
+      String.trim(text) == "" ->
+        0.0
+
+      text == original ->
+        duration
+
+      duration > 0 and String.trim(original) != "" ->
+        original_estimate = estimate(original, language)["estimated_seconds"]
+        edited_estimate = estimate(text, language)["estimated_seconds"]
+        Float.round(duration * edited_estimate / original_estimate, 3)
+
+      true ->
+        estimate(text, language)["estimated_seconds"]
+    end
+  end
+
+  @doc "Exclude typed time-label syntax from editor estimates without changing the saved text."
+  def editor_spoken_text(text) do
+    ~r/\[([0-9:.,-]*)(\]?)/u
+    |> Regex.replace(text, fn full, value, closing ->
+      if closing == "]" and not String.contains?(value, ":"), do: full, else: ""
+    end)
+    |> String.trim()
+  end
+
   @doc "Estimate natural speech without a provider call; coefficients are heuristics, not measured voice rates."
   def estimate(text, language) do
     spoken = Pronunciation.for_speech(text, language)

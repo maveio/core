@@ -23,6 +23,10 @@ defmodule MaveCoreWeb.DashboardComponents.Modals do
   attr :on_cancel, JS, required: true
   attr :id, :string, default: "modal"
   attr :static, :boolean, default: false, doc: "Use static positioning (for storybook preview)"
+  attr :panel_class, :string, default: "w-96"
+  attr :theme, :string, values: ~w(light dark), default: "light"
+  attr :compact, :boolean, default: false
+  attr :interactive_background, :boolean, default: false
   slot :inner_block, required: true
 
   def modal(assigns) do
@@ -33,7 +37,8 @@ defmodule MaveCoreWeb.DashboardComponents.Modals do
       phx-mounted={JS.remove_attribute("hidden")}
       class={[
         @static && "relative w-full h-96 flex flex-cols bg-stone-900/50",
-        !@static && "fixed top-0 left-0 w-full h-full flex flex-cols bg-stone-900/50 z-60",
+        !@static && "fixed top-0 left-0 w-full h-full flex flex-cols z-60",
+        if(@interactive_background, do: "pointer-events-none", else: "bg-stone-900/50"),
         "transition ease-out duration-200",
         @show && "opacity-100",
         !@show && "opacity-0 pointer-events-none"
@@ -44,24 +49,46 @@ defmodule MaveCoreWeb.DashboardComponents.Modals do
       <div class="flex-grow"></div>
       <div
         class={[
-          "w-96 bg-white border-l border-stone-200 border-opacity-70 shadow-lg overflow-scroll",
+          "border-l shadow-lg",
+          @interactive_background && "pointer-events-auto",
+          if(@compact, do: "flex h-full min-h-0 flex-col overflow-hidden", else: "overflow-scroll"),
+          @theme == "light" && "bg-white border-stone-200 border-opacity-70",
+          @theme == "dark" && "bg-stone-900 border-stone-800 text-stone-200",
+          @panel_class,
           "transition ease-out duration-200",
           @show && "translate-x-0",
           !@show && "translate-x-full"
         ]}
-        phx-click-away={@on_cancel}
+        phx-click-away={if !@interactive_background, do: @on_cancel}
       >
-        <div class="w-full bg-stone-100 border-b border-stone-200 border-opacity-70">
+        <div
+          :if={!@compact}
+          class={[
+            "w-full shrink-0 border-b",
+            @theme == "light" && "bg-stone-100 border-stone-200 border-opacity-70",
+            @theme == "dark" && "bg-stone-900 border-stone-800"
+          ]}
+        >
           <div class="w-full h-16"></div>
         </div>
-        <div class="w-full bg-stone-100 border-b border-stone-200 border-opacity-70">
-          <div class="w-full h-16 flex items-center px-16">
-            <div class="flex-grow text-stone-600 text-2xl border-b border-transparent font-medium pt-0.5 hover:cursor-default">
+        <div class={[
+          "w-full shrink-0 border-b",
+          @theme == "light" && "bg-stone-100 border-stone-200 border-opacity-70",
+          @theme == "dark" && "bg-stone-900 border-stone-800"
+        ]}>
+          <div class={[
+            "w-full h-16 flex items-center",
+            if(@compact, do: "px-5", else: "px-16")
+          ]}>
+            <div class={[
+              "flex-grow text-2xl border-b border-transparent font-medium pt-0.5 hover:cursor-default",
+              if(@theme == "dark", do: "text-stone-100", else: "text-stone-600")
+            ]}>
               {@title}
             </div>
           </div>
         </div>
-        <div class="px-16 py-14">
+        <div class={if(@compact, do: "min-h-0 flex-1 px-5", else: "px-16 py-14")}>
           {render_slot(@inner_block)}
         </div>
       </div>

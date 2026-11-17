@@ -6,11 +6,13 @@ defmodule MaveCore.Assets do
   import Ecto.Query, warn: false
 
   alias MaveCore.Assets.{AudioDescription, AudioTrack, Subtitle, Video}
+  alias MaveCore.AudioDescription.{Budget, DescriptionDocument}
   alias MaveCore.Embeds
   alias MaveCore.Embeds.{Embed, ManifestPublisher, SettingsSerializer}
   alias MaveCore.EncodingBooster
 
   alias MaveCore.Flow.Steps.{
+    AudioDescriptionSupport,
     MediaBuildHlsMasterStep,
     MediaExtractFrameStep,
     MediaMixAudioDescriptionStep,
@@ -23,6 +25,7 @@ defmodule MaveCore.Assets do
   alias MaveCore.Media.Signature
   alias MaveCore.Media.Storage
   alias MaveCore.Repo
+  alias MaveCore.Transcription.SubtitleDocument
   alias MaveCore.Workers.ImageProcessor
 
   @audio_hls_bandwidth 128_000
@@ -90,6 +93,228 @@ defmodule MaveCore.Assets do
   end
 
   def get_subtitle_for_embed(_, _), do: nil
+
+  def load_subtitle_document(%Embed{} = embed, id) do
+    embed = Repo.preload(embed, [:space, :asset], force: true)
+
+    with %Subtitle{} = subtitle <- get_subtitle_for_embed(id, embed),
+         {:ok, body} <- subtitle_body(embed, subtitle),
+         {:ok, document} <- SubtitleDocument.parse(body) do
+      {:ok,
+       %{
+         subtitle_id: subtitle.id,
+         kind: :subtitle,
+         language: subtitle.language,
+         document: document,
+         revision: :crypto.hash(:sha256, body)
+       }}
+    else
+      nil -> {:error, :subtitle_not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  def load_description_document(%Embed{} = embed, id) do
+    embed = Repo.preload(embed, [:space, asset: :current_video], force: true)
+
+    with %AudioDescription{vtt_filename: filename} = description
+         when is_binary(filename) <- get_audio_description_for_embed(id, embed),
+         {:ok, body} <- description_text_body(embed, filename),
+         source_revision = Base.encode16(:crypto.hash(:sha256, body)),
+         {:ok, source_document} <- SubtitleDocument.parse(body),
+         {:ok, document} <- description_draft_document(description, body, source_revision),
+         duration = embed.asset.current_video.duration,
+         {:ok, moments} <-
+           DescriptionDocument.validate(
+             Map.get(
+               description.text_draft || %{},
+               "moments",
+               DescriptionDocument.from_vtt(document)
+             ),
+             duration
+           ) do
+      {:ok,
+       %{
+         subtitle_id: description.id,
+         kind: :audio_description,
+         language: description.language,
+         label: AudioDescription.display_label(description),
+         source_texts: SubtitleDocument.texts(source_document),
+         speech_gaps: description_speech_gaps(embed),
+         source_document: source_document,
+         moments: moments,
+         duration: duration,
+         document: document,
+         revision: {source_revision, description.text_draft}
+       }}
+    else
+      nil -> {:error, :audio_description_not_found}
+      %AudioDescription{} -> {:error, :missing_text}
+      {:error, _} = error -> error
+    end
+  end
+
+  def save_description_draft(%Embed{} = embed, id, revision, moments) when is_list(moments) do
+    Repo.transaction(fn ->
+      with %AudioDescription{} = description <- get_audio_description_for_embed(id, embed),
+           %AudioDescription{} = description <-
+             Repo.one(
+               from(d in AudioDescription, where: d.id == ^description.id, lock: "FOR UPDATE")
+             ),
+           {:ok, current} <- load_description_document(embed, id),
+           true <- current.revision == revision,
+           {:ok, moments} <- DescriptionDocument.validate(moments, current.duration),
+           :ok <- DescriptionDocument.validate_time_labels(moments),
+           {source_revision, _} = revision,
+           {:ok, saved} <-
+             description
+             |> Ecto.Changeset.change(
+               text_draft: %{"source_revision" => source_revision, "moments" => moments}
+             )
+             |> Repo.update() do
+        saved
+      else
+        nil -> Repo.rollback(:audio_description_not_found)
+        false -> Repo.rollback(:stale_document)
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  def save_description_draft(%Embed{} = embed, id, revision, texts) when is_map(texts) do
+    Repo.transaction(fn ->
+      with %AudioDescription{} = description <- get_audio_description_for_embed(id, embed),
+           %AudioDescription{} = description <-
+             Repo.one(
+               from(d in AudioDescription, where: d.id == ^description.id, lock: "FOR UPDATE")
+             ),
+           {:ok, current} <- load_description_document(embed, id),
+           true <- current.revision == revision,
+           {:ok, body} <- SubtitleDocument.render(current.document, texts),
+           {source_revision, _draft} = revision,
+           {:ok, saved} <-
+             description
+             |> Ecto.Changeset.change(
+               text_draft: %{"source_revision" => source_revision, "vtt" => body}
+             )
+             |> Repo.update() do
+        saved
+      else
+        nil -> Repo.rollback(:audio_description_not_found)
+        false -> Repo.rollback(:stale_document)
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp description_speech_gaps(embed) do
+    region = embed.space.region || "default"
+    bucket = Storage.bucket_for_space(embed.space.hash, region)
+    version = Embeds.current_video_version(embed)
+    key = "#{MaveCore.AudioDescription.work_prefix(embed.hash, version)}/speech.json"
+
+    context = %{storage: storage_adapter(), bucket: bucket, region: region}
+
+    with {:ok, intervals} when is_list(intervals) <-
+           AudioDescriptionSupport.get_json(context, key),
+         true <- Enum.all?(intervals, &valid_speech_interval?/1) do
+      speech =
+        intervals
+        |> Enum.map(&%{start: &1["start"], end: &1["end"]})
+        |> Enum.sort_by(& &1.start)
+
+      Budget.available_gaps(speech, embed.asset.current_video.duration)
+    else
+      _ -> nil
+    end
+  end
+
+  defp valid_speech_interval?(%{"start" => start, "end" => stop}),
+    do: is_number(start) and is_number(stop) and start >= 0 and stop > start
+
+  defp valid_speech_interval?(_), do: false
+
+  defp description_text_body(embed, filename) do
+    region = embed.space.region || "default"
+    bucket = Storage.bucket_for_space(embed.space.hash, region)
+    key = audio_source_key(embed.hash, Embeds.current_video_version(embed), filename)
+    storage_adapter().get(bucket, key, region)
+  end
+
+  defp description_draft_document(%{text_draft: nil}, body, _revision),
+    do: SubtitleDocument.parse(body)
+
+  defp description_draft_document(
+         %{text_draft: %{"source_revision" => revision, "moments" => _}},
+         body,
+         revision
+       ),
+       do: SubtitleDocument.parse(body)
+
+  defp description_draft_document(
+         %{text_draft: %{"source_revision" => revision, "vtt" => body}},
+         _body,
+         revision
+       ),
+       do: SubtitleDocument.parse(body)
+
+  defp description_draft_document(_description, _body, _revision),
+    do: {:error, :stale_document}
+
+  def save_subtitle_document(%Embed{} = embed, id, revision, texts) when is_map(texts) do
+    embed = Repo.preload(embed, [:space, :asset], force: true)
+
+    Repo.transaction(fn ->
+      with %Subtitle{} = subtitle <- get_subtitle_for_embed(id, embed),
+           %Subtitle{} = subtitle <-
+             Repo.one(from(s in Subtitle, where: s.id == ^subtitle.id, lock: "FOR UPDATE")),
+           {:ok, current} <- load_subtitle_document(embed, id),
+           true <- current.revision == revision,
+           {:ok, body} <- SubtitleDocument.render(current.document, texts),
+           region = embed.space.region || "default",
+           key =
+             audio_source_key(
+               embed.hash,
+               Embeds.current_video_version(embed),
+               "subtitle_edit_#{Ecto.UUID.generate()}.vtt"
+             ),
+           bucket = Storage.bucket_for_space(embed.space.hash, region),
+           {:ok, _} <- storage_adapter().put_public(bucket, key, body, "text/vtt", region),
+           {:ok, updated} <- update_subtitle_outputs(embed, subtitle, %{path: key}) do
+        updated
+      else
+        nil -> Repo.rollback(:subtitle_not_found)
+        false -> Repo.rollback(:stale_document)
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp subtitle_body(embed, subtitle) do
+    region = embed.space.region || "default"
+    bucket = Storage.bucket_for_space(embed.space.hash, region)
+
+    [
+      subtitle_storage_key(embed, subtitle),
+      subtitle_source_key(
+        embed.hash,
+        Embeds.current_video_version(embed),
+        subtitle.language || "en"
+      ),
+      "#{embed.hash}/subtitle_#{subtitle.language || "en"}.vtt"
+    ]
+    |> Enum.uniq()
+    |> Enum.find_value(fn key ->
+      case storage_adapter().get(bucket, key, region) do
+        {:ok, body} when is_binary(body) -> {:ok, body}
+        _ -> nil
+      end
+    end)
+    |> case do
+      nil -> {:error, :not_found}
+      result -> result
+    end
+  end
 
   def create_subtitle(attrs \\ %{}) when is_map(attrs) do
     %Subtitle{}

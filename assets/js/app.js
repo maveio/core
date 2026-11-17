@@ -29,6 +29,9 @@ import "@lottiefiles/lottie-player"
 import { ChartHook } from "./hooks/chart"
 import { cdn } from "./upload"
 import { FileMenuHook } from "./hooks/file_menu"
+import { TextEditorPreviewHook } from "./hooks/text_editor_preview"
+import { DescriptionDocumentHook } from "./hooks/description_document"
+import { DescriptionPlaybackHook } from "./hooks/description_playback"
 
 let selectedEmbed = null
 
@@ -719,6 +722,9 @@ const liveSocket = new LiveSocket("/live", Socket, {
     thumbnail_preview: ThumbnailPreviewHook,
     auto_open_file_picker: AutoOpenFilePickerHook,
     file_menu: FileMenuHook,
+    text_editor_preview: TextEditorPreviewHook,
+    description_document: DescriptionDocumentHook,
+    description_playback: DescriptionPlaybackHook,
     preserve_scroll: PreserveScrollHook,
   },
   uploaders: { cdn },

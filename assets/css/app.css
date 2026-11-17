@@ -13,6 +13,24 @@
 @source "../js";
 @source "../../lib/mave_core_web";
 
+.description-prose { min-height: 12rem; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; color: #e7e5e4; font-size: 0.875rem; line-height: 1.8; padding: 0.5rem 0.25rem; }
+.description-prose p { margin: 0 0 0.65rem; }
+.description-prose .ProseMirror-selectednode { outline: 1px solid #60a5fa; border-radius: 0.25rem; }
+.description-prose .ProseMirror-trailingBreak { display: initial; }
+.description-moment { display: inline-flex; align-items: center; vertical-align: baseline; margin-right: 0.5rem; white-space: nowrap; }
+.description-time { border-radius: 0.25rem; padding: 0.1rem 0.3rem; background: #292524; color: #a8a29e; font-size: 0.7rem; font-variant-numeric: tabular-nums; cursor: pointer; }
+.description-time:hover, .description-time:focus-visible { color: #e7e5e4; outline: 1px solid #60a5fa; }
+.description-active-text { color: #bfdbfe; }
+.description-active-moment .description-time { color: #bfdbfe; background: #1e3a5f; box-shadow: inset 0 0 0 1px #3b82f6; }
+.description-time-input { width: 7rem; background: #292524; color: #e7e5e4; border: 1px solid #60a5fa; border-radius: 0.25rem; padding: 0 0.25rem; font-size: 0.75rem; }
+.description-time-input[aria-invalid=true] { border-color: #f87171; color: #fca5a5; }
+.description-invalid-moment .description-time { color: #fca5a5; background: #450a0a; box-shadow: inset 0 0 0 1px #f87171; }
+.description-invalid-time { color: #fca5a5; text-decoration: underline wavy #f87171; }
+.description-armed-moment .description-time { color: white; background: #1d4ed8; box-shadow: inset 0 0 0 1px #93c5fd; }
+.description-time-remove { padding: 0 0.4rem; color: #a8a29e; cursor: pointer; }
+.description-feedback { display: block; margin: 0.4rem 0 0.8rem; padding-top: 0.3rem; border-top: 1px solid #292524; color: #78716c; font: 0.7rem/1.5 system-ui; user-select: none; }
+.description-feedback-warning { color: #fbbf24; }
+
 /* A Tailwind plugin that makes "hero-#{ICON}" classes available.
    The heroicons installation itself is managed by your mix.exs */
 @plugin "../vendor/heroicons";

@@ -28,6 +28,14 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     def available?(_space), do: true
   end
 
+  defmodule DecodedJSONStorage do
+    def get(bucket, path, region) do
+      with {:ok, body} <- FlowStorageAdapterStub.get(bucket, path, region) do
+        if String.ends_with?(path, "/speech.json"), do: Jason.decode(body), else: {:ok, body}
+      end
+    end
+  end
+
   setup do
     old_storage_adapter = Application.get_env(:mave_core, :flow_storage_adapter)
 
@@ -1852,6 +1860,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     stop_live_view(view)
   end
 
+  @tag :text_editor
   test "audio descriptions have their own editable settings and appear under Audio in Info", %{
     conn: conn
   } do
@@ -1879,14 +1888,14 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     assert has_element?(
              view,
              "#audio-description-files-#{description.id} [role=menuitem]",
-             "Replace text"
+             "Edit text"
            )
 
     render_click(element(view, "#audio-description-replace-audio-#{description.id}"))
     assert has_element?(view, "input[type=file][accept='.mp3']")
 
-    render_click(element(view, "#audio-description-vtt-#{description.id}"))
-    assert has_element?(view, "input[type=file][accept='.vtt']")
+    refute has_element?(view, "#audio-description-vtt-#{description.id}")
+    refute has_element?(view, "#audio-description-download-vtt-#{description.id}")
     assert has_element?(view, "#delete-audio-description-#{description.id}")
 
     view
@@ -2177,6 +2186,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     assert has_element?(view, ~s(mave-player[embed="#{space.hash}#{video.hash}"]))
   end
 
+  @tag :text_editor
   test "/videos/:id renders subtitle controls in settings", %{conn: conn} do
     {conn, space} = authenticated_conn(conn)
 
@@ -2199,11 +2209,214 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     assert html =~ "subtitles"
     assert html =~ "English"
     assert html =~ "add_subtitle"
-    assert has_element?(view, ~s(a[href="#{subtitle_download_path}"][download="en.vtt"]))
+    assert has_element?(view, "#subtitle-edit-text-#{subtitle.id}", "Edit text")
+    refute has_element?(view, ~s(a[href="#{subtitle_download_path}"]))
     refute has_element?(view, ~s(a[href="#{subtitle_download_path}"][target]))
     assert html =~ ~s(id="delete-subtitle-#{subtitle.id}")
     assert html =~ "Delete"
     assert html =~ "file_menu"
+  end
+
+  @tag :text_editor
+  test "subtitle editor saves text and timings, confirms discard and rejects stale edits", %{
+    conn: conn
+  } do
+    {conn, space} = authenticated_conn(conn)
+
+    embed =
+      video_embed_fixture(space, %{name: "Text editing"}) |> Repo.preload(asset: [:current_video])
+
+    body = "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nHello world\n"
+    key = "#{embed.hash}/subtitle_en.vtt"
+    bucket = Storage.bucket_for_space(space.hash, space.region)
+    {:ok, _} = FlowStorageAdapterStub.put_public(bucket, key, body, "text/vtt", space.region)
+
+    subtitle =
+      Repo.insert!(%Subtitle{video_id: embed.asset.current_video_id, language: "en", path: key})
+
+    {:ok, view, _} = live(conn, "/videos/#{embed.id}")
+
+    view |> element("#subtitle-edit-text-#{subtitle.id}") |> render_click()
+    assert has_element?(view, "#subtitle-text-editor textarea", "Hello world")
+    other = video_embed_fixture(space, %{name: "Other text editing"})
+
+    assert {:error, :subtitle_not_found} =
+             MaveCore.Assets.load_subtitle_document(other, subtitle.id)
+
+    assert has_element?(view, "#subtitle-timing-0[data-preview-time='1.0']", "00:01 – 00:03")
+    assert has_element?(view, "#subtitle-text-form [data-editor-scroll].overflow-y-auto")
+    assert has_element?(view, "#subtitle-text-editor .bg-stone-900")
+
+    view
+    |> form("#subtitle-text-form", editor: %{cues: %{"0" => "Hello again"}})
+    |> render_change()
+
+    view |> element("#subtitle-text-editor button", "Cancel") |> render_click()
+    assert has_element?(view, "#discard-subtitle-edits")
+    view |> element("#discard-subtitle-edits-cancel") |> render_click()
+    send(view.pid, {:embed_updated, %{"space_id" => space.id, "embed_id" => embed.id}})
+    assert has_element?(view, "#subtitle-text-editor textarea", "Hello again")
+
+    view
+    |> form("#subtitle-text-form", editor: %{cues: %{"0" => "Hello again"}})
+    |> render_submit()
+
+    refute has_element?(view, "#subtitle-text-editor")
+    updated = Repo.get!(Subtitle, subtitle.id)
+    assert updated.path != key
+    assert {:ok, saved} = FlowStorageAdapterStub.get(bucket, updated.path, space.region)
+    assert saved == String.replace(body, "Hello world", "Hello again")
+    assert {:ok, ^body} = FlowStorageAdapterStub.get(bucket, key, space.region)
+
+    view |> element("#subtitle-edit-text-#{subtitle.id}") |> render_click()
+
+    {:ok, _} =
+      FlowStorageAdapterStub.put_public(bucket, updated.path, body, "text/vtt", space.region)
+
+    view
+    |> form("#subtitle-text-form", editor: %{cues: %{"0" => "My stale edit"}})
+    |> render_submit()
+
+    assert has_element?(view, "#subtitle-text-editor [role=alert]", "has changed")
+    assert {:ok, ^body} = FlowStorageAdapterStub.get(bucket, updated.path, space.region)
+  end
+
+  @tag :text_editor
+  test "description document adds moments, shares pause budgets and preserves published media", %{
+    conn: conn
+  } do
+    {conn, space} = authenticated_conn(conn)
+
+    embed =
+      video_embed_fixture(space, %{name: "Description editing"})
+      |> Repo.preload(asset: [:current_video])
+
+    body =
+      "WEBVTT\nKind: descriptions\n\n00:00:01.000 --> 00:00:03.000\nInternational accessibility information.\n"
+
+    description =
+      Repo.insert!(%AudioDescription{
+        video_id: embed.asset.current_video_id,
+        language: "en",
+        audio_filename: "ad.mp3",
+        vtt_filename: "ad.vtt"
+      })
+
+    bucket = Storage.bucket_for_space(space.hash, space.region)
+
+    {:ok, _} =
+      FlowStorageAdapterStub.put_public(
+        bucket,
+        "#{embed.hash}/ad.vtt",
+        body,
+        "text/vtt",
+        space.region
+      )
+
+    assert {:ok, original} = MaveCore.Assets.load_description_document(embed, description.id)
+    assert original.speech_gaps == nil
+
+    speech_key =
+      "#{MaveCore.AudioDescription.work_prefix(embed.hash, MaveCore.Embeds.current_video_version(embed))}/speech.json"
+
+    {:ok, _} =
+      FlowStorageAdapterStub.put_public(
+        bucket,
+        speech_key,
+        Jason.encode!([%{start: 0.0, end: 0.5}, %{start: 8.0, end: 40.0}]),
+        "application/json",
+        space.region
+      )
+
+    assert {:ok, binary_document} =
+             MaveCore.Assets.load_description_document(embed, description.id)
+
+    Application.put_env(:mave_core, :flow_storage_adapter, DecodedJSONStorage)
+
+    assert {:ok, decoded_document} =
+             MaveCore.Assets.load_description_document(embed, description.id)
+
+    assert decoded_document.speech_gaps == binary_document.speech_gaps
+
+    other = video_embed_fixture(space, %{name: "Other description editing"})
+
+    assert {:error, :audio_description_not_found} =
+             MaveCore.Assets.load_description_document(other, description.id)
+
+    {:ok, view, _} = live(conn, "/videos/#{embed.id}")
+    view |> element("#audio-description-edit-text-#{description.id}") |> render_click()
+    assert has_element?(view, "#description-document[data-feedback*='within']")
+    assert has_element?(view, "[data-add-moment]", "Add moment")
+    assert has_element?(view, "#description-playback-controls[data-track-label='English (AD)']")
+    assert has_element?(view, "[data-play-toggle][aria-label='Play with audio description']")
+    assert has_element?(view, "[data-playback-back]")
+    assert has_element?(view, "[data-playback-forward]")
+    refute has_element?(view, "#subtitle-text-editor textarea")
+
+    moments = [
+      %{"id" => "0", "start" => 1.0, "text" => "A clear blue sky."},
+      %{"id" => "new-moment", "start" => 4.0, "text" => "A plane flies."}
+    ]
+
+    view
+    |> element("#description-document")
+    |> render_hook("change_description_document", %{moments: moments})
+
+    assert has_element?(view, "#description-document[data-feedback*='2 descriptions']")
+
+    view
+    |> form("#subtitle-text-form", editor: %{document: Jason.encode!(moments)})
+    |> render_submit()
+
+    updated = Repo.get!(AudioDescription, description.id)
+    assert updated.audio_filename == description.audio_filename
+    assert updated.vtt_filename == description.vtt_filename
+    assert updated.text_draft["moments"] == moments
+    assert {:ok, ^body} = FlowStorageAdapterStub.get(bucket, "#{embed.hash}/ad.vtt", space.region)
+
+    assert {:error, :stale_document} =
+             MaveCore.Assets.save_description_draft(
+               embed,
+               description.id,
+               original.revision,
+               moments
+             )
+
+    view |> element("#audio-description-edit-text-#{description.id}") |> render_click()
+    assert has_element?(view, "#description-document[data-document*='new-moment']")
+
+    long_moments =
+      List.update_at(moments, 1, &Map.put(&1, "text", String.duplicate("A plane flies. ", 30)))
+
+    view
+    |> element("#description-document")
+    |> render_hook("change_description_document", %{moments: long_moments})
+
+    assert has_element?(view, "#description-document[data-feedback*='too long']")
+
+    view
+    |> form("#subtitle-text-form", editor: %{document: Jason.encode!(long_moments)})
+    |> render_submit()
+
+    view |> element("#audio-description-edit-text-#{description.id}") |> render_click()
+    assert has_element?(view, "#description-document[data-feedback*='too long']")
+    invalid_moments = List.update_at(moments, 0, &Map.put(&1, "start", 6.0))
+
+    view
+    |> element("#description-document")
+    |> render_hook("change_description_document", %{moments: invalid_moments})
+
+    refute has_element?(view, "#subtitle-text-editor [role=alert]")
+    assert has_element?(view, "#subtitle-text-form button[type=submit]:disabled")
+    {:ok, current} = MaveCore.Assets.load_description_document(embed, description.id)
+
+    assert {:error, :invalid_time_labels} =
+             MaveCore.Assets.save_description_draft(
+               embed,
+               description.id,
+               current.revision,
+               invalid_moments
+             )
   end
 
   test "audio downloads are attachments scoped to the current video", %{conn: conn} do

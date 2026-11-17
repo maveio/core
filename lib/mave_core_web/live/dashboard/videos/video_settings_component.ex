@@ -3,11 +3,13 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
   use MaveCoreWeb, :live_component
 
-  import MaveCoreWeb.DashboardComponents.Modals, only: [dialog: 1]
+  import MaveCoreWeb.DashboardComponents.Buttons, only: [dash_button: 1]
+  import MaveCoreWeb.DashboardComponents.Modals, only: [dialog: 1, modal: 1]
   import MaveCoreWeb.DashboardComponents.Settings
   import MaveCoreWeb.DashboardComponents.States, only: [progress_bar: 1]
 
   alias MaveCore.Assets
+  alias MaveCore.AudioDescription.DescriptionDocument
   alias MaveCore.Embeds
   alias MaveCore.Embeds.Embed
   alias MaveCore.Embeds.SettingsSerializer
@@ -15,6 +17,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   alias MaveCore.Languages
   alias MaveCore.Spaces
   alias MaveCore.Spaces.Space
+  alias MaveCore.Transcription.SubtitleDocument
   alias MaveCore.Uploads.Token
   alias MaveCoreWeb.DashboardRoutes
   alias MaveCoreWeb.Plugs.Maintenance
@@ -55,6 +58,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       |> assign_new(:audio_description_form, fn -> nil end)
       |> assign_new(:audio_description_vtt_form, fn -> nil end)
       |> assign_new(:subtitle_form, fn -> nil end)
+      |> assign_new(:subtitle_editor, fn -> nil end)
+      |> assign_new(:discard_subtitle_editor, fn -> false end)
       |> assign_new(:pending_media_delete, fn -> nil end)
 
     socket =
@@ -70,6 +75,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           |> assign(:audio_description_form, nil)
           |> assign(:audio_description_vtt_form, nil)
           |> assign(:subtitle_form, nil)
+          |> assign(:subtitle_editor, nil)
+          |> assign(:discard_subtitle_editor, false)
           |> assign(:pending_media_delete, nil)
 
         socket.assigns.has_changes ->
@@ -387,6 +394,164 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
        subtitle_id: nil,
        language: ""
      })}
+  end
+
+  def handle_event(event, %{"id" => id}, socket)
+      when event in ["edit_subtitle_text", "edit_description_text"] do
+    loader =
+      if event == "edit_description_text",
+        do: &Assets.load_description_document/2,
+        else: &Assets.load_subtitle_document/2
+
+    case loader.(socket.assigns.embed, id) do
+      {:ok, editor} ->
+        editor =
+          editor
+          |> Map.put(:texts, SubtitleDocument.texts(editor.document))
+          |> Map.put(:error, nil)
+          |> then(fn editor ->
+            if editor.kind == :audio_description,
+              do: Map.put(editor, :initial_moments, editor.moments),
+              else: editor
+          end)
+
+        {:noreply, assign(socket, :subtitle_editor, editor)}
+
+      {:error, _} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("This text could not be opened. It may have changed or is not available.")
+         )}
+    end
+  end
+
+  def handle_event("change_subtitle_text", %{"editor" => %{"cues" => texts}}, socket) do
+    case socket.assigns.subtitle_editor do
+      nil -> {:noreply, socket}
+      editor -> {:noreply, assign(socket, :subtitle_editor, %{editor | texts: texts, error: nil})}
+    end
+  end
+
+  def handle_event("change_description_document", %{"moments" => moments}, socket) do
+    editor = socket.assigns.subtitle_editor
+
+    with %{kind: :audio_description} <- editor,
+         {:ok, moments} <- DescriptionDocument.validate(moments, editor.duration) do
+      editor = %{editor | moments: moments, error: nil}
+
+      {:reply,
+       %{groups: description_groups(editor), windows: description_playback_windows(editor)},
+       assign(socket, :subtitle_editor, editor)}
+    else
+      _ ->
+        socket =
+          if editor,
+            do:
+              assign(socket, :subtitle_editor, %{
+                editor
+                | error: subtitle_editor_error(:invalid_moments)
+              }),
+            else: socket
+
+        {:reply, %{groups: []}, socket}
+    end
+  end
+
+  def handle_event("description_player_unavailable", _params, socket) do
+    case socket.assigns.subtitle_editor do
+      nil ->
+        {:noreply, socket}
+
+      editor ->
+        {:noreply,
+         assign(socket, :subtitle_editor, %{
+           editor
+           | error: gettext("Open the video at the desired moment first.")
+         })}
+    end
+  end
+
+  def handle_event("close_subtitle_editor", _params, socket) do
+    if subtitle_editor_changed?(socket.assigns.subtitle_editor) do
+      {:noreply, assign(socket, :discard_subtitle_editor, true)}
+    else
+      {:noreply, assign(socket, :subtitle_editor, nil)}
+    end
+  end
+
+  def handle_event("keep_subtitle_editor", _params, socket) do
+    {:noreply, assign(socket, :discard_subtitle_editor, false)}
+  end
+
+  def handle_event("discard_subtitle_editor", _params, socket) do
+    {:noreply, assign(socket, subtitle_editor: nil, discard_subtitle_editor: false)}
+  end
+
+  def handle_event("save_subtitle_text", %{"editor" => %{"document" => json}}, socket) do
+    editor = socket.assigns.subtitle_editor
+
+    with %{kind: :audio_description} <- editor,
+         {:ok, moments} <- Jason.decode(json),
+         {:ok, _} <-
+           Assets.save_description_draft(
+             socket.assigns.embed,
+             editor.subtitle_id,
+             editor.revision,
+             moments
+           ) do
+      {:noreply,
+       socket
+       |> assign(:subtitle_editor, nil)
+       |> put_flash(:info, gettext("Description draft saved."))}
+    else
+      {:error, reason} ->
+        {:noreply,
+         assign(socket, :subtitle_editor, %{editor | error: subtitle_editor_error(reason)})}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("save_subtitle_text", %{"editor" => %{"cues" => texts}}, socket) do
+    case socket.assigns.subtitle_editor do
+      nil ->
+        {:noreply, socket}
+
+      editor ->
+        save =
+          if editor.kind == :audio_description,
+            do: &Assets.save_description_draft/4,
+            else: &Assets.save_subtitle_document/4
+
+        case save.(
+               socket.assigns.embed,
+               editor.subtitle_id,
+               editor.revision,
+               texts
+             ) do
+          {:ok, _} ->
+            if editor.kind == :subtitle, do: notify_parent(:subtitles_updated)
+
+            {:noreply,
+             socket
+             |> assign(:subtitle_editor, nil)
+             |> put_flash(
+               :info,
+               if(editor.kind == :audio_description,
+                 do: gettext("Description draft saved."),
+                 else: gettext("Subtitle text saved.")
+               )
+             )}
+
+          {:error, reason} ->
+            message = subtitle_editor_error(reason)
+
+            {:noreply, assign(socket, :subtitle_editor, %{editor | texts: texts, error: message})}
+        end
+    end
   end
 
   def handle_event("replace_subtitle", %{"id" => id}, socket) do
@@ -739,6 +904,233 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           <.tab_navigation current_tab={@current_tab} myself={@myself} />
         </:footer>
       </.settings_panel>
+      <.modal
+        :if={@subtitle_editor}
+        id="subtitle-text-editor"
+        show={true}
+        title={
+          if @subtitle_editor.kind == :audio_description,
+            do: gettext("Edit audio description"),
+            else: gettext("Edit subtitles")
+        }
+        panel_class="w-full max-w-2xl"
+        theme="dark"
+        compact
+        interactive_background={@subtitle_editor.kind == :audio_description}
+        on_cancel={JS.push("close_subtitle_editor", target: @myself)}
+      >
+        <.form
+          for={to_form(%{}, as: :editor)}
+          id="subtitle-text-form"
+          phx-change={if @subtitle_editor.kind == :subtitle, do: "change_subtitle_text"}
+          phx-submit="save_subtitle_text"
+          phx-target={@myself}
+          phx-hook="text_editor_preview"
+          data-preview-src={get_in(@video, [:thumbnail_preview, :preferred_src])}
+          data-fallback-src={get_in(@video, [:thumbnail_preview, :fallback_src])}
+          data-player-embed={@video.public_id}
+          class="flex h-full min-h-0 flex-col [&_.fieldset]:mb-0 [&_.fieldset]:min-w-0"
+        >
+          <p class="my-3 shrink-0 text-xs leading-5 text-stone-400">
+            <%= if @subtitle_editor.kind == :audio_description do %>
+              {gettext(
+                "Edit and save a draft. The published audio and text stay as they are until new speech is generated."
+              )}
+            <% else %>
+              {gettext("Edit the text below. The existing timing stays in place.")}
+            <% end %>
+          </p>
+          <div
+            :if={@subtitle_editor.kind == :audio_description}
+            id="description-playback-controls"
+            phx-hook="description_playback"
+            phx-update="ignore"
+            data-player-embed={@video.public_id}
+            data-track-label={@subtitle_editor.label}
+            data-track-language={@subtitle_editor.language}
+            data-duration={@subtitle_editor.duration}
+            data-play-label={gettext("Play with audio description")}
+            data-pause-label={gettext("Pause")}
+            data-active-label={gettext("Published AD")}
+            data-inactive-label={gettext("AD not active")}
+            data-waiting-label={gettext("Waiting for AD audio")}
+            data-error-label={gettext("Could not play AD audio. Please try again.")}
+            class="mb-3 flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-stone-800 pb-2"
+          >
+            <.dash_button
+              type="button"
+              variant="link"
+              icon="hero-backward"
+              icon_only
+              data-playback-back
+              aria-label={gettext("Back 1 second")}
+              title={gettext("Back 1 second; click quickly for 5, then 10 seconds")}
+              class="[&_span]:text-stone-400"
+              disabled
+            />
+            <.dash_button
+              type="button"
+              variant="link"
+              icon="hero-play"
+              icon_only
+              data-play-toggle
+              aria-label={gettext("Play with audio description")}
+              class="[&_span]:text-blue-400"
+              disabled
+            />
+            <.dash_button
+              type="button"
+              variant="link"
+              icon="hero-forward"
+              icon_only
+              data-playback-forward
+              aria-label={gettext("Forward 1 second")}
+              title={gettext("Forward 1 second; click quickly for 5, then 10 seconds")}
+              class="[&_span]:text-stone-400"
+              disabled
+            />
+            <span data-playback-time class="text-xs tabular-nums text-stone-400">00:00</span>
+            <span
+              data-playback-status
+              class="text-[10px] text-stone-500"
+              title={@subtitle_editor.label}
+            >
+              {gettext("Waiting for AD audio")}
+            </span>
+            <div class="flex-1" />
+            <.dash_button type="button" variant="link" data-add-moment class="text-xs">
+              {gettext("Add moment")}
+            </.dash_button>
+          </div>
+          <input
+            :if={@subtitle_editor.kind == :audio_description}
+            type="hidden"
+            name="editor[document]"
+            data-description-document
+            value={Jason.encode!(@subtitle_editor.moments)}
+          />
+          <div
+            data-editor-scroll
+            class="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain py-1 pr-2"
+          >
+            <div
+              :if={@subtitle_editor.kind == :audio_description}
+              id="description-document"
+              phx-hook="description_document"
+              phx-update="ignore"
+              phx-target={@myself}
+              data-document={Jason.encode!(@subtitle_editor.moments)}
+              data-feedback={Jason.encode!(description_groups(@subtitle_editor))}
+              data-playback-windows={Jason.encode!(description_playback_windows(@subtitle_editor))}
+              data-duration={@subtitle_editor.duration}
+              data-label={gettext("Audio description text")}
+              data-edit-time-label={gettext("Edit moment")}
+              data-remove-time-label={gettext("Remove time label")}
+              data-invalid-time-label={
+                gettext("Use a valid time between the previous and next moment.")
+              }
+            />
+            <div
+              :for={cue <- SubtitleDocument.cues(@subtitle_editor.document)}
+              :if={@subtitle_editor.kind == :subtitle}
+              class="grid grid-cols-1 items-start gap-x-3 sm:grid-cols-[7rem_minmax(0,1fr)]"
+            >
+              <div>
+                <button
+                  id={"subtitle-timing-#{cue.id}"}
+                  type="button"
+                  data-preview-time={cue.start_seconds}
+                  aria-label={gettext("Preview frame at %{time}", time: cue.time_range)}
+                  disabled={!thumbnail_preview_available?(@video)}
+                  class="rounded px-2 py-2 text-left text-xs tabular-nums text-stone-400 outline-none enabled:cursor-help enabled:hover:text-stone-100 enabled:focus-visible:ring-1 enabled:focus-visible:ring-blue-500 sm:px-0"
+                >
+                  {cue.time_range}
+                </button>
+              </div>
+              <.input
+                type="textarea"
+                id={"subtitle-passage-#{cue.id}"}
+                name={"editor[cues][#{cue.id}]"}
+                value={Map.get(@subtitle_editor.texts, cue.id, cue.text)}
+                aria-label={gettext("Passage %{number}", number: String.to_integer(cue.id) + 1)}
+                aria-describedby={
+                  if @subtitle_editor.kind == :audio_description,
+                    do: "subtitle-timing-#{cue.id} speech-fit-#{cue.id}",
+                    else: "subtitle-timing-#{cue.id}"
+                }
+                rows="1"
+                required
+                maxlength="20000"
+                spellcheck="true"
+                class="w-full resize-none overflow-hidden rounded-md border border-transparent bg-transparent px-2 py-1 text-sm leading-6 text-stone-200 outline-none hover:border-stone-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+          <p :if={@subtitle_editor.error} role="alert" class="mt-6 text-sm text-red-400">
+            {@subtitle_editor.error}
+          </p>
+          <div class="flex shrink-0 items-center justify-between gap-4 border-t border-stone-800 bg-stone-900 py-3">
+            <.dash_button
+              variant="link"
+              type="button"
+              phx-click="close_subtitle_editor"
+              phx-target={@myself}
+            >
+              {gettext("Cancel")}
+            </.dash_button>
+            <.dash_button
+              variant="primary"
+              loading_on_submit
+              disabled={
+                !subtitle_editor_changed?(@subtitle_editor) or
+                  (@subtitle_editor.kind == :audio_description and
+                     DescriptionDocument.validate_time_labels(@subtitle_editor.moments) != :ok)
+              }
+            >
+              {if @subtitle_editor.kind == :audio_description,
+                do: gettext("Save draft"),
+                else: gettext("Save changes")}
+            </.dash_button>
+          </div>
+          <template data-preview-template>
+            <div
+              role="tooltip"
+              hidden
+              class="pointer-events-none fixed z-[100] w-60 max-w-[calc(100vw-1rem)] overflow-hidden rounded-lg border border-stone-700 bg-stone-950 shadow-xl shadow-black/40"
+            >
+              <div class="relative aspect-video bg-black">
+                <video
+                  muted
+                  playsinline
+                  preload="none"
+                  class="h-full w-full object-contain opacity-0"
+                />
+                <span
+                  data-preview-status
+                  data-unavailable={gettext("Frame preview unavailable")}
+                  class="absolute inset-0 flex items-center justify-center text-xs text-stone-400"
+                >
+                  {gettext("Loading frame…")}
+                </span>
+              </div>
+              <div data-preview-label class="px-3 py-2 text-xs tabular-nums text-stone-300" />
+            </div>
+          </template>
+        </.form>
+      </.modal>
+      <.dialog
+        :if={@discard_subtitle_editor}
+        id="discard-subtitle-edits"
+        show={true}
+        title={gettext("Discard your changes?")}
+        confirm_label={gettext("Discard changes")}
+        cancel_label={gettext("Keep editing")}
+        confirm_variant="danger"
+        on_confirm={JS.push("discard_subtitle_editor", target: @myself)}
+        on_cancel={JS.push("keep_subtitle_editor", target: @myself)}
+      >
+        {gettext("Your text edits have not been saved.")}
+      </.dialog>
       <.dialog
         :if={@pending_media_delete}
         id="delete-media-dialog"
@@ -2132,35 +2524,17 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
     text =
       if kind == :audio_description do
-        download =
-          if track.vtt_url do
-            [
-              menu_item(
-                "#{prefix}-download-vtt-#{track.id}",
-                gettext("Download text"),
-                "hero-arrow-down-tray",
-                href: DashboardRoutes.description_download_path(space, video_id, track.id, "vtt"),
-                filename: true,
-                format: "VTT",
-                separator: true
-              )
-            ]
-          else
-            []
-          end
-
-        download ++
-          [
-            menu_item(
-              "#{prefix}-vtt-#{track.id}",
-              if(track.vtt_url, do: gettext("Replace text"), else: gettext("Upload text")),
-              "hero-document-text",
-              event: "upload_audio_description_vtt",
-              value: %{id: track.id},
-              format: "VTT",
-              separator: download == []
-            )
-          ]
+        [
+          menu_item(
+            "#{prefix}-edit-text-#{track.id}",
+            gettext("Edit text"),
+            "hero-pencil-square",
+            event: "edit_description_text",
+            value: %{id: track.id},
+            disabled: is_nil(track.vtt_url),
+            separator: true
+          )
+        ]
       else
         []
       end
@@ -2181,20 +2555,11 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       ]
   end
 
-  defp subtitle_menu_items(subtitle, space, video_id) do
+  defp subtitle_menu_items(subtitle, _space, _video_id) do
     [
-      menu_item(
-        "subtitle-download-#{subtitle.id}",
-        gettext("Download text"),
-        "hero-arrow-down-tray",
-        href: DashboardRoutes.subtitle_download_path(space, video_id, subtitle.id),
-        filename: subtitle_download_filename(subtitle),
-        format: "VTT"
-      ),
-      menu_item("subtitle-replace-#{subtitle.id}", gettext("Replace text"), "hero-arrow-path",
-        event: "replace_subtitle",
-        value: %{id: subtitle.id},
-        format: "VTT"
+      menu_item("subtitle-edit-text-#{subtitle.id}", gettext("Edit text"), "hero-pencil-square",
+        event: "edit_subtitle_text",
+        value: %{id: subtitle.id}
       ),
       menu_item("delete-subtitle-#{subtitle.id}", gettext("Delete"), "hero-trash",
         event: "request_media_delete",
@@ -3275,20 +3640,6 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   defp active_subtitle_upload_target?(%{subtitle_id: id}, %{id: id}), do: true
   defp active_subtitle_upload_target?(_, _), do: false
 
-  defp subtitle_download_filename(%{language: language}) when is_binary(language) do
-    filename =
-      language
-      |> String.trim()
-      |> String.replace(~r/[^A-Za-z0-9_-]/, "_")
-
-    case filename do
-      "" -> "subtitle.vtt"
-      value -> "#{value}.vtt"
-    end
-  end
-
-  defp subtitle_download_filename(_subtitle), do: "subtitle.vtt"
-
   defp pending_audio_track_upload(socket) do
     form = socket.assigns.audio_track_form || %{}
 
@@ -3407,6 +3758,83 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   defp scoped_audio_track(socket, id) do
     Assets.get_audio_track_for_embed(id, socket.assigns.embed)
   end
+
+  defp subtitle_editor_error(:stale_document),
+    do:
+      gettext("This text has changed. Copy your edits and reopen it to load the latest version.")
+
+  defp subtitle_editor_error(:invalid_moments),
+    do: gettext("Check the time labels and text. Each moment must be within the video.")
+
+  defp subtitle_editor_error(:invalid_time_labels),
+    do:
+      gettext(
+        "Time labels must be valid and increase in order. Correct the marked time before saving."
+      )
+
+  defp subtitle_editor_error(:invalid_text),
+    do: gettext("Each passage needs text. Please check your changes.")
+
+  defp subtitle_editor_error(_),
+    do: gettext("Your changes could not be saved. Please try again.")
+
+  defp subtitle_editor_changed?(nil), do: false
+
+  defp subtitle_editor_changed?(%{kind: :audio_description} = editor),
+    do: editor.moments != editor.initial_moments
+
+  defp subtitle_editor_changed?(editor),
+    do: editor.texts != SubtitleDocument.texts(editor.document)
+
+  defp description_groups(editor) do
+    DescriptionDocument.groups(
+      editor.moments,
+      editor.speech_gaps,
+      editor.source_document,
+      editor.language || "en"
+    )
+    |> Enum.map(fn group -> Map.put(group, :label, description_group_label(group)) end)
+  end
+
+  defp description_playback_windows(editor) do
+    DescriptionDocument.playback_windows(
+      editor.moments,
+      editor.source_document,
+      editor.language || "en",
+      editor.duration
+    )
+  end
+
+  defp description_group_label(%{state: "within"} = group),
+    do:
+      ngettext(
+        "1 description · Likely fits · %{seconds} s left",
+        "%{count} descriptions · Likely fits · %{seconds} s left",
+        group.count,
+        seconds: group.remaining
+      )
+
+  defp description_group_label(%{state: "over"} = group),
+    do:
+      ngettext(
+        "1 description · About %{seconds} s too long",
+        "%{count} descriptions · About %{seconds} s too long",
+        group.count,
+        seconds: group.excess
+      )
+
+  defp description_group_label(%{state: "unknown"}),
+    do: gettext("Available speech pauses are unknown")
+
+  defp description_group_label(%{state: "untimed"}), do: gettext("Add a time label to this text")
+
+  defp description_group_label(%{state: "unplaced"}),
+    do: gettext("No nearby speech pause — adjust this moment")
+
+  defp description_group_label(%{state: "order"}), do: gettext("Time labels are out of order")
+
+  defp description_group_label(%{state: "timing"}),
+    do: gettext("The descriptions cannot stay close enough to their moments")
 
   defp scoped_subtitle(socket, id) do
     Assets.get_subtitle_for_embed(id, socket.assigns.embed)
