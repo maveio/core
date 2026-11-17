@@ -1,8 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { Slice } from 'prosemirror-model'
 import { EditorState, TextSelection } from 'prosemirror-state'
 import { history, undo, redo } from 'prosemirror-history'
-import { descriptionSchema, documentFromMoments, momentsFromDocument, formatMoment, parseMoment, replaceWithMoment, DescriptionDocumentHook, activeMomentRange, invalidMomentIds, invalidTypedTimeRanges, backspaceMoment, momentDeletionPlugin, momentDeletionKey } from '../js/hooks/description_document.js'
+import { subtitleLineBreak, subtitlePaste, descriptionSchema, documentFromMoments, momentsFromDocument, formatMoment, parseMoment, replaceWithMoment, DescriptionDocumentHook, activeMomentRange, invalidMomentIds, invalidTypedTimeRanges, backspaceMoment, momentDeletionPlugin, momentDeletionKey } from '../js/hooks/description_document.js'
 
 const moments = [
   { id: 'first', start: 2.5, text: 'A plane.\nA new paragraph.' },
@@ -175,4 +176,53 @@ test('typing after arming a label cancels deletion and leaves the label intact',
   state = state.apply(state.tr.insertText('Text'))
   assert.equal(momentDeletionKey.getState(state), null)
   assert.equal(momentsFromDocument(state.doc).moments[0].id, 'new')
+})
+
+test('subtitle line breaks stay inside the cue on load, edit, undo and reopen', () => {
+  const doc = documentFromMoments(moments, 'subtitle')
+  assert.equal(doc.childCount, 2)
+  assert.equal(doc.firstChild.child(2).type.name, 'hard_break')
+  let state = EditorState.create({ doc, plugins: [history()] })
+  const dispatch = tr => { state = state.apply(tr) }
+  dispatch(state.tr.setSelection(TextSelection.create(doc, doc.firstChild.nodeSize - 1)))
+  subtitleLineBreak(state, dispatch)
+  dispatch(state.tr.insertText('Third line.'))
+  const edited = momentsFromDocument(state.doc).moments
+  assert.deepEqual(edited, [{ ...moments[0], text: moments[0].text + '\nThird line.' }, moments[1]])
+  assert.ok(documentFromMoments(edited, 'subtitle').eq(state.doc))
+  undo(state, dispatch)
+  assert.ok(state.doc.eq(doc))
+})
+
+test('multiline paste stays in the current subtitle, and copied time labels survive', () => {
+  const doc = documentFromMoments(moments, 'subtitle')
+  const plain = documentFromMoments([{ start: null, text: 'First\nSecond' }])
+  let state = EditorState.create({ doc })
+  state = state.apply(state.tr.setSelection(TextSelection.create(doc, 2))
+    .replaceSelection(subtitlePaste(new Slice(plain.content, 1, 1))))
+  assert.equal(state.doc.childCount, 2)
+  assert.equal(momentsFromDocument(state.doc).moments[0].text, 'First\nSecond' + moments[0].text)
+  const copied = new Slice(doc.content, 1, 1)
+  assert.equal(subtitlePaste(copied), copied)
+})
+
+test('explicit subtitle ends survive editing and reopening a multiline cue', () => {
+  const cues = [{ ...moments[0], end: 4.25 }, moments[1]]
+  const state = EditorState.create({ doc: documentFromMoments(cues, 'subtitle') })
+  assert.deepEqual(momentsFromDocument(state.doc).moments, cues)
+  const updated = state.apply(state.tr.setNodeMarkup(1, null, { ...state.doc.nodeAt(1).attrs, end: 5 }))
+  assert.deepEqual(momentsFromDocument(updated.doc).moments, [{ ...cues[0], end: 5 }, cues[1]])
+})
+
+test('subtitle reading pace belongs to the time label without a feedback row', () => {
+  const state = EditorState.create({ doc: documentFromMoments(moments, 'subtitle') })
+  const context = {
+    el: { dataset: { kind: 'subtitle', duration: '10' } },
+    playbackWindows: [{ id: 'first', end: 4 }],
+    feedback: [{ after_id: 'first', count: 1, label: 'Fast reading pace' }],
+  }
+  const decorations = DescriptionDocumentHook.decorations.call(context, state).find()
+  assert.equal(decorations.length, 1)
+  assert.deepEqual(decorations[0].spec, { end: 4, pace: 'Fast reading pace' })
+  assert.equal(decorations[0].to, decorations[0].from + 1)
 })

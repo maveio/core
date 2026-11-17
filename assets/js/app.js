@@ -30,6 +30,7 @@ import { ChartHook } from "./hooks/chart"
 import { cdn } from "./upload"
 import { FileMenuHook } from "./hooks/file_menu"
 import { TextEditorPreviewHook } from "./hooks/text_editor_preview"
+import { ModalResizeHook } from "./hooks/modal_resize"
 import { DescriptionDocumentHook } from "./hooks/description_document"
 import { DescriptionPlaybackHook } from "./hooks/description_playback"
 
@@ -723,6 +724,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
     auto_open_file_picker: AutoOpenFilePickerHook,
     file_menu: FileMenuHook,
     text_editor_preview: TextEditorPreviewHook,
+    modal_resize: ModalResizeHook,
     description_document: DescriptionDocumentHook,
     description_playback: DescriptionPlaybackHook,
     preserve_scroll: PreserveScrollHook,

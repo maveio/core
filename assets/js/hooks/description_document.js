@@ -1,4 +1,4 @@
-import { Schema } from "prosemirror-model"
+import { Fragment, Schema, Slice } from "prosemirror-model"
 import { EditorState, Plugin, PluginKey, TextSelection } from "prosemirror-state"
 import { EditorView, Decoration, DecorationSet } from "prosemirror-view"
 import { baseKeymap } from "prosemirror-commands"
@@ -30,10 +30,10 @@ export const descriptionSchema = new Schema({
     hard_break: { inline: true, group: "inline", selectable: false, toDOM: () => ["br"], parseDOM: [{ tag: "br" }] },
     moment: {
       inline: true, group: "inline", atom: true,
-      attrs: { id: {}, start: {} },
+      attrs: { id: {}, start: {}, end: { default: null } },
       leafText: node => `[${formatMoment(node.attrs.start)}]`,
-      toDOM: node => ["span", { "data-moment": node.attrs.id, "data-start": node.attrs.start }, `[${formatMoment(node.attrs.start)}]`],
-      parseDOM: [{ tag: "span[data-moment]", getAttrs: el => ({ id: el.dataset.moment, start: Number(el.dataset.start) }) }],
+      toDOM: node => ["span", { "data-moment": node.attrs.id, "data-start": node.attrs.start, "data-end": node.attrs.end }, `[${formatMoment(node.attrs.start)}]`],
+      parseDOM: [{ tag: "span[data-moment]", getAttrs: el => ({ id: el.dataset.moment, start: Number(el.dataset.start), end: el.dataset.end ? Number(el.dataset.end) : null }) }],
     },
   },
 })
@@ -42,6 +42,10 @@ export function replaceWithMoment(state, from, to, time, id) {
   const node = descriptionSchema.nodes.moment.create({ id, start: time })
   const transaction = state.tr.delete(from, to)
   let position = from
+  if (transaction.doc.resolve(position).nodeBefore?.type === descriptionSchema.nodes.hard_break) {
+    transaction.delete(position - 1, position)
+    position--
+  }
   if (transaction.doc.resolve(position).parentOffset > 0) {
     transaction.split(position)
     position += 2
@@ -94,16 +98,41 @@ export function backspaceMoment(state, dispatch) {
   return true
 }
 
-export function documentFromMoments(moments) {
+export function subtitleLineBreak(state, dispatch) {
+  if (dispatch) dispatch(state.tr.replaceSelectionWith(descriptionSchema.nodes.hard_break.create()).scrollIntoView())
+  return true
+}
+
+export function subtitlePaste(slice) {
+  if (slice.content.childCount < 2) return slice
+  for (let i = 0; i < slice.content.childCount; i++) {
+    if (slice.content.child(i).type !== descriptionSchema.nodes.paragraph) return slice
+  }
+  let hasLabel = false
+  slice.content.descendants(node => { if (node.type === descriptionSchema.nodes.moment) hasLabel = true })
+  if (hasLabel) return slice
+  const lines = []
+  slice.content.forEach((paragraph, _offset, index) => {
+    if (index) lines.push(descriptionSchema.nodes.hard_break.create())
+    paragraph.content.forEach(node => lines.push(node))
+  })
+  return new Slice(Fragment.from(lines), 0, 0)
+}
+
+export function documentFromMoments(moments, kind) {
   const paragraphs = []
   for (const moment of moments) {
     const lines = moment.text.split("\n")
+    let content = []
     lines.forEach((line, index) => {
-      const content = []
-      if (index === 0 && moment.start != null) content.push(descriptionSchema.nodes.moment.create({ id: moment.id, start: moment.start }))
+      if (index && kind === "subtitle") content.push(descriptionSchema.nodes.hard_break.create())
+      if (index === 0 && moment.start != null) content.push(descriptionSchema.nodes.moment.create({ id: moment.id, start: moment.start, end: moment.end }))
       if (line) content.push(descriptionSchema.text(line))
-      else if (content.length) content.push(descriptionSchema.text(" "))
-      paragraphs.push(descriptionSchema.nodes.paragraph.create(null, content))
+      else if (index === 0 && content.length) content.push(descriptionSchema.text(" "))
+      if (kind !== "subtitle" || index === lines.length - 1) {
+        paragraphs.push(descriptionSchema.nodes.paragraph.create(null, content))
+        content = []
+      }
     })
   }
   return descriptionSchema.nodes.doc.create(null, paragraphs.length ? paragraphs : [descriptionSchema.nodes.paragraph.create()])
@@ -120,6 +149,7 @@ export function momentsFromDocument(doc) {
       if (node.type.name === "moment") {
         if (current && offset > 0) ends.set(current.id, paragraphEnd)
         current = { id: node.attrs.id, start: node.attrs.start, text: "" }
+        if (node.attrs.end != null) current.end = node.attrs.end
         moments.push(current)
       } else {
         if (!current) {
@@ -158,23 +188,26 @@ export function activeMomentRange(doc, time, windows = []) {
   doc.descendants((node, position) => {
     if (node.type.name === "moment") anchors.push({ id: node.attrs.id, start: node.attrs.start, from: position })
   })
+  const byId = new Map(windows.map(window => [window.id, window]))
   let active = -1
   anchors.forEach((anchor, index) => {
-    const window = windows.find(window => window.id === anchor.id)
+    const window = byId.get(anchor.id)
     if (window && window.start <= time && time < window.end && (active < 0 || anchor.start >= anchors[active].start)) active = index
   })
   return active < 0 ? null : { ...anchors[active], to: anchors[active + 1]?.from ?? doc.content.size }
 }
 
-export function invalidMomentIds(doc, duration = Infinity) {
+export function invalidMomentIds(doc, duration = Infinity, originalStarts = new Map()) {
   const anchors = []
   doc.descendants(node => {
     if (node.type.name === "moment") anchors.push(node.attrs)
   })
+  const ordered = (a, b) => a.start < b.start ||
+    (a.start === b.start && originalStarts.get(a.id) === a.start && originalStarts.get(b.id) === b.start)
   return new Set(anchors.filter((anchor, index) =>
     !Number.isFinite(anchor.start) || anchor.start < 0 || anchor.start >= duration ||
-    (index > 0 && anchor.start <= anchors[index - 1].start) ||
-    (index + 1 < anchors.length && anchor.start >= anchors[index + 1].start)
+    (index > 0 && !ordered(anchors[index - 1], anchor)) ||
+    (index + 1 < anchors.length && !ordered(anchor, anchors[index + 1]))
   ).map(anchor => anchor.id))
 }
 
@@ -201,6 +234,8 @@ export function invalidTypedTimeRanges(doc, duration = Infinity) {
 
 export const DescriptionDocumentHook = {
   mounted() {
+    const initial = JSON.parse(this.el.dataset.document)
+    this.originalStarts = new Map(this.el.dataset.kind === "subtitle" ? initial.map(m => [m.id, m.start]) : [])
     this.sequence = 0
     this.feedback = JSON.parse(this.el.dataset.feedback)
     this.playbackWindows = JSON.parse(this.el.dataset.playbackWindows || "[]")
@@ -213,13 +248,16 @@ export const DescriptionDocumentHook = {
       if (time == null || time >= Number(this.el.dataset.duration)) return null
       return replaceWithMoment(state, start, end, time, crypto.randomUUID())
     })
+    const subtitle = this.el.dataset.kind === "subtitle"
+    const lineKeys = subtitle ? { Enter: subtitleLineBreak, "Shift-Enter": subtitleLineBreak } : {}
     this.view = new EditorView(this.el, {
       state: EditorState.create({
-        doc: documentFromMoments(JSON.parse(this.el.dataset.document)),
-        plugins: [history(), keymap({ "Backspace": backspaceMoment, "Mod-z": undo, "Shift-Mod-z": redo, "Mod-y": redo }), keymap(baseKeymap), inputRules({ rules: [typedMoment] }), uniqueMoments(), momentDeletionPlugin(), feedbackPlugin],
+        doc: documentFromMoments(initial, this.el.dataset.kind),
+        plugins: [history(), keymap({ ...lineKeys, "Backspace": backspaceMoment, "Mod-z": undo, "Shift-Mod-z": redo, "Mod-y": redo }), keymap(baseKeymap), inputRules({ rules: [typedMoment] }), uniqueMoments(), momentDeletionPlugin(), feedbackPlugin],
       }),
+      transformPasted: subtitle ? subtitlePaste : undefined,
       attributes: { class: "description-prose", role: "textbox", "aria-multiline": "true", "aria-label": this.el.dataset.label },
-      nodeViews: { moment: (node, view, getPos) => this.momentView(node, view, getPos) },
+      nodeViews: { moment: (node, view, getPos, decorations) => this.momentView(node, view, getPos, decorations) },
       dispatchTransaction: transaction => {
         this.view.updateState(this.view.state.apply(transaction))
         if (transaction.docChanged) this.changed()
@@ -235,13 +273,14 @@ export const DescriptionDocumentHook = {
       this.view.focus()
       const { state } = this.view
       this.view.dispatch(replaceWithMoment(state, state.selection.from, state.selection.to,
-        Math.min(time, Number(this.el.dataset.duration) - 0.001), crypto.randomUUID()).scrollIntoView())
+        Math.floor(Math.min(time, Number(this.el.dataset.duration) - 0.001) * 1000) / 1000, crypto.randomUUID()).scrollIntoView())
     }
     this.addButton.addEventListener("click", this.addMoment)
     this.beforeSubmit = () => { this.hidden.value = JSON.stringify(momentsFromDocument(this.view.state.doc).moments) }
     this.form.addEventListener("submit", this.beforeSubmit, true)
     this.onPlayhead = event => {
       const time = event.detail.time
+      if (time === this.currentTime) return
       const before = activeMomentRange(this.view.state.doc, this.currentTime, this.playbackWindows)?.id
       this.currentTime = time
       if (activeMomentRange(this.view.state.doc, time, this.playbackWindows)?.id !== before) this.view.updateState(this.view.state)
@@ -266,7 +305,9 @@ export const DescriptionDocumentHook = {
 
   decorations(state) {
     const { ends, moments } = momentsFromDocument(state.doc)
-    const decorations = this.feedback.flatMap(group => {
+    const subtitle = this.el?.dataset.kind === "subtitle"
+    const paceHints = subtitle ? new Map(this.feedback.map(group => [group.after_id, group.label])) : null
+    const decorations = subtitle ? [] : this.feedback.flatMap(group => {
       const position = ends.get(group.after_id)
       const lastMoment = moments.find(moment => moment.id === group.after_id)
       if (position == null || !lastMoment || !group.count) return []
@@ -284,10 +325,17 @@ export const DescriptionDocumentHook = {
       decorations.push(Decoration.inline(active.from, active.to, { class: "description-active-text" }))
       decorations.push(Decoration.node(active.from, active.from + 1, { class: "description-active-moment", "aria-current": "true" }))
     }
-    const invalid = invalidMomentIds(state.doc, Number(this.el?.dataset.duration ?? Infinity))
+    const invalid = invalidMomentIds(state.doc, Number(this.el?.dataset.duration ?? Infinity), this.originalStarts)
     const pending = momentDeletionKey.getState(state)
     if (pending) decorations.push(Decoration.node(pending.position, pending.position + 1, { class: "description-armed-moment" }))
+    const cueEnds = subtitle
+      ? new Map(this.playbackWindows.map(window => [window.id, window.end])) : null
     state.doc.descendants((node, position) => {
+      if (node.type.name === "moment" && cueEnds?.has(node.attrs.id)) {
+        const end = cueEnds.get(node.attrs.id)
+        const pace = paceHints.get(node.attrs.id) || ""
+        decorations.push(Decoration.node(position, position + 1, { "data-cue-end": end, "data-reading-pace": pace }, { end, pace }))
+      }
       if (node.type.name === "moment" && invalid.has(node.attrs.id)) {
         decorations.push(Decoration.node(position, position + 1, {
           class: "description-invalid-moment", "aria-invalid": "true",
@@ -304,7 +352,9 @@ export const DescriptionDocumentHook = {
     return DecorationSet.create(state.doc, decorations)
   },
 
-  momentView(node, view, getPos) {
+  momentView(node, view, getPos, decorations) {
+    const subtitle = this.el.dataset.kind === "subtitle"
+    let cueTiming = decorations.find(d => d.spec.end != null)?.spec
     let current = node
     const dom = document.createElement("span")
     dom.className = "description-moment"
@@ -312,52 +362,86 @@ export const DescriptionDocumentHook = {
     const button = document.createElement("button")
     button.type = "button"
     button.className = "description-time"
+    const endButton = subtitle ? button.cloneNode(false) : null
     const refresh = () => {
       button.textContent = formatMoment(current.attrs.start)
       button.dataset.previewTime = current.attrs.start
-      button.setAttribute("aria-label", `${this.el.dataset.editTimeLabel} ${button.textContent}`)
+      button.setAttribute("aria-label", `${subtitle ? this.el.dataset.startLabel : this.el.dataset.editTimeLabel} ${button.textContent}`)
+      if (endButton) {
+        const end = current.attrs.end ?? cueTiming?.end
+        endButton.title = cueTiming?.pace || ""
+        if (endButton.title) endButton.setAttribute("aria-description", endButton.title)
+        else endButton.removeAttribute("aria-description")
+        endButton.disabled = !Number.isFinite(end)
+        endButton.textContent = endButton.disabled ? "…" : formatMoment(end)
+        endButton.setAttribute("aria-label", `${this.el.dataset.endLabel} ${endButton.textContent}`)
+      }
     }
     refresh()
     dom.appendChild(button)
-    button.addEventListener("click", () => {
+    if (endButton) dom.append("–", endButton)
+    const edit = (trigger, editingEnd) => {
       if (dom.querySelector("input")) return
       const input = document.createElement("input")
       input.type = "text"
-      input.value = formatMoment(current.attrs.start)
+      input.value = trigger.textContent
       input.className = "description-time-input"
-      input.setAttribute("aria-label", this.el.dataset.editTimeLabel)
+      input.setAttribute("aria-label", trigger.getAttribute("aria-label"))
       const remove = document.createElement("button")
       remove.type = "button"
       remove.className = "description-time-remove"
       remove.textContent = "×"
       remove.setAttribute("aria-label", this.el.dataset.removeTimeLabel)
-      button.hidden = true
-      dom.append(input, remove)
-      const close = () => { input.remove(); remove.remove(); button.hidden = false }
-      const commit = () => {
+      trigger.hidden = true
+      trigger.after(input)
+      if (!editingEnd) dom.append(remove)
+      let closed = false
+      const close = () => { closed = true; input.remove(); remove.remove(); trigger.hidden = false }
+      const commit = (focusEditor = true) => {
+        if (closed) return
         const time = parseMoment(input.value)
-        if (time == null || time >= Number(this.el.dataset.duration)) { input.setAttribute("aria-invalid", "true"); return }
-        view.dispatch(view.state.tr.setNodeMarkup(getPos(), null, { ...current.attrs, start: time }))
+        const duration = Number(this.el.dataset.duration)
+        const end = current.attrs.end ?? cueTiming?.end
+        const invalid = editingEnd ? time <= current.attrs.start || time > duration
+          : time >= duration || (subtitle && end != null && time >= end)
+        if (time == null || invalid) {
+          input.setAttribute("aria-invalid", "true")
+          input.setCustomValidity(this.el.dataset.invalidTimeLabel)
+          return
+        }
+        if (time !== (editingEnd ? end : current.attrs.start)) {
+          const attrs = editingEnd ? { ...current.attrs, end: time }
+            : { ...current.attrs, start: time, end: subtitle ? end : null }
+          view.dispatch(view.state.tr.setNodeMarkup(getPos(), null, attrs))
+        }
         close()
-        view.focus()
+        if (focusEditor) view.focus()
       }
       input.addEventListener("keydown", event => {
         if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); commit() }
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); view.focus() }
       })
-      input.addEventListener("blur", event => { if (event.relatedTarget !== remove) commit() })
+      input.addEventListener("blur", event => { if (event.relatedTarget !== remove) commit(false) })
       remove.addEventListener("click", () => {
         view.dispatch(view.state.tr.delete(getPos(), getPos() + 1))
         view.focus()
       })
       input.focus()
       input.select()
-    })
+    }
+    button.addEventListener("click", () => edit(button, false))
+    endButton?.addEventListener("click", () => edit(endButton, true))
     return {
       dom,
       stopEvent: () => true,
       ignoreMutation: () => true,
-      update(updated) { if (updated.type !== current.type) return false; current = updated; refresh(); return true },
+      update(updated, decorations) {
+        if (updated.type !== current.type) return false
+        current = updated
+        cueTiming = decorations.find(d => d.spec.end != null)?.spec
+        refresh()
+        return true
+      },
     }
   },
 

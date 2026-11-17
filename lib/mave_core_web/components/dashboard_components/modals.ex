@@ -25,6 +25,7 @@ defmodule MaveCoreWeb.DashboardComponents.Modals do
   attr :static, :boolean, default: false, doc: "Use static positioning (for storybook preview)"
   attr :panel_class, :string, default: "w-96"
   attr :theme, :string, values: ~w(light dark), default: "light"
+  attr :resizable, :boolean, default: false
   attr :compact, :boolean, default: false
   attr :interactive_background, :boolean, default: false
   slot :inner_block, required: true
@@ -48,6 +49,8 @@ defmodule MaveCoreWeb.DashboardComponents.Modals do
     >
       <div class="flex-grow"></div>
       <div
+        id={@resizable && "#{@id}-panel"}
+        phx-hook={@resizable && "modal_resize"}
         class={[
           "border-l shadow-lg",
           @interactive_background && "pointer-events-auto",
@@ -55,12 +58,24 @@ defmodule MaveCoreWeb.DashboardComponents.Modals do
           @theme == "light" && "bg-white border-stone-200 border-opacity-70",
           @theme == "dark" && "bg-stone-900 border-stone-800 text-stone-200",
           @panel_class,
+          @resizable && "relative",
           "transition ease-out duration-200",
           @show && "translate-x-0",
           !@show && "translate-x-full"
         ]}
         phx-click-away={if !@interactive_background, do: @on_cancel}
       >
+        <div
+          :if={@resizable}
+          id={"#{@id}-resize"}
+          phx-update="ignore"
+          role="separator"
+          tabindex="0"
+          aria-orientation="vertical"
+          aria-label={gettext("Resize editor panel")}
+          title={gettext("Resize editor panel")}
+          class="absolute inset-y-0 left-0 z-10 hidden w-3 cursor-ew-resize touch-none select-none border-l-2 border-transparent transition-colors hover:border-blue-400/50 focus-visible:border-blue-400 focus-visible:outline-none active:border-blue-400 sm:block"
+        />
         <div
           :if={!@compact}
           class={[

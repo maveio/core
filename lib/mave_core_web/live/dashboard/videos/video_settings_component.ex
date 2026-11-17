@@ -409,11 +409,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           editor
           |> Map.put(:texts, SubtitleDocument.texts(editor.document))
           |> Map.put(:error, nil)
-          |> then(fn editor ->
-            if editor.kind == :audio_description,
-              do: Map.put(editor, :initial_moments, editor.moments),
-              else: editor
-          end)
+          |> Map.put(:initial_moments, editor.moments)
 
         {:noreply, assign(socket, :subtitle_editor, editor)}
 
@@ -437,8 +433,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   def handle_event("change_description_document", %{"moments" => moments}, socket) do
     editor = socket.assigns.subtitle_editor
 
-    with %{kind: :audio_description} <- editor,
-         {:ok, moments} <- DescriptionDocument.validate(moments, editor.duration) do
+    with %{} <- editor,
+         {:ok, moments} <- validate_editor_moments(editor, moments) do
       editor = %{editor | moments: moments, error: nil}
 
       {:reply,
@@ -492,19 +488,22 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   def handle_event("save_subtitle_text", %{"editor" => %{"document" => json}}, socket) do
     editor = socket.assigns.subtitle_editor
 
-    with %{kind: :audio_description} <- editor,
-         {:ok, moments} <- Jason.decode(json),
-         {:ok, _} <-
-           Assets.save_description_draft(
-             socket.assigns.embed,
-             editor.subtitle_id,
-             editor.revision,
-             moments
-           ) do
-      {:noreply,
-       socket
-       |> assign(:subtitle_editor, nil)
-       |> put_flash(:info, gettext("Description draft saved."))}
+    save =
+      if editor && editor.kind == :subtitle,
+        do: &Assets.save_subtitle_document/4,
+        else: &Assets.save_description_draft/4
+
+    with %{} <- editor,
+         {:ok, moments} when is_list(moments) <- Jason.decode(json),
+         {:ok, _} <- save.(socket.assigns.embed, editor.subtitle_id, editor.revision, moments) do
+      if editor.kind == :subtitle, do: notify_parent(:subtitles_updated)
+
+      message =
+        if editor.kind == :subtitle,
+          do: gettext("Subtitle text saved."),
+          else: gettext("Description draft saved.")
+
+      {:noreply, socket |> assign(:subtitle_editor, nil) |> put_flash(:info, message)}
     else
       {:error, reason} ->
         {:noreply,
@@ -913,16 +912,16 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             do: gettext("Edit audio description"),
             else: gettext("Edit subtitles")
         }
-        panel_class="w-full max-w-2xl"
+        panel_class="w-full max-w-2xl sm:w-[var(--editor-width,100%)]"
+        resizable
         theme="dark"
         compact
-        interactive_background={@subtitle_editor.kind == :audio_description}
+        interactive_background
         on_cancel={JS.push("close_subtitle_editor", target: @myself)}
       >
         <.form
           for={to_form(%{}, as: :editor)}
           id="subtitle-text-form"
-          phx-change={if @subtitle_editor.kind == :subtitle, do: "change_subtitle_text"}
           phx-submit="save_subtitle_text"
           phx-target={@myself}
           phx-hook="text_editor_preview"
@@ -937,24 +936,33 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
                 "Edit and save a draft. The published audio and text stay as they are until new speech is generated."
               )}
             <% else %>
-              {gettext("Edit the text below. The existing timing stays in place.")}
+              {gettext(
+                "Click a start or end time to edit it. Press Enter for a new line in the same subtitle."
+              )}
             <% end %>
           </p>
           <div
-            :if={@subtitle_editor.kind == :audio_description}
             id="description-playback-controls"
             phx-hook="description_playback"
             phx-update="ignore"
             data-player-embed={@video.public_id}
             data-track-label={@subtitle_editor.label}
+            data-kind={@subtitle_editor.kind}
             data-track-language={@subtitle_editor.language}
             data-duration={@subtitle_editor.duration}
-            data-play-label={gettext("Play with audio description")}
+            data-play-label={
+              if(@subtitle_editor.kind == :subtitle,
+                do: gettext("Play video"),
+                else: gettext("Play with audio description")
+              )
+            }
             data-pause-label={gettext("Pause")}
             data-active-label={gettext("Published AD")}
             data-inactive-label={gettext("AD not active")}
-            data-waiting-label={gettext("Waiting for AD audio")}
-            data-error-label={gettext("Could not play AD audio. Please try again.")}
+            data-waiting-label={
+              if @subtitle_editor.kind == :audio_description, do: gettext("Waiting for AD audio")
+            }
+            data-error-label={gettext("Could not play the video. Please try again.")}
             class="mb-3 flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-stone-800 pb-2"
           >
             <.dash_button
@@ -974,7 +982,12 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
               icon="hero-play"
               icon_only
               data-play-toggle
-              aria-label={gettext("Play with audio description")}
+              aria-label={
+                if(@subtitle_editor.kind == :subtitle,
+                  do: gettext("Play video"),
+                  else: gettext("Play with audio description")
+                )
+              }
               class="[&_span]:text-blue-400"
               disabled
             />
@@ -995,15 +1008,16 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
               class="text-[10px] text-stone-500"
               title={@subtitle_editor.label}
             >
-              {gettext("Waiting for AD audio")}
+              {if @subtitle_editor.kind == :audio_description, do: gettext("Waiting for AD audio")}
             </span>
             <div class="flex-1" />
             <.dash_button type="button" variant="link" data-add-moment class="text-xs">
-              {gettext("Add moment")}
+              {if @subtitle_editor.kind == :subtitle,
+                do: gettext("Add subtitle"),
+                else: gettext("Add moment")}
             </.dash_button>
           </div>
           <input
-            :if={@subtitle_editor.kind == :audio_description}
             type="hidden"
             name="editor[document]"
             data-description-document
@@ -1014,57 +1028,28 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             class="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain py-1 pr-2"
           >
             <div
-              :if={@subtitle_editor.kind == :audio_description}
               id="description-document"
               phx-hook="description_document"
               phx-update="ignore"
               phx-target={@myself}
+              data-kind={@subtitle_editor.kind}
               data-document={Jason.encode!(@subtitle_editor.moments)}
               data-feedback={Jason.encode!(description_groups(@subtitle_editor))}
               data-playback-windows={Jason.encode!(description_playback_windows(@subtitle_editor))}
               data-duration={@subtitle_editor.duration}
-              data-label={gettext("Audio description text")}
+              data-label={
+                if @subtitle_editor.kind == :subtitle,
+                  do: gettext("Subtitle text"),
+                  else: gettext("Audio description text")
+              }
               data-edit-time-label={gettext("Edit moment")}
+              data-start-label={gettext("Start time")}
+              data-end-label={gettext("End time")}
               data-remove-time-label={gettext("Remove time label")}
               data-invalid-time-label={
                 gettext("Use a valid time between the previous and next moment.")
               }
             />
-            <div
-              :for={cue <- SubtitleDocument.cues(@subtitle_editor.document)}
-              :if={@subtitle_editor.kind == :subtitle}
-              class="grid grid-cols-1 items-start gap-x-3 sm:grid-cols-[7rem_minmax(0,1fr)]"
-            >
-              <div>
-                <button
-                  id={"subtitle-timing-#{cue.id}"}
-                  type="button"
-                  data-preview-time={cue.start_seconds}
-                  aria-label={gettext("Preview frame at %{time}", time: cue.time_range)}
-                  disabled={!thumbnail_preview_available?(@video)}
-                  class="rounded px-2 py-2 text-left text-xs tabular-nums text-stone-400 outline-none enabled:cursor-help enabled:hover:text-stone-100 enabled:focus-visible:ring-1 enabled:focus-visible:ring-blue-500 sm:px-0"
-                >
-                  {cue.time_range}
-                </button>
-              </div>
-              <.input
-                type="textarea"
-                id={"subtitle-passage-#{cue.id}"}
-                name={"editor[cues][#{cue.id}]"}
-                value={Map.get(@subtitle_editor.texts, cue.id, cue.text)}
-                aria-label={gettext("Passage %{number}", number: String.to_integer(cue.id) + 1)}
-                aria-describedby={
-                  if @subtitle_editor.kind == :audio_description,
-                    do: "subtitle-timing-#{cue.id} speech-fit-#{cue.id}",
-                    else: "subtitle-timing-#{cue.id}"
-                }
-                rows="1"
-                required
-                maxlength="20000"
-                spellcheck="true"
-                class="w-full resize-none overflow-hidden rounded-md border border-transparent bg-transparent px-2 py-1 text-sm leading-6 text-stone-200 outline-none hover:border-stone-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
           </div>
           <p :if={@subtitle_editor.error} role="alert" class="mt-6 text-sm text-red-400">
             {@subtitle_editor.error}
@@ -1083,8 +1068,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
               loading_on_submit
               disabled={
                 !subtitle_editor_changed?(@subtitle_editor) or
-                  (@subtitle_editor.kind == :audio_description and
-                     DescriptionDocument.validate_time_labels(@subtitle_editor.moments) != :ok)
+                  !valid_editor_labels?(@subtitle_editor)
               }
             >
               {if @subtitle_editor.kind == :audio_description,
@@ -3780,11 +3764,51 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
   defp subtitle_editor_changed?(nil), do: false
 
-  defp subtitle_editor_changed?(%{kind: :audio_description} = editor),
+  defp subtitle_editor_changed?(%{moments: _} = editor),
     do: editor.moments != editor.initial_moments
 
   defp subtitle_editor_changed?(editor),
     do: editor.texts != SubtitleDocument.texts(editor.document)
+
+  defp validate_editor_moments(%{kind: :subtitle, duration: duration}, moments),
+    do: SubtitleDocument.validate_moments(moments, duration)
+
+  defp validate_editor_moments(editor, moments),
+    do: DescriptionDocument.validate(moments, editor.duration)
+
+  defp valid_editor_labels?(editor) do
+    original_starts =
+      if editor.kind == :subtitle,
+        do: SubtitleDocument.original_starts(editor.document),
+        else: %{}
+
+    DescriptionDocument.validate_time_labels(editor.moments, original_starts) == :ok and
+      (editor.kind != :subtitle or
+         (editor.moments != [] and
+            Enum.all?(editor.moments, &(is_number(&1["start"]) and String.trim(&1["text"]) != ""))))
+  end
+
+  defp description_groups(%{kind: :subtitle} = editor) do
+    texts = Map.new(editor.moments, &{&1["id"], &1["text"]})
+
+    for window <- description_playback_windows(editor),
+        seconds = window.end - window.start,
+        seconds > 0,
+        speed =
+          round(
+            String.length(
+              MaveCore.AudioDescription.SpeechTiming.editor_spoken_text(texts[window.id])
+            ) / seconds
+          ),
+        speed > 20 do
+      %{
+        after_id: window.id,
+        count: 1,
+        state: "fast",
+        label: gettext("Fast reading pace · %{speed} characters/s", speed: speed)
+      }
+    end
+  end
 
   defp description_groups(editor) do
     DescriptionDocument.groups(
@@ -3795,6 +3819,9 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     )
     |> Enum.map(fn group -> Map.put(group, :label, description_group_label(group)) end)
   end
+
+  defp description_playback_windows(%{kind: :subtitle} = editor),
+    do: SubtitleDocument.windows(editor.document, editor.moments, editor.duration)
 
   defp description_playback_windows(editor) do
     DescriptionDocument.playback_windows(

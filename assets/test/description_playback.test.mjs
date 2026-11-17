@@ -108,3 +108,14 @@ test('even a short pause resets acceleration while rapid clicks keep it', () => 
     assert.equal(seek.seconds, 1)
   }
 })
+
+test('subtitle playback uses the current audio and preserves mute', async () => {
+  let plays = 0
+  const context = {
+    subtitle: true, sync() {},
+    player: { paused: true, muted: true, async play() { plays++ } },
+  }
+  await DescriptionPlaybackHook.toggle.call(context)
+  assert.equal(plays, 1)
+  assert.equal(context.player.muted, true)
+})

@@ -49,6 +49,7 @@ function clock(seconds) {
 
 export const DescriptionPlaybackHook = {
   mounted() {
+    this.subtitle = this.el.dataset.kind === "subtitle"
     this.playButton = this.el.querySelector("[data-play-toggle]")
     this.time = this.el.querySelector("[data-playback-time]")
     this.status = this.el.querySelector("[data-playback-status]")
@@ -80,6 +81,11 @@ export const DescriptionPlaybackHook = {
   },
 
   unbindPlayer() {
+    if (this.selectedSubtitle?.mode === "showing") {
+      for (const [track, mode] of this.subtitleModes) track.mode = mode
+    }
+    this.selectedSubtitle = null
+    this.subtitleModes = null
     if (!this.player) return
     for (const event of ["play", "pause", "timeupdate", "loadedmetadata", "volumechange", "ended"]) {
       this.player.removeEventListener(event, this.onMedia)
@@ -88,10 +94,24 @@ export const DescriptionPlaybackHook = {
 
   sync() {
     this.bindPlayer()
-    this.menu = findAudioMenu(this.player?.shadowRoot)
+    this.menu = !this.subtitle && findAudioMenu(this.player?.shadowRoot)
     this.track = descriptionTrack(this.menu, this.el.dataset.trackLabel, this.el.dataset.trackLanguage)
-    const available = !!this.player && !!this.track
-    if (available && !this.initialized) {
+    const available = !!this.player && (this.subtitle || !!this.track)
+    if (available && this.subtitle && !this.initialized) {
+      const tracks = Array.from(this.player.shadowRoot?.querySelector("video, audio")?.textTracks || [])
+        .filter(track => ["captions", "subtitles"].includes(track.kind))
+      const matches = tracks.filter(track => track.language === this.el.dataset.trackLanguage)
+      if (matches.length === 1) {
+        this.subtitleModes = tracks.map(track => [track, track.mode])
+        this.selectedSubtitle = matches[0]
+        for (const track of tracks) {
+          if (track === this.selectedSubtitle) track.mode = "showing"
+          else if (track.mode === "showing") track.mode = "disabled"
+        }
+        this.initialized = true
+      }
+    }
+    if (available && !this.subtitle && !this.initialized) {
       this.previousTrack = this.menu.selected
       this.previousTrackLabel = this.menu.tracks.find(track => track.id === this.previousTrack)?.label
       this.initialized = true
@@ -116,7 +136,7 @@ export const DescriptionPlaybackHook = {
       detail: { time: this.player?.currentTime }, bubbles: true,
     }))
     if (!this.error) {
-      this.status.textContent = !available ? this.el.dataset.waitingLabel
+      this.status.textContent = this.subtitle ? "" : !available ? this.el.dataset.waitingLabel
         : this.menu.selected === this.track.id ? this.el.dataset.activeLabel : this.el.dataset.inactiveLabel
     }
   },
@@ -124,15 +144,15 @@ export const DescriptionPlaybackHook = {
   async toggle() {
     this.lastSeek = null
     this.sync()
-    if (!this.player || !this.track) return
+    if (!this.player || (!this.subtitle && !this.track)) return
     if (!this.player.paused) { this.player.pause(); return }
-    if (!selectAudioTrack(this.menu, this.track)) {
+    if (!this.subtitle && !selectAudioTrack(this.menu, this.track)) {
       this.showError()
       return
     }
     this.starting = true
     this.error = false
-    this.player.muted = false
+    if (!this.subtitle) this.player.muted = false
     this.sync()
     try {
       await this.player.play()

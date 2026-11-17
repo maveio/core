@@ -16,9 +16,11 @@ defmodule MaveCore.AudioDescription.DescriptionDocument do
     end)
   end
 
-  def validate(moments, duration) when is_list(moments) and is_number(duration) do
+  def validate(moments, duration, limit \\ @max_moments)
+
+  def validate(moments, duration, limit) when is_list(moments) and is_number(duration) do
     valid =
-      length(moments) <= @max_moments and
+      length(moments) <= limit and
         Enum.all?(moments, &valid_moment?(&1, duration)) and
         length(Enum.uniq_by(moments, & &1["id"])) == length(moments) and
         Enum.reduce(moments, 0, &(byte_size(&1["text"]) + &2)) <= @max_bytes
@@ -28,11 +30,18 @@ defmodule MaveCore.AudioDescription.DescriptionDocument do
       else: {:error, :invalid_moments}
   end
 
-  def validate(_, _), do: {:error, :invalid_moments}
+  def validate(_, _, _), do: {:error, :invalid_moments}
 
-  def validate_time_labels(moments) do
-    times = moments |> Enum.map(& &1["start"]) |> Enum.reject(&is_nil/1)
-    ordered? = times |> Enum.chunk_every(2, 1, :discard) |> Enum.all?(fn [a, b] -> a < b end)
+  def validate_time_labels(moments, original_starts \\ %{}) do
+    ordered? =
+      moments
+      |> Enum.reject(&is_nil(&1["start"]))
+      |> Enum.chunk_every(2, 1, :discard)
+      |> Enum.all?(fn [a, b] ->
+        a["start"] < b["start"] or
+          (a["start"] == b["start"] and original_starts[a["id"]] == a["start"] and
+             original_starts[b["id"]] == b["start"])
+      end)
 
     unfinished? =
       Enum.any?(moments, &Regex.match?(~r/\[[0-9.,-]*:[0-9:.,-]*\]?|\[[0-9.,-]*$/, &1["text"]))

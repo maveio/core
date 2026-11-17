@@ -15,6 +15,8 @@
 
 .description-prose { min-height: 12rem; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; color: #e7e5e4; font-size: 0.875rem; line-height: 1.8; padding: 0.5rem 0.25rem; }
 .description-prose p { margin: 0 0 0.65rem; }
+[data-kind="subtitle"] .description-prose p { text-align: left; line-height: 1.55; }
+[data-kind="subtitle"] .description-prose .description-moment { display: flex; width: fit-content; gap: 0.25rem; margin: 0 0 0.15rem; color: #78716c; font-size: 0.7rem; }
 .description-prose .ProseMirror-selectednode { outline: 1px solid #60a5fa; border-radius: 0.25rem; }
 .description-prose .ProseMirror-trailingBreak { display: initial; }
 .description-moment { display: inline-flex; align-items: center; vertical-align: baseline; margin-right: 0.5rem; white-space: nowrap; }
