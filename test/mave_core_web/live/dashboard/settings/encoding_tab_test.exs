@@ -28,15 +28,39 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.EncodingTabTest do
     def restriction_copy(_operation, _reason), do: %{}
   end
 
+  defmodule NoAssistant do
+    @behaviour MaveCore.UsageLimits
+    def can_create_video_embed?(_space), do: :ok
+    def can_add_space_member?(_space, _role), do: :ok
+    def can_use_pipeline_assistant?(_space), do: {:error, :plan}
+
+    def restriction_copy(:pipeline_assistant, :plan),
+      do: %{notice: "Ask AI for changes from the Pro plan."}
+
+    def restriction_copy(_operation, _reason), do: %{}
+  end
+
   setup do
     old_backend = Application.get_env(:mave_core, :usage_limits_backend)
     old_plugins = Application.get_env(:mave_core, :flow_step_plugins)
     old_storage = Application.get_env(:mave_core, :flow_storage_adapter)
+    old_provider = Application.get_env(:mave_core, :pipeline_assistant_provider)
     Application.put_env(:mave_core, :flow_step_plugins, [MaveCore.TestSupport.StepPluginStub])
+
+    Application.put_env(
+      :mave_core,
+      :pipeline_assistant_provider,
+      MaveCore.TestSupport.PipelineAssistantStub
+    )
 
     on_exit(fn ->
       Application.put_env(:mave_core, :flow_step_plugins, old_plugins)
       Application.delete_env(:mave_core, :step_plugin_stub_availability)
+      Application.delete_env(:mave_core, :pipeline_assistant_stub)
+
+      if old_provider,
+        do: Application.put_env(:mave_core, :pipeline_assistant_provider, old_provider),
+        else: Application.delete_env(:mave_core, :pipeline_assistant_provider)
 
       if old_storage,
         do: Application.put_env(:mave_core, :flow_storage_adapter, old_storage),
@@ -283,6 +307,213 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.EncodingTabTest do
                },
                space_pipeline: space
              )
+  end
+
+  describe "asking AI for a change" do
+    test "shows the proposal in the editor and saves it once approved", %{conn: conn} do
+      answer_with("I propose to stop making 4K.", [
+        %{"action" => "turn_off", "step_id" => "video_h264_uhd"},
+        %{"action" => "turn_off", "step_id" => "manifest"}
+      ])
+
+      {conn, space} = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, "/settings/encoding")
+      refute has_element?(view, "#pipeline-assistant-messages")
+
+      assert ask(view, "Do not generate 4K for this space") =~ "Working out a proposal"
+
+      render_async(view)
+      assert has_element?(view, "#pipeline-assistant-message-0", "Do not generate 4K")
+      assert_received {:request, request}
+      assert request.message == "Do not generate 4K for this space"
+
+      refute has_element?(view, "#pipeline-assistant-pending")
+      assert has_element?(view, "#pipeline-assistant-message-1", "I propose to stop making 4K.")
+
+      assert has_element?(
+               view,
+               "#pipeline-assistant-changes-1",
+               "Turn off Transcode Video H264 UHD"
+             )
+
+      assert has_element?(
+               view,
+               "#pipeline-assistant-follows-1",
+               "4 steps that depend on this follow"
+             )
+
+      assert has_element?(view, "#pipeline-assistant-follows-1", "Package HLS H264 UHD")
+
+      assert has_element?(
+               view,
+               "#pipeline-assistant-rejected-1",
+               "Build Manifest is required and stays on."
+             )
+
+      # The proposal is the editor's draft: same states, nothing saved yet.
+      assert has_element?(view, "#pipeline-step-video_h264_uhd[data-state=disabled]")
+      assert has_element?(view, "#pipeline-step-hls_h264_uhd[data-state=auto_disabled]")
+      assert has_element?(view, "#pipeline-step-manifest[data-state=enabled]")
+      assert has_element?(view, "#pipeline-proposed-video_h264_uhd")
+      assert has_element?(view, "#pipeline-proposed-hls_h264_uhd")
+      assert has_element?(view, "#pipeline-inspector-title", "Transcode Video H264 UHD")
+      assert has_element?(view, "#pipeline-dirty")
+      assert Pipelines.current(space) == nil
+
+      view |> element("#pipeline-assistant-approve") |> render_click()
+
+      assert %{version: 1, note: "AI: Do not generate 4K for this space", overrides: overrides} =
+               Pipelines.current(space)
+
+      assert overrides["disabled_steps"] == ["video_h264_uhd"]
+
+      assert has_element?(
+               view,
+               "#pipeline-assistant-message-1",
+               "Approved and saved as version 1"
+             )
+
+      refute has_element?(view, "#pipeline-assistant-approve")
+      refute has_element?(view, "#pipeline-proposed-video_h264_uhd")
+      refute has_element?(view, "#pipeline-dirty")
+    end
+
+    test "returns to the earlier draft when a proposal is dismissed", %{conn: conn} do
+      answer_with("I propose to give the transcription the name.", [
+        %{
+          "action" => "set_setting",
+          "step_id" => "transcribe_audio",
+          "setting" => "context",
+          "value" => "Northwind Studio"
+        }
+      ])
+
+      {conn, space} = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, "/settings/encoding")
+
+      render_hook_toggle(view, "purge_cdn")
+      ask(view, "Use our company name as context when transcribing")
+      render_async(view)
+
+      assert has_element?(view, "#pipeline-assistant-changes-1", "Northwind Studio")
+      assert has_element?(view, "#pipeline-setting-transcribe_audio-context", "Northwind Studio")
+      assert has_element?(view, "#pipeline-step-purge_cdn[data-state=disabled]")
+
+      view |> element("#pipeline-assistant-dismiss") |> render_click()
+
+      assert has_element?(view, "#pipeline-assistant-message-1", "Dismissed. Nothing was saved.")
+      refute has_element?(view, "#pipeline-proposed-transcribe_audio")
+      assert has_element?(view, "#pipeline-step-purge_cdn[data-state=disabled]")
+      assert has_element?(view, "#pipeline-dirty")
+      assert Pipelines.current(space) == nil
+
+      view |> element("#pipeline-step-transcribe_audio") |> render_click()
+      refute has_element?(view, "#pipeline-setting-transcribe_audio-context", "Northwind Studio")
+    end
+
+    test "answers without a proposal when nothing changes or the model fails", %{conn: conn} do
+      answer_with("I can turn optional steps off or on.", [])
+      {conn, space} = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, "/settings/encoding")
+
+      ask(view, "What can you do?")
+      render_async(view)
+
+      assert has_element?(view, "#pipeline-assistant-message-1", "I can turn optional steps")
+      refute has_element?(view, "#pipeline-assistant-changes-1")
+      refute has_element?(view, "#pipeline-assistant-approve")
+      refute has_element?(view, "#pipeline-dirty")
+
+      Application.put_env(:mave_core, :pipeline_assistant_stub, fn _request ->
+        {:error, {:http_error, 503}}
+      end)
+
+      ask(view, "No 4K please")
+      render_async(view)
+
+      assert has_element?(view, "#pipeline-assistant-message-3", "Nothing was changed")
+      refute has_element?(view, "#pipeline-dirty")
+      assert Pipelines.current(space) == nil
+    end
+
+    test "keeps the request with an answer to the assistant's question", %{conn: conn} do
+      answer_with("What is your company name?", [])
+      {conn, space} = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, "/settings/encoding")
+
+      ask(view, "Use our company name as context")
+      render_async(view)
+
+      answer_with("I propose to add the name.", [
+        %{
+          "action" => "set_setting",
+          "step_id" => "transcribe_audio",
+          "setting" => "context",
+          "value" => "Northwind Studio"
+        }
+      ])
+
+      ask(view, "Northwind Studio")
+      render_async(view)
+
+      assert_received {:request, %{history: []}}
+      assert_received {:request, %{message: "Northwind Studio", history: history}}
+
+      assert history == [
+               %{role: :user, text: "Use our company name as context"},
+               %{role: :assistant, text: "What is your company name?"}
+             ]
+
+      view |> element("#pipeline-assistant-approve") |> render_click()
+
+      assert %{note: "AI: Use our company name as context / Northwind Studio"} =
+               Pipelines.current(space)
+    end
+
+    test "is hidden without a configured model or without edit access", %{conn: conn} do
+      {conn, _space} = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, "/settings/encoding")
+      refute has_element?(view, "#pipeline-assistant")
+      refute has_element?(view, "#pipeline-assistant-notice")
+
+      answer_with("Sure.", [%{"action" => "turn_off", "step_id" => "video_h264_uhd"}])
+      Application.put_env(:mave_core, :usage_limits_backend, NoAssistant)
+      {:ok, view, _html} = live(conn, "/settings/encoding")
+      refute has_element?(view, "#pipeline-assistant")
+
+      assert has_element?(
+               view,
+               "#pipeline-assistant-notice",
+               "Ask AI for changes from the Pro plan."
+             )
+
+      # A crafted event does not reach the model either.
+      view
+      |> with_target("#encoding-pipeline")
+      |> render_submit("assistant_ask", %{"assistant" => %{"request" => "No 4K"}})
+
+      refute_received {:request, _request}
+
+      Application.put_env(:mave_core, :usage_limits_backend, ManagedPipeline)
+      {:ok, view, _html} = live(conn, "/settings/encoding")
+      refute has_element?(view, "#pipeline-assistant")
+      refute has_element?(view, "#pipeline-assistant-notice")
+    end
+  end
+
+  defp answer_with(reply, operations) do
+    test = self()
+
+    Application.put_env(:mave_core, :pipeline_assistant_stub, fn request ->
+      send(test, {:request, request})
+      {:ok, %{reply: reply, operations: operations}}
+    end)
+  end
+
+  defp ask(view, request) do
+    view
+    |> form("#pipeline-assistant-form", %{"assistant" => %{"request" => request}})
+    |> render_submit()
   end
 
   # Sends the toggle event directly, as a crafted client could.
