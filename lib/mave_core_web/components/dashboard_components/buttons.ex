@@ -24,6 +24,7 @@ defmodule MaveCoreWeb.DashboardComponents.Buttons do
   - `default` - ManageUI.button - white bg, stone ring, blue hover
   - `primary` - ManageUI.dark_button - blue bg, white text
   - `ghost` - ManageUI.light_button - transparent, blue text
+  - `link` - blue text link without a background
   - `danger` - red destructive button
 
   ## Examples
@@ -33,7 +34,7 @@ defmodule MaveCoreWeb.DashboardComponents.Buttons do
        <.dash_button icon="create">create</.dash_button>
        <.dash_button icon="link" icon_only />
   """
-  attr(:variant, :string, values: ~w(default primary ghost danger), default: "default")
+  attr(:variant, :string, values: ~w(default primary ghost link danger), default: "default")
   attr(:icon, :string, default: nil)
   attr(:icon_only, :boolean, default: false)
   attr(:disabled, :boolean, default: false)
@@ -310,6 +311,10 @@ defmodule MaveCoreWeb.DashboardComponents.Buttons do
   # Exact classes from ManageUI.light_button
   defp button_variant_classes("ghost", _has_icon) do
     "text-blue-400 text-sm px-3 py-1.5 active:bg-blue-500 active:text-white transition duration-100 ease-out hover:scale-110 ring-1 ring-transparent hover:shadow hover:ring-blue-400 cursor-pointer hover:bg-blue-50 rounded-md"
+  end
+
+  defp button_variant_classes("link", _has_icon) do
+    "bg-transparent text-blue-400 text-sm py-2 cursor-pointer hover:text-blue-300 hover:underline underline-offset-4 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-blue-400"
   end
 
   # Danger/destructive button - red styling

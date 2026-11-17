@@ -20,6 +20,7 @@ defmodule MaveCore.Assets.AudioDescription do
     field :vtt_file_size, :integer
     field :cue_count, :integer
     field :ducked_cue_count, :integer
+    field :text_draft, :map
 
     belongs_to :video, Video
 
