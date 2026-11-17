@@ -10,6 +10,8 @@ defmodule MaveCore.AudioDescription.SpeechFit do
   ]
   @max_speedup 1.15
 
+  def max_speedup, do: @max_speedup
+
   def fit(cue, speak, rewrite, opts \\ [])
 
   def fit(%{window: _} = cue, speak, rewrite, opts) do

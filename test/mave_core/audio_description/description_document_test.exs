@@ -64,18 +64,21 @@ defmodule MaveCore.AudioDescription.DescriptionDocumentTest do
              ])
   end
 
-  test "playback windows retain published speech duration and bound longer edits", %{
-    source: source,
-    moments: moments
-  } do
+  test "playback windows retain published speech duration and shift the next line after a longer edit",
+       %{
+         source: source,
+         moments: moments
+       } do
     assert [%{start: 2.0, end: 3.0}, %{start: 4.0, end: 5.0}] =
              DescriptionDocument.playback_windows(moments, source, "en", 10.0)
 
     longer =
-      List.update_at(moments, 0, &Map.put(&1, "text", String.duplicate("A plane flies. ", 30)))
+      List.update_at(moments, 0, &Map.put(&1, "text", String.duplicate("A plane flies. ", 3)))
 
-    assert [%{start: 2.0, end: 4.0}, _] =
+    assert [%{start: 2.0, end: stop}, %{start: next}] =
              DescriptionDocument.playback_windows(longer, source, "en", 10.0)
+
+    assert stop > 4.0 and next == stop
   end
 
   test "separate pauses have independent budgets", %{source: source, moments: moments} do

@@ -78,20 +78,12 @@ defmodule MaveCore.AudioDescription.DescriptionDocument do
       &(is_number(&1["start"]) and SpeechTiming.editor_spoken_text(&1["text"]) != "")
     )
     |> Enum.sort_by(& &1["start"])
-    |> Enum.chunk_every(2, 1)
-    |> Enum.map(fn [moment | following] ->
-      next_start =
-        case following do
-          [next] -> next["start"]
-          [] -> duration
-        end
-
-      %{
-        id: moment["id"],
-        start: moment["start"],
-        end: min(moment["start"] + estimated_seconds(moment, sources, language), next_start)
-      }
+    |> Enum.map_reduce(0.0, fn moment, cursor ->
+      start = max(moment["start"], cursor)
+      stop = min(start + estimated_seconds(moment, sources, language), duration)
+      {%{id: moment["id"], start: start, end: stop}, stop}
     end)
+    |> elem(0)
   end
 
   defp gap_index(nil, _gaps), do: :untimed

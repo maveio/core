@@ -141,6 +141,38 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   end
 
   def handle_info(
+        {:embed_updated,
+         %{
+           "space_id" => space_id,
+           "embed_id" => embed_id,
+           "description_audio" => status,
+           "render_id" => render_id
+         }},
+        %{assigns: %{current_space: %{id: space_id}, resource_embed: %{id: embed_id}}} = socket
+      )
+      when status in ["published", "failed"] do
+    if socket.assigns.settings_open do
+      send_update(VideoSettingsComponent, id: "video-settings", audio_render: {render_id, status})
+    end
+
+    case status do
+      "published" ->
+        handle_info(
+          {VideoSettingsComponent, :audio_tracks_updated},
+          put_flash(socket, :info, gettext("Description audio updated."))
+        )
+
+      "failed" ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("Description audio could not be updated. Check the saved text in the editor.")
+         )}
+    end
+  end
+
+  def handle_info(
         {:embed_updated, %{"space_id" => space_id, "embed_id" => embed_id}},
         %{assigns: %{current_space: %{id: space_id}, resource_embed: %{id: embed_id}}} = socket
       ) do

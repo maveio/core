@@ -127,6 +127,7 @@ defmodule MaveCore.Assets do
          {:ok, source_document} <- SubtitleDocument.parse(body),
          {:ok, document} <- description_draft_document(description, body, source_revision),
          duration = embed.asset.current_video.duration,
+         speech = description_speech_intervals(embed),
          {:ok, moments} <-
            DescriptionDocument.validate(
              Map.get(
@@ -140,11 +141,18 @@ defmodule MaveCore.Assets do
        %{
          subtitle_id: description.id,
          kind: :audio_description,
+         source_filename: filename,
          language: description.language,
          label: AudioDescription.display_label(description),
+         render_status:
+           description.text_draft && Map.get(description.text_draft, "render_status", "draft"),
+         render_enabled:
+           MaveCore.Spaces.audio_description_active?(embed.space) and
+             duration <= MaveCore.AudioDescription.max_seconds(),
          vtt_basis: is_binary((description.text_draft || %{})["vtt"]),
          source_texts: SubtitleDocument.texts(source_document),
-         speech_gaps: description_speech_gaps(embed),
+         speech_intervals: speech,
+         speech_gaps: speech && Budget.available_gaps(speech, duration),
          source_document: source_document,
          moments: moments,
          duration: duration,
@@ -155,6 +163,56 @@ defmodule MaveCore.Assets do
       nil -> {:error, :audio_description_not_found}
       %AudioDescription{} -> {:error, :missing_text}
       {:error, _} = error -> error
+    end
+  end
+
+  def save_description_edit(%Embed{} = embed, id, revision, contents) do
+    embed = Repo.preload(embed, [:space, asset: :current_video], force: true)
+
+    Repo.transaction(fn ->
+      with {:ok, saved} <- save_description_draft(embed, id, revision, contents),
+           {:ok, result} <- queue_description_audio(embed, saved) do
+        result
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp queue_description_audio(embed, saved) do
+    video = embed.asset.current_video
+    config = MaveCore.AudioDescription.run_input(embed.space)
+
+    if config && video.duration <= MaveCore.AudioDescription.max_seconds() do
+      render_id = Ecto.UUID.generate()
+
+      draft =
+        Map.merge(saved.text_draft, %{"render_id" => render_id, "render_status" => "queued"})
+
+      with {:ok, editor} <- load_description_document(embed, saved.id),
+           true <-
+             editor.moments != [] and
+               Enum.all?(
+                 editor.moments,
+                 &(is_number(&1["start"]) and String.trim(&1["text"]) != "")
+               ),
+           {:ok, updated} <- saved |> Ecto.Changeset.change(text_draft: draft) |> Repo.update(),
+           {:ok, _} <-
+             %{
+               embed_id: embed.id,
+               description_id: saved.id,
+               render_id: render_id,
+               speech_config: config
+             }
+             |> MaveCore.Workers.DescriptionAudioWorker.new()
+             |> Oban.insert() do
+        {:ok, updated}
+      else
+        false -> {:error, :incomplete_description}
+        error -> error
+      end
+    else
+      {:ok, saved}
     end
   end
 
@@ -212,7 +270,7 @@ defmodule MaveCore.Assets do
     end)
   end
 
-  defp description_speech_gaps(embed) do
+  defp description_speech_intervals(embed) do
     region = embed.space.region || "default"
     bucket = Storage.bucket_for_space(embed.space.hash, region)
     version = Embeds.current_video_version(embed)
@@ -223,12 +281,9 @@ defmodule MaveCore.Assets do
     with {:ok, intervals} when is_list(intervals) <-
            AudioDescriptionSupport.get_json(context, key),
          true <- Enum.all?(intervals, &valid_speech_interval?/1) do
-      speech =
-        intervals
-        |> Enum.map(&%{start: &1["start"], end: &1["end"]})
-        |> Enum.sort_by(& &1.start)
-
-      Budget.available_gaps(speech, embed.asset.current_video.duration)
+      intervals
+      |> Enum.map(&%{start: &1["start"], end: &1["end"]})
+      |> Enum.sort_by(& &1.start)
     else
       _ -> nil
     end

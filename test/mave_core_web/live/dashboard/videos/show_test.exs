@@ -19,6 +19,14 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
   alias MaveCore.Spaces.{Key, Space}
   alias MaveCore.TestSupport.FlowStorageAdapterStub
 
+  defmodule EditorSpeechStub do
+    def speak(text, _language, options) do
+      send(self(), {:editor_speech, text})
+      samples = if options[:pace] == :fast, do: 11_000, else: 12_000
+      {:ok, :binary.copy(<<2000::little-signed-16>>, samples)}
+    end
+  end
+
   defmodule FailingStorage do
     def update_embed_visibility(_space, _embed_hash, _visibility, _region),
       do: {:error, :visibility_failed}
@@ -2444,6 +2452,19 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     |> element("#description-document")
     |> render_hook("change_description_document", %{moments: moments})
 
+    overlapping = List.update_at(moments, 1, &Map.put(&1, "start", 15.0))
+
+    view
+    |> element("#description-document")
+    |> render_hook("change_description_document", %{moments: overlapping})
+
+    assert has_element?(view, "#description-document[data-feedback*='Keep this time']")
+    assert render(view) =~ "ducks_speech&quot;:true"
+
+    view
+    |> element("#description-document")
+    |> render_hook("change_description_document", %{moments: moments})
+
     assert has_element?(view, "#description-document[data-feedback*='2 descriptions']")
     view |> element("#toggle-editor-webvtt") |> render_click()
     assert has_element?(view, "#editor-webvtt", "WEBVTT")
@@ -2521,6 +2542,291 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     view |> element("#toggle-editor-webvtt") |> render_click()
     assert has_element?(view, "#editor-webvtt", "00:00:06.750")
     view |> element("#toggle-editor-webvtt") |> render_click()
+  end
+
+  @tag :text_editor
+  test "description edits publish a new mix, reuse speech on moves and ignore superseded jobs", %{
+    conn: conn
+  } do
+    {conn, space} = authenticated_conn(conn)
+    space = space |> Ecto.Changeset.change(audio_description_enabled: true) |> Repo.update!()
+
+    embed =
+      video_embed_fixture(space, %{name: "Narration"}) |> Repo.preload(asset: [:current_video])
+
+    previous = Application.get_env(:mave_core, :audio_description)
+    direct = Application.get_env(:mave_core, :flow_direct_storage_ffmpeg_input)
+    Application.put_env(:mave_core, :audio_description, speech_provider: EditorSpeechStub)
+    Application.put_env(:mave_core, :flow_direct_storage_ffmpeg_input, false)
+
+    on_exit(fn ->
+      restore_env(:audio_description, previous)
+      restore_env(:flow_direct_storage_ffmpeg_input, direct)
+    end)
+
+    bucket = Storage.bucket_for_space(space.hash, space.region)
+    original = "WEBVTT\n\n00:00:01.000 --> 00:00:01.500\nOne.\n"
+
+    {:ok, _} =
+      FlowStorageAdapterStub.put_public(
+        bucket,
+        "#{embed.hash}/ad.vtt",
+        original,
+        "text/vtt",
+        space.region
+      )
+
+    # A small mono WAV fixture for the original soundtrack. FFmpeg identifies its format from its header.
+    pcm = :binary.copy(<<1500::little-signed-16>>, 24_000)
+    size = byte_size(pcm)
+
+    wav =
+      <<"RIFF", size + 36::little-32, "WAVEfmt ", 16::little-32, 1::little-16, 1::little-16,
+        24_000::little-32, 48_000::little-32, 2::little-16, 16::little-16, "data",
+        size::little-32, pcm::binary>>
+
+    {:ok, _} =
+      FlowStorageAdapterStub.put_public(
+        bucket,
+        "#{embed.hash}/audio.mp3",
+        wav,
+        "audio/wav",
+        space.region
+      )
+
+    description =
+      Repo.insert!(%AudioDescription{
+        video_id: embed.asset.current_video_id,
+        language: "en",
+        audio_filename: "ad.mp3",
+        vtt_filename: "ad.vtt"
+      })
+
+    worker = MaveCore.Workers.DescriptionAudioWorker
+
+    queue = fn contents ->
+      {:ok, editor} = MaveCore.Assets.load_description_document(embed, description.id)
+
+      Oban.Testing.with_testing_mode(:manual, fn ->
+        {:ok, saved} =
+          MaveCore.Assets.save_description_edit(embed, description.id, editor.revision, contents)
+
+        Repo.one!(
+          from j in Oban.Job,
+            where: fragment("?->>'render_id' = ?", j.args, ^saved.text_draft["render_id"])
+        )
+      end)
+    end
+
+    save = fn text, time -> queue.([%{"id" => "0", "start" => time, "text" => text}]) end
+
+    {:ok, view, _} = live(conn, "/videos/#{embed.id}")
+    # The form submits from the LiveView process. Keep its jobs queued until the test runs them.
+    :sys.replace_state(view.pid, fn state ->
+      Process.put(:oban_testing, :manual)
+      state
+    end)
+
+    view |> element("#audio-description-edit-text-#{description.id}") |> render_click()
+    moments = [%{"id" => "0", "start" => 2.0, "text" => "New description."}]
+
+    view
+    |> element("#description-document")
+    |> render_hook("change_description_document", %{moments: moments})
+
+    Oban.Testing.with_testing_mode(:manual, fn ->
+      view
+      |> form("#subtitle-text-form", editor: %{document: Jason.encode!(moments)})
+      |> render_submit()
+    end)
+
+    assert has_element?(view, "#subtitle-text-editor [role=status]", "Generating audio")
+    queued = Repo.get!(AudioDescription, description.id)
+
+    job =
+      Repo.one!(
+        from j in Oban.Job,
+          where: fragment("?->>'render_id' = ?", j.args, ^queued.text_draft["render_id"])
+      )
+
+    pending = [%{"id" => "0", "start" => 4.0, "text" => "New description."}]
+
+    view
+    |> element("#description-document")
+    |> render_hook("change_description_document", %{moments: pending})
+
+    assert has_element?(view, "#description-document[data-read-only=true]")
+    assert has_element?(view, "#toggle-editor-webvtt[disabled]")
+
+    view
+    |> form("#subtitle-text-form")
+    |> render_submit(%{"editor" => %{"document" => Jason.encode!(pending)}})
+
+    assert Repo.get!(AudioDescription, description.id).text_draft == queued.text_draft
+    assert :ok = worker.perform(job)
+    assert_received {:editor_speech, "New description."}
+    published = Repo.get!(AudioDescription, description.id)
+    assert published.text_draft == nil
+    assert published.audio_filename != description.audio_filename
+
+    assert {:ok, mp3} =
+             FlowStorageAdapterStub.get(
+               bucket,
+               "#{embed.hash}/#{published.audio_filename}",
+               space.region
+             )
+
+    assert byte_size(mp3) == published.audio_file_size
+
+    assert {:ok, playlist} =
+             FlowStorageAdapterStub.get(
+               bucket,
+               "#{embed.hash}/#{AudioDescription.hls_playlist(published)}",
+               space.region
+             )
+
+    assert playlist =~ "#EXTM3U"
+
+    assert {:ok, vtt} =
+             FlowStorageAdapterStub.get(
+               bucket,
+               "#{embed.hash}/#{published.vtt_filename}",
+               space.region
+             )
+
+    assert vtt =~ "00:00:02.000 --> 00:00:02.500"
+
+    assert_eventually(fn ->
+      !has_element?(view, "#subtitle-text-editor [role=status]", "Generating audio")
+    end)
+
+    assert has_element?(view, "#description-document[data-read-only=false]")
+
+    view
+    |> element("#description-document")
+    |> render_hook("change_description_document", %{moments: pending})
+
+    assert has_element?(
+             view,
+             "#subtitle-text-form button:not([disabled])",
+             "Save & generate audio"
+           )
+
+    Oban.Testing.with_testing_mode(:manual, fn ->
+      view
+      |> form("#subtitle-text-form", editor: %{document: Jason.encode!(pending)})
+      |> render_submit()
+    end)
+
+    queued = Repo.get!(AudioDescription, description.id)
+
+    moved_job =
+      Repo.one!(
+        from j in Oban.Job,
+          where: fragment("?->>'render_id' = ?", j.args, ^queued.text_draft["render_id"])
+      )
+
+    assert :ok = worker.perform(moved_job)
+    refute_received {:editor_speech, _}
+    moved = Repo.get!(AudioDescription, description.id)
+    assert moved.audio_filename != published.audio_filename
+
+    assert {:ok, moved_vtt} =
+             FlowStorageAdapterStub.get(
+               bucket,
+               "#{embed.hash}/#{moved.vtt_filename}",
+               space.region
+             )
+
+    assert moved_vtt =~ "00:00:04.000 --> 00:00:04.500"
+
+    adjacent = [
+      %{"id" => "0", "start" => 35.185, "text" => "New description."},
+      %{"id" => "1", "start" => 35.4, "text" => "New description."},
+      %{"id" => "2", "start" => 38.0, "text" => "New description."}
+    ]
+
+    old_job = save.("Superseded.", 1.0)
+    adjacent_job = queue.(adjacent)
+    assert :ok = worker.perform(old_job)
+    refute_received {:editor_speech, "Superseded."}
+    assert :ok = worker.perform(adjacent_job)
+    refute_received {:editor_speech, _}
+    adjacent_track = Repo.get!(AudioDescription, description.id)
+
+    assert {:ok, adjacent_vtt} =
+             FlowStorageAdapterStub.get(
+               bucket,
+               "#{embed.hash}/#{adjacent_track.vtt_filename}",
+               space.region
+             )
+
+    assert adjacent_vtt =~ "00:00:35.185 --> 00:00:35.685"
+    assert adjacent_vtt =~ "00:00:35.685 --> 00:00:36.185"
+    assert adjacent_vtt =~ "00:00:38.000 --> 00:00:38.500"
+    assert {:cancel, _} = save.("New description.", 39.9) |> worker.perform()
+    failed = Repo.get!(AudioDescription, description.id)
+    assert failed.audio_filename == adjacent_track.audio_filename
+    assert failed.text_draft["render_status"] == "does_not_fit"
+
+    assert %{"start" => 39.9, "needed" => 0.5, "available" => 0.1, "boundary" => "video_end"} =
+             failed.text_draft["fit_error"]
+
+    view |> element("#audio-description-edit-text-#{description.id}") |> render_click()
+    assert has_element?(view, "[role=status]", "0.1 s before the end of the video")
+
+    view
+    |> element("#description-document")
+    |> render_hook("change_description_document", %{moments: pending})
+
+    refute has_element?(view, "[role=status]", "before the end of the video")
+
+    short = "WEBVTT\n\n00:00:02.000 --> 00:00:02.100\nNew description.\n"
+    assert {:cancel, _} = queue.(short) |> worker.perform()
+
+    assert Repo.get!(AudioDescription, description.id).text_draft["fit_error"]["boundary"] ==
+             "cue_end"
+
+    close_fit = String.replace(short, "02.100", "02.460")
+    assert :ok = queue.(close_fit) |> worker.perform()
+    assert_received {:editor_speech, "New description."}
+
+    prefix =
+      MaveCore.AudioDescription.work_prefix(
+        embed.hash,
+        MaveCore.Embeds.current_video_version(embed)
+      )
+
+    fingerprint =
+      MaveCore.Flow.Steps.AiSpeakDescriptionsStep.speech_fingerprint(
+        %{run_input: %{}},
+        "One.",
+        "en",
+        :fast
+      )
+
+    {:ok, _} =
+      FlowStorageAdapterStub.put(
+        bucket,
+        "#{prefix}/en/speech/00000-#{fingerprint}.pcm",
+        pcm,
+        "application/octet-stream",
+        space.region
+      )
+
+    raw =
+      "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nOne.\n\nNOTE retain this comment\n\n00:00:02.000 --> 00:00:03.000\nNew description.\n"
+
+    assert :ok = queue.(raw) |> worker.perform()
+    refute_received {:editor_speech, _}
+    updated = Repo.get!(AudioDescription, description.id)
+
+    assert {:ok, ^raw} =
+             FlowStorageAdapterStub.get(
+               bucket,
+               "#{embed.hash}/#{updated.vtt_filename}",
+               space.region
+             )
   end
 
   test "audio downloads are attachments scoped to the current video", %{conn: conn} do
