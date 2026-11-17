@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { descriptionTrack, selectAudioTrack, offsetPlayback, findEditorPlayer, findAudioMenu, DescriptionPlaybackHook, nextSeekStep } from '../js/hooks/description_playback.js'
+import { descriptionTrack, selectEditorSubtitle, selectAudioTrack, offsetPlayback, findEditorPlayer, findAudioMenu, DescriptionPlaybackHook, nextSeekStep } from '../js/hooks/description_playback.js'
 
 test('selects the matching AD and does not guess between ambiguous tracks', () => {
   const tracks = [{ id: 'original', label: 'Dutch', language: 'nl' }, { id: 'ad', label: 'Dutch (AD)', language: 'nl' }]
@@ -118,4 +118,21 @@ test('subtitle playback uses the current audio and preserves mute', async () => 
   await DescriptionPlaybackHook.toggle.call(context)
   assert.equal(plays, 1)
   assert.equal(context.player.muted, true)
+})
+
+test('opening captions overrides the player default and closing restores the previous selection', () => {
+  const player = new EventTarget()
+  let language
+  player.addEventListener('mediashowsubtitlesrequest', event => { language = event.detail[0].language })
+  const track = (srclang, src, mode) => ({ kind: 'subtitles', srclang, src, track: { mode } })
+  const original = track('en', 'original.vtt', 'showing')
+  const other = track('nl', 'other.vtt', 'disabled')
+  const edited = track('nl', 'edited.vtt', 'disabled')
+  const tracks = [original, other, edited]
+  assert.equal(selectEditorSubtitle(player, tracks, 'NL', 'missing.vtt'), null)
+  const selection = selectEditorSubtitle(player, tracks, 'NL', 'edited.vtt')
+  assert.equal(language, 'nl')
+  assert.deepEqual(tracks.map(el => el.track.mode), ['disabled', 'disabled', 'showing'])
+  DescriptionPlaybackHook.unbindPlayer.call({ player, subtitleSelection: selection, onMedia() {} })
+  assert.deepEqual(tracks.map(el => el.track.mode), ['showing', 'disabled', 'disabled'])
 })

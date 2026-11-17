@@ -31,6 +31,30 @@ export function selectAudioTrack(menu, track) {
   return menu.selected === track.id
 }
 
+// The player manages the <track> elements it renders. Safari may also expose
+// HLS tracks in textTracks that the player explicitly disables.
+export function selectEditorSubtitle(player, elements, language, source) {
+  const captions = [...elements].filter(el => ["subtitles", "captions"].includes(el.kind))
+  const matches = captions.filter(el => el.srclang.toLowerCase() === language.toLowerCase())
+  const target = matches.length === 1 ? matches[0] : matches.find(el => el.src === source)
+  if (!target) return null
+
+  const previous = captions.map(({ track }) => [track, track.mode])
+  if (target.track.mode !== "showing") {
+    // Notify the player of an explicit selection before changing native modes.
+    // Otherwise its subtitle sync reapplies the configured default.
+    player.dispatchEvent(new CustomEvent("mediashowsubtitlesrequest", {
+      detail: [{ kind: target.kind, language: target.srclang, label: target.label }],
+      bubbles: true, composed: true,
+    }))
+  }
+  for (const {track} of captions) {
+    if (track === target.track) track.mode = "showing"
+    else if (track.mode === "showing") track.mode = "disabled"
+  }
+  return { track: target.track, previous }
+}
+
 export function offsetPlayback(player, seconds, duration) {
   player.currentTime = Math.max(0, Math.min(duration, (player.currentTime || 0) + seconds))
 }
@@ -81,11 +105,14 @@ export const DescriptionPlaybackHook = {
   },
 
   unbindPlayer() {
-    if (this.selectedSubtitle?.mode === "showing") {
-      for (const [track, mode] of this.subtitleModes) track.mode = mode
+    if (this.subtitleSelection?.track.mode === "showing") {
+      for (const [track, mode] of this.subtitleSelection.previous) track.mode = mode
     }
-    this.selectedSubtitle = null
-    this.subtitleModes = null
+    this.subtitleSelection = null
+    if (this.subtitleFilter !== undefined && this.player?.subtitles === "all") {
+      this.player.subtitles = this.subtitleFilter
+    }
+    this.subtitleFilter = undefined
     if (!this.player) return
     for (const event of ["play", "pause", "timeupdate", "loadedmetadata", "volumechange", "ended"]) {
       this.player.removeEventListener(event, this.onMedia)
@@ -98,17 +125,16 @@ export const DescriptionPlaybackHook = {
     this.track = descriptionTrack(this.menu, this.el.dataset.trackLabel, this.el.dataset.trackLanguage)
     const available = !!this.player && (this.subtitle || !!this.track)
     if (available && this.subtitle && !this.initialized) {
-      const tracks = Array.from(this.player.shadowRoot?.querySelector("video, audio")?.textTracks || [])
-        .filter(track => ["captions", "subtitles"].includes(track.kind))
-      const matches = tracks.filter(track => track.language === this.el.dataset.trackLanguage)
-      if (matches.length === 1) {
-        this.subtitleModes = tracks.map(track => [track, track.mode])
-        this.selectedSubtitle = matches[0]
-        for (const track of tracks) {
-          if (track === this.selectedSubtitle) track.mode = "showing"
-          else if (track.mode === "showing") track.mode = "disabled"
-        }
-        this.initialized = true
+      const language = this.el.dataset.trackLanguage
+      if (language && this.player.subtitles && this.player.subtitles !== "all" &&
+          !this.player.subtitles.includes(language)) {
+        this.subtitleFilter = this.player.subtitles
+        this.player.subtitles = "all"
+      }
+      const elements = this.player.shadowRoot?.querySelectorAll("video track, audio track") || []
+      if (language) {
+        this.subtitleSelection = selectEditorSubtitle(this.player, elements, language, this.el.dataset.trackSrc)
+        this.initialized = !!this.subtitleSelection
       }
     }
     if (available && !this.subtitle && !this.initialized) {
