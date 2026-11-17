@@ -1010,28 +1010,35 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             class="my-3 flex items-center gap-2 shrink-0 text-xs leading-5 text-stone-400"
           >
             <.media_spinner :if={Map.get(@subtitle_editor, :render_status) == "queued"} />
-            <%= cond do %>
-              <% Map.get(@subtitle_editor, :render_status) == "published" and !subtitle_editor_changed?(@subtitle_editor) -> %>
-                {gettext("Audio updated.")}
-              <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "does_not_fit" and !subtitle_editor_changed?(@subtitle_editor) -> %>
-                {description_fit_message(@subtitle_editor.revision)}
-              <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "failed" -> %>
-                {gettext("The audio update failed. Your edits are saved. Press Save to retry.")}
-              <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "queued" -> %>
-                {gettext("Generating audio… Editing will be available when it finishes.")}
-              <% @subtitle_editor.webvtt_view -> %>
-                {gettext("Edit or paste WebVTT, including cue timings and line breaks.")}
-              <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_enabled -> %>
-                {gettext("Saving your text generates updated audio.")}
-              <% @subtitle_editor.kind == :audio_description -> %>
+            <div>
+              <span :if={!@subtitle_editor.webvtt_view and !@generating_audio}>
                 {gettext(
-                  "Changes are saved as a text draft. Audio generation is unavailable for this video."
+                  "Type a time in brackets, like [00:40], then press Space to add a time label."
                 )}
-              <% true -> %>
-                {gettext(
-                  "Click a start or end time to edit it. Press Enter for a new line in the same subtitle."
-                )}
-            <% end %>
+              </span>
+              <%= cond do %>
+                <% Map.get(@subtitle_editor, :render_status) == "published" and !subtitle_editor_changed?(@subtitle_editor) -> %>
+                  {gettext("Audio updated.")}
+                <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "does_not_fit" and !subtitle_editor_changed?(@subtitle_editor) -> %>
+                  {description_fit_message(@subtitle_editor.revision)}
+                <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "failed" -> %>
+                  {gettext("The audio update failed. Your edits are saved. Press Save to retry.")}
+                <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "queued" -> %>
+                  {gettext("Generating audio… Editing will be available when it finishes.")}
+                <% @subtitle_editor.webvtt_view -> %>
+                  {gettext("Edit or paste WebVTT, including cue timings and line breaks.")}
+                <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_enabled -> %>
+                  {gettext("Saving your text generates updated audio.")}
+                <% @subtitle_editor.kind == :audio_description -> %>
+                  {gettext(
+                    "Changes are saved as a text draft. Audio generation is unavailable for this video."
+                  )}
+                <% true -> %>
+                  {gettext(
+                    "Click a start or end time to edit it. Press Enter for a new line in the same subtitle."
+                  )}
+              <% end %>
+            </div>
           </div>
           <div
             id="description-playback-controls"
@@ -1041,6 +1048,14 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             data-track-label={@subtitle_editor.label}
             data-kind={@subtitle_editor.kind}
             data-track-language={@subtitle_editor.language}
+            data-track-src={
+              if @subtitle_editor.kind == :subtitle do
+                case Enum.find(@video.subtitles || [], &(&1.id == @subtitle_editor.subtitle_id)) do
+                  %{path: path} -> path
+                  _ -> nil
+                end
+              end
+            }
             data-duration={@subtitle_editor.duration}
             data-play-label={
               if(@subtitle_editor.kind == :subtitle,
