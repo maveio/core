@@ -2244,7 +2244,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
              MaveCore.Assets.load_subtitle_document(other, subtitle.id)
 
     assert has_element?(view, "#description-playback-controls[data-kind=subtitle]")
-    assert has_element?(view, "[data-add-moment]", "Add subtitle")
+    assert has_element?(view, "[data-add-line]", "Add line")
     assert has_element?(view, "#subtitle-text-form [data-editor-scroll].overflow-y-auto")
     assert has_element?(view, "#subtitle-text-editor .bg-stone-900")
 
@@ -2254,11 +2254,27 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     |> element("#description-document")
     |> render_hook("change_description_document", %{moments: moments})
 
+    view |> element("#toggle-editor-webvtt") |> render_click()
+    assert has_element?(view, "#editor-webvtt", "00:00:01.000 --> 00:00:03.000")
+    assert has_element?(view, "#editor-webvtt", "Hello again")
+    view |> element("#editor-webvtt") |> render_change(%{"editor" => %{"webvtt" => "unfinished"}})
+    view |> element("#toggle-editor-webvtt") |> render_click()
+    assert has_element?(view, "#editor-webvtt", "unfinished")
+    assert has_element?(view, "[role=alert]", "WEBVTT")
+
+    pasted =
+      "WEBVTT\n\nNOTE copied\n\nintro\n00:00:02.000 --> 00:00:04.500 align:start\nHello again\nSecond line\n"
+
+    view |> element("#editor-webvtt") |> render_change(%{"editor" => %{"webvtt" => pasted}})
+    view |> element("#toggle-editor-webvtt") |> render_click()
+    refute has_element?(view, "#editor-webvtt")
+
     view |> element("#subtitle-text-editor button", "Cancel") |> render_click()
     assert has_element?(view, "#discard-subtitle-edits")
     view |> element("#discard-subtitle-edits-cancel") |> render_click()
     send(view.pid, {:embed_updated, %{"space_id" => space.id, "embed_id" => embed.id}})
-    assert has_element?(view, "#description-document[data-document*='Hello again']")
+    assert has_element?(view, "[data-document*='Second line']")
+    moments = [%{"id" => "1", "start" => 2, "text" => "Hello again\nSecond line"}]
 
     view
     |> element("#subtitle-text-form")
@@ -2268,7 +2284,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     updated = Repo.get!(Subtitle, subtitle.id)
     assert updated.path != key
     assert {:ok, saved} = FlowStorageAdapterStub.get(bucket, updated.path, space.region)
-    assert saved == String.replace(body, "Hello world", "Hello again")
+    assert saved == pasted
     assert {:ok, ^body} = FlowStorageAdapterStub.get(bucket, key, space.region)
 
     view |> element("#subtitle-edit-text-#{subtitle.id}") |> render_click()
@@ -2349,7 +2365,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     {:ok, view, _} = live(conn, "/videos/#{embed.id}")
     view |> element("#audio-description-edit-text-#{description.id}") |> render_click()
     assert has_element?(view, "#description-document[data-feedback*='within']")
-    assert has_element?(view, "[data-add-moment]", "Add moment")
+    assert has_element?(view, "[data-add-line]", "Add line")
     assert has_element?(view, "#description-playback-controls[data-track-label='English (AD)']")
     assert has_element?(view, "[data-play-toggle][aria-label='Play with audio description']")
     assert has_element?(view, "[data-playback-back]")
@@ -2366,6 +2382,10 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     |> render_hook("change_description_document", %{moments: moments})
 
     assert has_element?(view, "#description-document[data-feedback*='2 descriptions']")
+    view |> element("#toggle-editor-webvtt") |> render_click()
+    assert has_element?(view, "#editor-webvtt", "WEBVTT")
+    assert has_element?(view, "#editor-webvtt", "A plane flies.")
+    view |> element("#toggle-editor-webvtt") |> render_click()
 
     view
     |> form("#subtitle-text-form", editor: %{document: Jason.encode!(moments)})
@@ -2420,6 +2440,24 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
                current.revision,
                invalid_moments
              )
+
+    view |> element("#subtitle-text-editor button", "Cancel") |> render_click()
+
+    view |> element("#discard-subtitle-edits-confirm") |> render_click()
+
+    view |> element("#audio-description-edit-text-#{description.id}") |> render_click()
+    view |> element("#toggle-editor-webvtt") |> render_click()
+
+    raw =
+      "WEBVTT\n\nNOTE edited draft\n\n00:00:01.000 --> 00:00:06.750\nEdited raw\nSecond line\n"
+
+    view |> element("#subtitle-text-form") |> render_submit(%{"editor" => %{"webvtt" => raw}})
+    assert Repo.get!(AudioDescription, description.id).text_draft["vtt"] == raw
+    assert {:ok, ^body} = FlowStorageAdapterStub.get(bucket, "#{embed.hash}/ad.vtt", space.region)
+    view |> element("#audio-description-edit-text-#{description.id}") |> render_click()
+    view |> element("#toggle-editor-webvtt") |> render_click()
+    assert has_element?(view, "#editor-webvtt", "00:00:06.750")
+    view |> element("#toggle-editor-webvtt") |> render_click()
   end
 
   test "audio downloads are attachments scoped to the current video", %{conn: conn} do

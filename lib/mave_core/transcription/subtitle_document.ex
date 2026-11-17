@@ -3,13 +3,43 @@ defmodule MaveCore.Transcription.SubtitleDocument do
   Text-only editing of WebVTT cues while retaining their timing and settings.
   """
 
-  @timing ~r/^\d{2,}:\d{2}(?::\d{2})?\.\d{3} --> \d{2,}:\d{2}(?::\d{2})?\.\d{3}(?:\s.*)?$/
+  @timing ~r/^(?:\d{2,9}:)?[0-5]\d:[0-5]\d\.\d{3}[ \t]+-->[ \t]+(?:\d{2,9}:)?[0-5]\d:[0-5]\d\.\d{3}(?:\s.*)?$/
 
   def parse(body) when is_binary(body) do
     if String.valid?(body) and byte_size(body) <= 2_000_000 do
       parse_blocks(body)
     else
       {:error, :invalid_document}
+    end
+  end
+
+  def parse_editor_vtt(body, duration, kind) do
+    with {:ok, document} <- parse(body),
+         false <- String.contains?(document.header, "-->"),
+         cues = cues(document),
+         moments =
+           Enum.map(cues, &%{"id" => &1.id, "start" => &1.start_seconds, "text" => &1.text}),
+         {:ok, _} <-
+           MaveCore.AudioDescription.DescriptionDocument.validate(
+             moments,
+             duration,
+             if(kind == :subtitle, do: 100_000, else: 500)
+           ),
+         true <-
+           Enum.all?(
+             cues,
+             &(&1.end_seconds > &1.start_seconds and &1.end_seconds <= duration and
+                 String.trim(&1.text) != "" and
+                 not String.contains?(String.replace_prefix(&1.raw, &1.prefix, ""), "-->"))
+           ),
+         :ok <-
+           MaveCore.AudioDescription.DescriptionDocument.validate_time_labels(
+             moments,
+             if(kind == :subtitle, do: original_starts(document), else: %{})
+           ) do
+      {:ok, document, moments}
+    else
+      _ -> {:error, :invalid_webvtt}
     end
   end
 
@@ -58,13 +88,13 @@ defmodule MaveCore.Transcription.SubtitleDocument do
   def cues(document), do: Enum.filter(document.blocks, &Map.has_key?(&1, :text))
 
   defp start_seconds(timing) do
-    [timestamp | _] = String.split(timing, " ")
+    [timestamp | _] = String.split(timing, ~r/[ \t]+/)
 
     timestamp_seconds(timestamp)
   end
 
   defp end_seconds(timing) do
-    [_, _, timestamp | _] = String.split(timing, " ")
+    [_, _, timestamp | _] = String.split(timing, ~r/[ \t]+/)
 
     timestamp_seconds(timestamp)
   end
@@ -79,7 +109,7 @@ defmodule MaveCore.Transcription.SubtitleDocument do
   end
 
   defp time_range(timing) do
-    [_, start_time, end_time] = Regex.run(~r/^(\S+) --> (\S+)/, timing)
+    [_, start_time, end_time] = Regex.run(~r/^(\S+)\s+-->\s+(\S+)/, timing)
 
     [start_time, end_time]
     |> Enum.map(fn time ->
@@ -212,7 +242,7 @@ defmodule MaveCore.Transcription.SubtitleDocument do
     else
       prefix =
         Regex.replace(
-          ~r/^\d[\d:.]* --> [\d:.]+/m,
+          ~r/^\d[\d:.]*[ \t]+-->[ \t]+[\d:.]+/m,
           source.prefix,
           timestamp(window.start) <> " --> " <> timestamp(window.end)
         )

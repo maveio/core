@@ -142,6 +142,7 @@ defmodule MaveCore.Assets do
          kind: :audio_description,
          language: description.language,
          label: AudioDescription.display_label(description),
+         vtt_basis: is_binary((description.text_draft || %{})["vtt"]),
          source_texts: SubtitleDocument.texts(source_document),
          speech_gaps: description_speech_gaps(embed),
          source_document: source_document,
@@ -184,7 +185,8 @@ defmodule MaveCore.Assets do
     end)
   end
 
-  def save_description_draft(%Embed{} = embed, id, revision, texts) when is_map(texts) do
+  def save_description_draft(%Embed{} = embed, id, revision, texts)
+      when is_map(texts) or is_binary(texts) do
     Repo.transaction(fn ->
       with %AudioDescription{} = description <- get_audio_description_for_embed(id, embed),
            %AudioDescription{} = description <-
@@ -193,7 +195,7 @@ defmodule MaveCore.Assets do
              ),
            {:ok, current} <- load_description_document(embed, id),
            true <- current.revision == revision,
-           {:ok, body} <- SubtitleDocument.render(current.document, texts),
+           {:ok, body} <- render_subtitle_edits(current, texts),
            {source_revision, _draft} = revision,
            {:ok, saved} <-
              description
@@ -265,7 +267,7 @@ defmodule MaveCore.Assets do
     do: {:error, :stale_document}
 
   def save_subtitle_document(%Embed{} = embed, id, revision, texts)
-      when is_map(texts) or is_list(texts) do
+      when is_map(texts) or is_list(texts) or is_binary(texts) do
     embed = Repo.preload(embed, [:space, :asset], force: true)
 
     Repo.transaction(fn ->
@@ -292,6 +294,11 @@ defmodule MaveCore.Assets do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  defp render_subtitle_edits(current, body) when is_binary(body) do
+    with {:ok, _, _} <- SubtitleDocument.parse_editor_vtt(body, current.duration, current.kind),
+         do: {:ok, body}
   end
 
   defp render_subtitle_edits(current, moments) when is_list(moments),

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { Slice } from 'prosemirror-model'
 import { EditorState, TextSelection } from 'prosemirror-state'
 import { history, undo, redo } from 'prosemirror-history'
-import { subtitleLineBreak, subtitlePaste, descriptionSchema, documentFromMoments, momentsFromDocument, formatMoment, parseMoment, replaceWithMoment, DescriptionDocumentHook, activeMomentRange, invalidMomentIds, invalidTypedTimeRanges, backspaceMoment, momentDeletionPlugin, momentDeletionKey } from '../js/hooks/description_document.js'
+import { addTimedLine, subtitleLineBreak, subtitlePaste, descriptionSchema, documentFromMoments, momentsFromDocument, formatMoment, parseMoment, replaceWithMoment, DescriptionDocumentHook, activeMomentRange, invalidMomentIds, invalidTypedTimeRanges, backspaceMoment, momentDeletionPlugin, momentDeletionKey } from '../js/hooks/description_document.js'
 
 const moments = [
   { id: 'first', start: 2.5, text: 'A plane.\nA new paragraph.' },
@@ -225,4 +225,42 @@ test('subtitle reading pace belongs to the time label without a feedback row', (
   assert.equal(decorations.length, 1)
   assert.deepEqual(decorations[0].spec, { end: 4, pace: 'Fast reading pace' })
   assert.equal(decorations[0].to, decorations[0].from + 1)
+})
+
+test('Add line follows the selected multiline cue, including AD continuation paragraphs', () => {
+  for (const kind of ['subtitle', 'audio_description']) {
+    const doc = documentFromMoments(moments, kind)
+    let state = EditorState.create({ doc })
+    const cursor = doc.content.size - doc.lastChild.nodeSize - 1
+    const windows = [{ id: 'first', end: 4.125 }]
+    state = state.apply(addTimedLine(state, cursor, windows, 20, 'new'))
+    state = state.apply(state.tr.insertText('New line'))
+    assert.deepEqual(momentsFromDocument(state.doc).moments, [
+      moments[0], { id: 'new', start: 4.125, text: 'New line' }, moments[1],
+    ])
+  }
+})
+
+test('Add line starts at zero without a cursor and makes space if zero is occupied', () => {
+  let state = EditorState.create({ doc: documentFromMoments(moments, 'subtitle') })
+  state = state.apply(addTimedLine(state, null, [], 20, 'zero'))
+  assert.equal(momentsFromDocument(state.doc).moments[0].start, 0)
+  state = state.apply(addTimedLine(state, null, [{ id: 'zero', end: 2.5 }], 20, 'next'))
+  assert.equal(momentsFromDocument(state.doc).moments[1].start, 1.25)
+  assert.equal(addTimedLine(EditorState.create({ doc: documentFromMoments([
+    { id: 'first', start: 0, text: 'First' }, { id: 'next', start: 0.001, text: 'Next' },
+  ]) }), null, [], 20, 'new'), null)
+})
+
+test('converting a typed time before another label keeps cues in separate paragraphs', () => {
+  const doc = documentFromMoments(moments, 'subtitle')
+  let state = EditorState.create({ doc })
+  const pos = doc.firstChild.nodeSize + 1
+  state = state.apply(state.tr.insertText('[00:04]', pos))
+  state = state.apply(replaceWithMoment(state, pos, pos + 7, 4, 'new'))
+  state = state.apply(state.tr.insertText('New subtitle'))
+  assert.equal(state.doc.childCount, 3)
+  assert.deepEqual(momentsFromDocument(state.doc).moments, [
+    moments[0], { id: 'new', start: 4, text: 'New subtitle' }, moments[1],
+  ])
 })
