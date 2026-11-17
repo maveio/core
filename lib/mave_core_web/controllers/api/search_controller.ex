@@ -16,7 +16,7 @@ defmodule MaveCoreWeb.Api.SearchController do
   @max_query_length 200
 
   def index(%{assigns: %{current_space: %Space{} = space}} = conn, params) do
-    with {:ok, query} <- query(params),
+    with {:ok, query} <- search_query(params),
          {:ok, response} <-
            PublicApi.search(space, query, [collection: params["collection"]] ++ options(params)) do
       json(conn, response)
@@ -26,7 +26,7 @@ defmodule MaveCoreWeb.Api.SearchController do
   end
 
   def collection(conn, %{"token" => token} = params) do
-    with {:ok, query} <- query(params),
+    with {:ok, query} <- search_query(params),
          {:ok, %{claims: claims, space: %Space{} = space}} <- Spaces.validate_api_jwt(token, true),
          {:ok, response} <-
            PublicApi.jwt_search(space, jwt_collection_root(claims), query, options(params)) do
@@ -40,13 +40,13 @@ defmodule MaveCoreWeb.Api.SearchController do
     end
   end
 
-  defp query(%{"q" => query}) when is_binary(query) do
+  defp search_query(%{"q" => query}) when is_binary(query) do
     if String.length(query) <= @max_query_length,
       do: {:ok, query},
       else: {:error, "The search query is too long."}
   end
 
-  defp query(_params), do: {:error, "Missing search query (q)."}
+  defp search_query(_params), do: {:error, "Missing search query (q)."}
 
   defp options(params) do
     [
