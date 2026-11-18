@@ -87,6 +87,63 @@ defmodule MaveCore.AudioDescription.ScriptEventsTest do
     refute_received {:writer_options, _}
   end
 
+  test "an uncut animation shares a pause across changes and excludes the spoken explanation" do
+    frames = [
+      %{"id" => 1, "time" => 1, "changes" => ["Two circles appear."]},
+      %{"id" => 2, "time" => 7, "changes" => ["A line connects the circles."]},
+      %{"id" => 3, "time" => 16, "changes" => ["The line pulses repeatedly."]}
+    ]
+
+    shots = [%{"start" => 0, "end" => 20}, %{"start" => 20, "end" => 24}]
+    speech = [%{start: 3, end: 6}, %{start: 18, end: 24}]
+    transcript = %{text: "The points represent stations.", intervals: speech}
+
+    Process.put(
+      :event_script,
+      script([
+        event(0, 3, "Two circles appear.", [1]),
+        event(6, 10, "A line connects them.", [2])
+      ])
+    )
+
+    assert {:ok, result} =
+             Script.write(Writer, frames, %{"duration" => 24, "shots" => shots}, transcript, "en")
+
+    assert_received {:writer_input, input, _}
+    assert Enum.map(input["speech_free_windows"], & &1["estimated_words_per_cue"]) == [5, 19]
+    assert Enum.map(input["shots"], & &1["estimated_words_in_longest_pause"]) == [19, 0]
+
+    candidates = Cues.normalize(result["cues"], 24)
+    allocation = Budget.allocate(candidates, speech, 24, "tutorial")
+    assert [first, second] = allocation.cues
+    assert first.window.start >= 0.5 and first.window.end <= 3
+    assert second.window.start >= 6 and second.window.end <= 10
+  end
+
+  test "the writer sees what fits across live-action cuts inside one long pause" do
+    shots = [
+      %{"start" => 0, "end" => 3},
+      %{"start" => 3, "end" => 6},
+      %{"start" => 6, "end" => 12}
+    ]
+
+    frames = [%{"id" => 1, "time" => 1}, %{"id" => 2, "time" => 4}, %{"id" => 3, "time" => 7}]
+    Process.put(:event_script, script([event(0, 6, "A cyclist crosses a bridge.", [1, 2])]))
+
+    assert {:ok, result} =
+             Script.write(
+               Writer,
+               frames,
+               %{"duration" => 12, "shots" => shots},
+               %{text: "", intervals: []},
+               "en"
+             )
+
+    assert_received {:writer_input, input, _}
+    assert Enum.map(input["shots"], & &1["estimated_words_in_longest_pause"]) == [5, 7, 13]
+    assert [%{"visual_window" => %{"start" => 0, "end" => 6}}] = result["cues"]
+  end
+
   test "successive steps in a single continuous shot retain their own speaking windows" do
     frames = [%{"id" => 1, "time" => 1}, %{"id" => 2, "time" => 5}, %{"id" => 3, "time" => 9}]
     shots = [%{"start" => 0, "end" => 12}]

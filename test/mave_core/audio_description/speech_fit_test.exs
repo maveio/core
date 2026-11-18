@@ -98,13 +98,40 @@ defmodule MaveCore.AudioDescription.SpeechFitTest do
     end
   end
 
-  test "a truncated measured revision omits only that cue with an explicit reason" do
+  test "a truncated measured revision can recover within the existing two rewrites" do
+    original = "A line appears between the two circles."
+
+    rewrite = fn ^original, _, _, feedback ->
+      if feedback["previous_rewrite_error"] == "model_output_truncated",
+        do: {:ok, "A line connects them."},
+        else: {:error, :model_output_truncated}
+    end
+
+    speak = fn
+      ^original, :moderate -> {:ok, pcm(5)}
+      "A line connects them.", :moderate -> {:ok, pcm(1.6)}
+    end
+
+    assert {:ok, %{text: "A line connects them."}, _, "shortened"} =
+             SpeechFit.fit(cue(original), speak, rewrite)
+  end
+
+  test "repeated truncation omits only that cue with an explicit reason" do
+    rewrite = fn _, _, _ ->
+      send(self(), :truncated_revision)
+      {:error, :model_output_truncated}
+    end
+
     assert {:skip, "rewrite_model_output_truncated"} =
              SpeechFit.fit(
                cue("A large door opens."),
                fn _, _ -> {:ok, pcm(4.0)} end,
-               fn _, _, _ -> {:error, :model_output_truncated} end
+               rewrite
              )
+
+    assert_received :truncated_revision
+    assert_received :truncated_revision
+    refute_received :truncated_revision
   end
 
   test "transient revision failures retain retryable errors" do

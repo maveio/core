@@ -48,7 +48,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.Index do
          )}
 
       tab ->
-        {:noreply, assign(socket, :active_custom_tab, tab)}
+        {:noreply, assign(socket, active_custom_tab: tab, tab_params: params)}
     end
   end
 
@@ -152,6 +152,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.Index do
                 :if={@active_custom_tab}
                 module={@active_custom_tab.module}
                 id={"#{@active_custom_tab.id}-tab"}
+                tab_params={@tab_params}
                 current_space={@current_space}
                 current_user={@current_user}
                 space_access_context={@space_access_context}

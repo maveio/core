@@ -4,6 +4,7 @@ defmodule MaveCore.Embeds.PendingMedia do
   alias MaveCore.Assets.AudioTrack
   alias MaveCore.AudioDescription
   alias MaveCore.Flow.{Definition, Run}
+  alias MaveCore.Flow.Steps.AudioDescriptionSupport, as: AD
   alias MaveCore.Languages
 
   @active ~w(queued scheduled executing)
@@ -16,6 +17,38 @@ defmodule MaveCore.Embeds.PendingMedia do
   end
 
   def for_run(_, _, _), do: @empty
+
+  def skipped_description(%Run{input: %{"video_id" => id}, status: status} = run, id)
+      when is_binary(id) and status in ["succeeded", "running"] do
+    with %{step_id: step_id} <- Enum.find(run.step_runs, &credit_skipped_script?/1),
+         definition when is_map(definition) <-
+           Definition.step_by_id(run.flow_version.definition, step_id),
+         outputs = Map.new(run.step_runs, &{&1.step_id, &1.output || %{}}),
+         ctx =
+           AD.run_context(definition, %{
+             flow_run_id: run.id,
+             run_input: run.input,
+             dependency_outputs: outputs
+           }),
+         source = AD.source_step_id(ctx, "detect_scenes"),
+         %{"duration" => seconds} when is_number(seconds) and seconds > 0 <- outputs[source] do
+      %{
+        run_id: run.id,
+        step_id: step_id,
+        seconds: round(seconds),
+        language: AD.language(ctx)
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  def skipped_description(_, _), do: nil
+
+  defp credit_skipped_script?(step) do
+    step.step_type == "ai.describe_video" and step.status == "succeeded" and
+      match?(%{"status" => "skipped", "reason" => "insufficient_credit"}, step.output)
+  end
 
   def audio_tracks_for_run(tracks, %Run{status: status} = run, version)
       when status in ["queued", "running"] do

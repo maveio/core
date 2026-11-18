@@ -114,10 +114,53 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
           |> assign(:subtitle_form, nil)
       end
 
-    {:ok, socket}
+    {:ok, assign_generation_notice(socket)}
+  end
+
+  defp assign_generation_notice(socket) do
+    assigns = socket.assigns
+    skipped = assigns.video && Map.get(assigns.video, :skipped_description)
+
+    notice =
+      if skipped && Spaces.audio_description_active?(assigns.current_space) &&
+           !Enum.any?(
+             Map.get(assigns.video, :audio_descriptions, []) || [],
+             &(&1.language == skipped.language)
+           ) do
+        MaveCore.AudioDescription.Publication.generation_notice(
+          assigns.current_space,
+          assigns.current_user,
+          assigns[:space_access_context],
+          skipped
+        )
+      end
+
+    assign(socket, :generation_notice, notice)
   end
 
   @impl true
+  def handle_event("refresh_description_notice", _, socket),
+    do: {:noreply, assign_generation_notice(socket)}
+
+  def handle_event("generate_skipped_description", _, socket) do
+    assigns = socket.assigns
+
+    with %{ready?: true} <- assigns.generation_notice,
+         %{run_id: run_id} <- assigns.video.skipped_description,
+         {:ok, _} <-
+           MaveCore.Flow.retry_skipped_description(assigns.current_space, assigns.embed, run_id) do
+      notify_parent(:audio_tracks_updated)
+      {:noreply, assign(socket, :generation_notice, nil)}
+    else
+      {:error, :insufficient_ad_credit} ->
+        {:noreply, assign_generation_notice(socket)}
+
+      _ ->
+        notify_parent(:audio_tracks_updated)
+        {:noreply, put_flash(socket, :error, gettext("Audio description could not be started."))}
+    end
+  end
+
   def handle_event("change_tab", %{"tab" => tab}, socket) do
     {:noreply, assign(socket, :current_tab, String.to_existing_atom(tab))}
   end
@@ -956,6 +999,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
               uploads={@uploads}
               uploading_poster={@uploading_poster}
               audio_track_form={@audio_track_form}
+              generation_notice={@generation_notice}
               audio_description_form={@audio_description_form}
               audio_description_vtt_form={@audio_description_vtt_form}
               subtitle_form={@subtitle_form}
@@ -1021,6 +1065,9 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
                   {gettext("Audio updated.")}
                 <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "does_not_fit" and !subtitle_editor_changed?(@subtitle_editor) -> %>
                   {description_fit_message(@subtitle_editor.revision)}
+                <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "insufficient_credit" -> %>
+                  {MaveCore.AudioDescription.Publication.unavailable_notice() ||
+                    gettext("Audio generation is unavailable.")}
                 <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "failed" -> %>
                   {gettext("The audio update failed. Your edits are saved. Press Save to retry.")}
                 <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "queued" -> %>
@@ -1028,7 +1075,10 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
                 <% @subtitle_editor.webvtt_view -> %>
                   {gettext("Edit or paste WebVTT, including cue timings and line breaks.")}
                 <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_enabled -> %>
-                  {gettext("Saving your text generates updated audio.")}
+                  {MaveCore.AudioDescription.Publication.editor_notice(
+                    @subtitle_editor.moments,
+                    @current_space.id
+                  ) || gettext("Saving your text generates updated audio.")}
                 <% @subtitle_editor.kind == :audio_description -> %>
                   {gettext(
                     "Changes are saved as a text draft. Audio generation is unavailable for this video."
@@ -1225,6 +1275,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
                         Map.get(@subtitle_editor, :render_status) not in [
                           "draft",
                           "failed",
+                          "insufficient_credit",
                           "does_not_fit"
                         ])) or
                   !valid_editor_labels?(@subtitle_editor)
@@ -1622,6 +1673,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   attr :uploads, :map, required: true
   attr :uploading_poster, :boolean, required: true
   attr :audio_track_form, :map, default: nil
+  attr :generation_notice, :map, default: nil
   attr :audio_description_form, :map, default: nil
   attr :audio_description_vtt_form, :map, default: nil
   attr :subtitle_form, :map, default: nil
@@ -1698,6 +1750,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       <.audio_tracks_options_section
         :if={@show_audio_descriptions_section}
         kind={:audio_description}
+        generation_notice={@generation_notice}
         current_space={@current_space}
         video_id={@video.id}
         tracks={Map.get(@video, :audio_descriptions, [])}
@@ -2666,20 +2719,35 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     ]
 
     text =
-      if kind == :audio_description do
-        [
-          menu_item(
-            "#{prefix}-edit-text-#{track.id}",
-            gettext("Edit text"),
-            "hero-pencil-square",
-            event: "edit_description_text",
-            value: %{id: track.id},
-            disabled: is_nil(track.vtt_url),
-            separator: true
-          )
-        ]
-      else
-        []
+      case {kind, Map.get(track, :audio_origin)} do
+        {:audio_description, :uploaded} ->
+          [
+            menu_item(
+              "#{prefix}-vtt-#{track.id}",
+              if(track.vtt_url, do: gettext("Replace VTT"), else: gettext("Upload VTT")),
+              "hero-arrow-up-tray",
+              event: "upload_audio_description_vtt",
+              value: %{id: track.id},
+              format: "VTT",
+              separator: true
+            )
+          ]
+
+        {:audio_description, :generated} ->
+          [
+            menu_item(
+              "#{prefix}-edit-text-#{track.id}",
+              gettext("Edit text"),
+              "hero-pencil-square",
+              event: "edit_description_text",
+              value: %{id: track.id},
+              disabled: is_nil(track.vtt_url),
+              separator: true
+            )
+          ]
+
+        _ ->
+          []
       end
 
     base ++
@@ -2715,6 +2783,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
   attr :current_space, :map, required: true
   attr :video_id, :string, required: true
+  attr :generation_notice, :map, default: nil
   attr :kind, :atom, default: :audio_track
   attr :vtt_form, :map, default: nil
   attr :tracks, :list, required: true
@@ -2774,9 +2843,44 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       <.settings_header title={@heading} addable phx-click={@events.add} phx-target={@myself} />
       <div class="p-3 space-y-2 text-sm text-stone-400">
         <div
+          :if={@generation_notice && is_nil(@audio_track_form)}
+          id="ad-generation-notice"
+          phx-window-focus="refresh_description_notice"
+          phx-target={@myself}
+          class="rounded-sm bg-stone-800/70 text-xs"
+          aria-live="polite"
+        >
+          <div class="px-2 py-2">
+            <p class="font-medium">{@generation_notice.title}</p>
+            <p class="mt-1 leading-4 text-stone-400/85">{@generation_notice.detail}</p>
+          </div>
+          <.link
+            :if={@generation_notice.purchase_path}
+            href={@generation_notice.purchase_path}
+            target="_blank"
+            rel="noopener"
+            class="flex w-full items-center justify-between gap-2 rounded-b-sm border-t border-stone-900 bg-stone-800 px-2 py-1.5 text-stone-400 hover:bg-stone-700 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-500"
+          >
+            {@generation_notice.purchase_label}
+            <.icon name="hero-arrow-top-right-on-square" class="h-3.5 w-3.5 shrink-0 text-stone-500" />
+          </.link>
+          <button
+            :if={@generation_notice.ready?}
+            id="generate-skipped-description"
+            type="button"
+            phx-click="generate_skipped_description"
+            phx-target={@myself}
+            phx-disable-with={gettext("Queuing…")}
+            class="flex w-full cursor-pointer items-center justify-between gap-2 rounded-b-sm border-t border-stone-900 bg-stone-800 px-2 py-1.5 text-left text-stone-400 hover:bg-stone-700 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-500"
+          >
+            {gettext("Generate audio description")}
+            <.icon name="hero-play" class="h-3.5 w-3.5 shrink-0 text-stone-500" />
+          </button>
+        </div>
+        <div
           :if={
-            !@has_tracks and @generated_tracks == [] and is_nil(@audio_track_form) and
-              !@processing_uploaded_audio_track
+            is_nil(@generation_notice) and !@has_tracks and @generated_tracks == [] and
+              is_nil(@audio_track_form) and !@processing_uploaded_audio_track
           }
           class="h-1"
         >

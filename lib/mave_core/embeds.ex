@@ -625,6 +625,8 @@ defmodule MaveCore.Embeds do
       audio_descriptions: audio_descriptions,
       subtitles: subtitles,
       pending_media: pending_media,
+      skipped_description:
+        PendingMedia.skipped_description(flow_run, current_video && current_video.id),
       renditions: renditions_for(current_video, flow_run),
       flow: flow_summary_for(flow_run)
     }
@@ -645,6 +647,7 @@ defmodule MaveCore.Embeds do
         id: description.id,
         language: description.language,
         label: AudioDescription.display_label(description),
+        audio_origin: description.audio_origin,
         default: false,
         codec: "mp3",
         mp3_url: get_in(serialized, ["audio", "path"]),
@@ -2005,11 +2008,11 @@ defmodule MaveCore.Embeds do
     latest_matching_run(space_hash, embed_hash, ["queued", "running"])
   end
 
-  defp latest_flow_run(space_hash, embed_hash) do
-    latest_matching_run(space_hash, embed_hash, nil)
+  def latest_flow_run(space_hash, embed_hash, opts \\ []) do
+    latest_matching_run(space_hash, embed_hash, nil, opts)
   end
 
-  defp latest_matching_run(space_hash, embed_hash, statuses) do
+  defp latest_matching_run(space_hash, embed_hash, statuses, opts \\ []) do
     query =
       from(run in Run,
         where:
@@ -2027,6 +2030,7 @@ defmodule MaveCore.Embeds do
         query
       end
 
+    query = if opts[:lock], do: lock(query, "FOR UPDATE"), else: query
     Repo.one(query)
   end
 

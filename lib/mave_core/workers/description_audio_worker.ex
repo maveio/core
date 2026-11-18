@@ -16,7 +16,8 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
 
     with %Embed{deleted_at: nil} = embed <- Repo.get(Embed, args["embed_id"]),
          embed = Repo.preload(embed, [:space, asset: :current_video]),
-         %AudioDescription{text_draft: %{"render_id" => ^id}} = description <-
+         %AudioDescription{audio_origin: :generated, text_draft: %{"render_id" => ^id}} =
+           description <-
            Assets.get_audio_description_for_embed(args["description_id"], embed) do
       case render(embed, description, args) do
         {:ok, :published} ->
@@ -31,7 +32,7 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
         {:error, reason} ->
           terminal =
             match?({:description_does_not_fit, _}, reason) or
-              reason in [:generation_disabled, :stale_document] or
+              reason in [:generation_disabled, :stale_document, :insufficient_ad_credit] or
               job.attempt >= job.max_attempts
 
           if terminal do
@@ -48,7 +49,12 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
           end
       end
     else
-      _obsolete -> :ok
+      %AudioDescription{audio_origin: :uploaded, text_draft: %{"render_id" => ^id}} = description ->
+        mark_failed(description.id, id, :uploaded_audio_description)
+        :ok
+
+      _obsolete ->
+        :ok
     end
   end
 
@@ -66,6 +72,7 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
     }
 
     ctx = AD.run_context(%{"id" => "edit_description_audio"}, %{run_input: run_input})
+    ctx = %{ctx | usage_context: Map.put(ctx.usage_context, :space_id, embed.space_id)}
 
     with true <-
            Spaces.audio_description_active?(embed.space) and
@@ -73,16 +80,26 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
          {:ok, editor} <- Assets.load_description_document(embed, description.id),
          {_, %{"render_id" => ^render_id}} <- editor.revision,
          {:ok, outputs} <- original_audio(ctx, video),
-         {:ok, attrs} <-
+         {:ok, attrs, characters} <-
            EditorAudio.render(
-             %{ctx | outputs: outputs},
+             ctx
+             |> Map.put(:outputs, outputs)
+             |> Map.put(
+               :before_speech,
+               &MaveCore.AudioDescription.Publication.reserve_edit(
+                 embed,
+                 description,
+                 render_id,
+                 &1
+               )
+             ),
              render_lines(editor),
              video.duration,
              description.language,
              args["render_id"],
              description.text_draft["vtt"]
            ) do
-      publish(embed, description, attrs)
+      publish(embed, description, attrs, characters, render_id)
     else
       false -> {:error, :generation_disabled}
       {:error, reason} -> {:error, reason}
@@ -116,7 +133,7 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
 
   defp silent_video?(ctx, video_id) do
     Repo.one(
-      from s in StepRun,
+      from(s in StepRun,
         join: r in Run,
         on: s.flow_run_id == r.id,
         where:
@@ -127,6 +144,7 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
         order_by: [desc: s.completed_at],
         limit: 1,
         select: s.output
+      )
     )
     |> case do
       %{"has_audio" => false} -> true
@@ -134,14 +152,15 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
     end
   end
 
-  defp publish(embed, original, attrs) do
+  defp publish(embed, original, attrs, characters, render_id) do
     Repo.transaction(fn ->
       current =
-        Repo.one(from d in AudioDescription, where: d.id == ^original.id, lock: "FOR UPDATE")
+        Repo.one(from(d in AudioDescription, where: d.id == ^original.id, lock: "FOR UPDATE"))
 
       fresh = Repo.preload(embed, [:asset, :space], force: true)
 
-      if current && !current.deleted_at && current.text_draft == original.text_draft &&
+      if current && !current.deleted_at && current.audio_origin == :generated &&
+           current.text_draft == original.text_draft &&
            current.language == original.language &&
            current.audio_filename == original.audio_filename &&
            current.vtt_filename == original.vtt_filename &&
@@ -151,7 +170,16 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
                |> AudioDescription.changeset(attrs)
                |> Ecto.Changeset.put_change(:text_draft, nil)
                |> Repo.update(),
-             :ok <- Assets.refresh_audio_outputs(fresh) do
+             :ok <- Assets.refresh_audio_outputs(fresh),
+             :ok <-
+               MaveCore.AudioDescription.Publication.published(
+                 fresh,
+                 original.video_id,
+                 original.language,
+                 :edit,
+                 render_id,
+                 characters
+               ) do
           :published
         else
           {:error, reason} -> Repo.rollback(reason)
@@ -165,13 +193,16 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
   defp mark_failed(description_id, render_id, reason) do
     Repo.transaction(fn ->
       case Repo.one(
-             from d in AudioDescription, where: d.id == ^description_id, lock: "FOR UPDATE"
+             from(d in AudioDescription, where: d.id == ^description_id, lock: "FOR UPDATE")
            ) do
         %AudioDescription{text_draft: %{"render_id" => ^render_id} = draft} = description ->
           draft =
             case reason do
               {:description_does_not_fit, details} ->
                 Map.merge(draft, %{"render_status" => "does_not_fit", "fit_error" => details})
+
+              :insufficient_ad_credit ->
+                Map.put(draft, "render_status", "insufficient_credit")
 
               _ ->
                 Map.put(draft, "render_status", "failed")

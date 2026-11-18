@@ -1,7 +1,7 @@
 defmodule MaveCore.Assets.AudioDescription do
   @moduledoc """
-  A generated audio-description track of a video in one language: a full-mix MP3
-  (the video's audio with spoken descriptions) and the matching descriptions VTT.
+  A generated or uploaded audio-description track in one language, with a
+  full-mix MP3 and an optional matching descriptions VTT.
   """
   use MaveCore.Schema
   import Ecto.Changeset
@@ -15,6 +15,7 @@ defmodule MaveCore.Assets.AudioDescription do
     field :user_managed, :boolean, default: false
     field :deleted_at, :utc_datetime_usec
     field :audio_filename, :string
+    field :audio_origin, Ecto.Enum, values: [:generated, :uploaded], default: :generated
     field :audio_file_size, :integer
     field :vtt_filename, :string
     field :vtt_file_size, :integer
@@ -37,6 +38,7 @@ defmodule MaveCore.Assets.AudioDescription do
       :user_managed,
       :deleted_at,
       :audio_filename,
+      :audio_origin,
       :audio_file_size,
       :vtt_filename,
       :vtt_file_size,

@@ -154,7 +154,7 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
            Prompts.rewrite_instruction(language, Float.round(seconds * 1.0, 3), max_words),
            [%{"type" => "text", "text" => Jason.encode!(input)}],
            schema: Prompts.rewrite_schema(),
-           max_tokens: 4_000,
+           max_tokens: rewrite_token_limit(feedback),
            model: get_in(ctx.run_input, ["audio_description", "writer_model"]),
            reasoning_effort: "low",
            usage_context: ctx.usage_context,
@@ -165,6 +165,12 @@ defmodule MaveCore.Flow.Steps.AiSpeakDescriptionsStep do
       {:error, _} = error -> error
     end
   end
+
+  # A measured overrun is the last chance to retain the event. Leave room for
+  # the writer's reasoning as well as its short structured answer.
+  defp rewrite_token_limit(%{"previous_rewrite_error" => "model_output_truncated"}), do: 12_000
+  defp rewrite_token_limit(%{"duration_source" => "measured_audio"}), do: 8_000
+  defp rewrite_token_limit(_feedback), do: 4_000
 
   defp speak_cue(ctx, cue, index, language, pace) do
     # Retrying a description run can change its text or voice at the same index.
