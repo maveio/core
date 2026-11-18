@@ -120,7 +120,7 @@ defmodule MaveCore.Assets do
   def load_description_document(%Embed{} = embed, id) do
     embed = Repo.preload(embed, [:space, asset: :current_video], force: true)
 
-    with %AudioDescription{vtt_filename: filename} = description
+    with %AudioDescription{audio_origin: :generated, vtt_filename: filename} = description
          when is_binary(filename) <- get_audio_description_for_embed(id, embed),
          {:ok, body} <- description_text_body(embed, filename),
          source_revision = Base.encode16(:crypto.hash(:sha256, body)),
@@ -161,6 +161,7 @@ defmodule MaveCore.Assets do
        }}
     else
       nil -> {:error, :audio_description_not_found}
+      %AudioDescription{audio_origin: :uploaded} -> {:error, :uploaded_audio_description}
       %AudioDescription{} -> {:error, :missing_text}
       {:error, _} = error -> error
     end
@@ -636,6 +637,7 @@ defmodule MaveCore.Assets do
              language: attrs["language"],
              label: blank_to_nil(attrs["label"]),
              audio_filename: filename,
+             audio_origin: :uploaded,
              audio_file_size: attrs["file_size"],
              vtt_filename: nil,
              vtt_file_size: nil,
@@ -643,6 +645,7 @@ defmodule MaveCore.Assets do
              ducked_cue_count: nil,
              user_managed: true
            }),
+         changeset = Ecto.Changeset.force_change(changeset, :text_draft, nil),
          {:ok, candidate} <- Ecto.Changeset.apply_action(changeset, :insert),
          {:ok, copied} <-
            copy_audio_source(

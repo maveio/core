@@ -12,6 +12,9 @@ defmodule MaveCore.AudioDescription.Budget do
   def start_margin, do: @start_margin
   def end_margin, do: @end_margin
 
+  @doc "Estimated word capacity of one cue in a contiguous speech-free interval."
+  def cue_word_budget(seconds), do: Timeline.word_budget(min(seconds, @max_slot))
+
   @doc "Speech-free time with a short opening lead-in and the existing ending margin."
   def available_gaps(speech, duration) do
     speech

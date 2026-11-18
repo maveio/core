@@ -211,6 +211,20 @@ defmodule MaveCore.AudioDescription.SpeechFit do
         _ ->
           result
       end
+    else
+      {:skip, "rewrite_" <> reason} when retries > 0 ->
+        rewrite_and_fit(
+          cue,
+          budget,
+          max_words,
+          speak,
+          rewrite,
+          retries - 1,
+          Map.put(measured, "previous_rewrite_error", reason)
+        )
+
+      error ->
+        error
     end
   end
 

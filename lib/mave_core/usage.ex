@@ -4,7 +4,7 @@ defmodule MaveCore.Usage do
 
   @callback record(map()) :: term()
 
-  @context_keys ~w(flow_run_id space_hash embed_hash video_id step_id)a
+  @context_keys ~w(flow_run_id space_id space_hash embed_hash video_id step_id)a
 
   def context(context, step_id) do
     input = Map.get(context, :run_input, %{})

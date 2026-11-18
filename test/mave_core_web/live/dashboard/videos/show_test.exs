@@ -1911,6 +1911,8 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     |> render_blur(%{"id" => description.id, "value" => "Dutch accessible audio"})
 
     assert Repo.get!(AudioDescription, description.id).label == "Dutch accessible audio"
+    assert Repo.get!(AudioDescription, description.id).audio_origin == :generated
+    assert has_element?(view, "#audio-description-edit-text-#{description.id}")
 
     view
     |> element("#audio-description-language-form-#{description.id}")
@@ -1941,6 +1943,32 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     refute has_element?(view, "#delete-audio-description-#{description.id}")
     refute has_element?(view, "#audio-description-settings")
     stop_live_view(view)
+  end
+
+  @tag :text_editor
+  test "uploaded audio descriptions offer VTT upload or replacement without speech editing", %{
+    conn: conn
+  } do
+    {conn, space} = authenticated_conn(conn)
+    embed = video_embed_fixture(space, %{}) |> Repo.preload(asset: [:current_video])
+
+    for {vtt, action} <- [{nil, "Upload VTT"}, {"manual.vtt", "Replace VTT"}] do
+      uploaded =
+        Repo.insert!(%AudioDescription{
+          video_id: embed.asset.current_video_id,
+          language: "en",
+          audio_origin: :uploaded,
+          audio_filename: "manual.mp3",
+          vtt_filename: vtt
+        })
+
+      {:ok, view, _} = live(conn, "/videos/#{embed.id}")
+      refute has_element?(view, "#audio-description-edit-text-#{uploaded.id}")
+      assert has_element?(view, "#audio-description-vtt-#{uploaded.id}", action)
+      view |> element("#audio-description-vtt-#{uploaded.id}") |> render_click()
+      assert has_element?(view, "input[type=file][accept='.vtt']")
+      stop_live_view(view)
+    end
   end
 
   test "audio description settings ignore changes to another video's description", %{conn: conn} do

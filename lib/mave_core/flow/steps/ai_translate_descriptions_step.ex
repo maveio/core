@@ -24,7 +24,9 @@ defmodule MaveCore.Flow.Steps.AiTranslateDescriptionsStep do
   end
 
   defp translate(ctx, source, language) do
-    with {:ok, json} <- AD.get_json(ctx, source["cues_key"]),
+    with :ok <-
+           MaveCore.AudioDescription.Publication.reserve_flow(ctx, language, source["duration"]),
+         {:ok, json} <- AD.get_json(ctx, source["cues_key"]),
          cues = Cues.from_json(json),
          {instruction, input} = Prompts.translation_request(cues, language),
          {:ok, answer} <-
@@ -53,7 +55,11 @@ defmodule MaveCore.Flow.Steps.AiTranslateDescriptionsStep do
          "cue_count" => length(translated)
        }), []}
     else
-      {:error, reason} -> AD.failure(@step_type, ctx, reason)
+      {:error, :insufficient_ad_credit} ->
+        {:ok, AD.skipped(@step_type, ctx, "insufficient_credit"), []}
+
+      {:error, reason} ->
+        AD.failure(@step_type, ctx, reason)
     end
   end
 end

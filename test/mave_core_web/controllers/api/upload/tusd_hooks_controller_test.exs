@@ -1535,6 +1535,7 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
     first = Repo.get!(AudioDescription, first_id)
     assert first.language == "en"
     assert first.user_managed
+    assert first.audio_origin == :uploaded
     assert first.vtt_filename == nil
     assert first.generation_language == nil
 
@@ -1544,6 +1545,24 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
     assert replaced.language == "nl"
     assert replaced.label == "replacement"
     assert replaced.vtt_filename == nil
+
+    generated =
+      Repo.insert!(%AudioDescription{
+        video_id: asset.current_video_id,
+        language: "nl",
+        generation_language: "nl",
+        audio_filename: "audio_description_nl.mp3",
+        vtt_filename: "descriptions_nl.vtt",
+        text_draft: %{"render_id" => "queued-edit"}
+      })
+
+    assert upload.("manual-mix", %{"audio_track_id" => generated.id, "language" => "nl"}) ==
+             generated.id
+
+    replaced_generated = Repo.get!(AudioDescription, generated.id)
+    assert replaced_generated.audio_origin == :uploaded
+    assert replaced_generated.generation_language == "nl"
+    assert is_nil(replaced_generated.text_draft)
     {:ok, manifest} = ManifestPublisher.current(embed)
 
     assert Enum.any?(
@@ -1613,6 +1632,27 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
              )
 
     refute replaced_vtt.vtt_filename == with_vtt.vtt_filename
+    assert replaced_vtt.audio_origin == :uploaded
+    assert replaced_vtt.audio_filename == replaced.audio_filename
+
+    assert {:error, :uploaded_audio_description} =
+             Assets.save_description_edit(embed, first_id, {"old-revision", nil}, [])
+
+    legacy_draft = %{"render_id" => "queued-before-migration", "render_status" => "queued"}
+    replaced_vtt |> Ecto.Changeset.change(text_draft: legacy_draft) |> Repo.update!()
+
+    assert :ok =
+             MaveCore.Workers.DescriptionAudioWorker.perform(%Oban.Job{
+               args: %{
+                 "embed_id" => embed.id,
+                 "description_id" => first_id,
+                 "render_id" => legacy_draft["render_id"]
+               }
+             })
+
+    after_job = Repo.get!(AudioDescription, first_id)
+    assert after_job.text_draft["render_status"] == "failed"
+    assert after_job.audio_filename == replaced.audio_filename
 
     {:ok, _} =
       FlowStorageAdapterStub.put(

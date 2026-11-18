@@ -287,6 +287,54 @@ defmodule MaveCore.Flow do
     end
   end
 
+  @doc "Resumes an interrupted original description using the existing scene and transcript outputs."
+  def retry_skipped_description(%Space{} = space, %Embed{} = embed, expected_run_id) do
+    Repo.transaction(fn ->
+      with {:ok, %{asset: %Asset{current_video_id: video_id}} = current} <-
+             Embeds.resolve_dashboard_embed(space, embed.id),
+           true <- Spaces.audio_description_active?(current.space),
+           %Run{id: ^expected_run_id} = run <-
+             Embeds.latest_flow_run(current.space.hash, current.hash, lock: true),
+           %{} = skipped <- MaveCore.Embeds.PendingMedia.skipped_description(run, video_id),
+           false <-
+             Repo.exists?(
+               from(d in AudioDescription,
+                 where:
+                   d.video_id == ^video_id and d.language == ^skipped.language and
+                     is_nil(d.deleted_at)
+               )
+             ),
+           true <- description_subtree?(run, skipped.step_id),
+           :ok <-
+             MaveCore.AudioDescription.Publication.reserve_flow(
+               %{
+                 space_hash: current.space.hash,
+                 embed_hash: current.hash,
+                 run_input: run.input,
+                 usage_context: %{flow_run_id: run.id}
+               },
+               skipped.language,
+               skipped.seconds
+             ),
+           {:ok, updated} <- retry_step(run.id, skipped.step_id) do
+        updated
+      else
+        {:error, reason} -> Repo.rollback(reason)
+        _ -> Repo.rollback(:description_unavailable)
+      end
+    end)
+  end
+
+  defp description_subtree?(run, step_id) do
+    definition = run.flow_version.definition
+
+    definition
+    |> retry_subtree_step_ids(step_id)
+    |> Enum.all?(fn id ->
+      Definition.step_by_id(definition, id)["type"] in ~w(ai.describe_video ai.translate_descriptions ai.speak_descriptions media.mix_audio_description)
+    end)
+  end
+
   def recover_run(flow_run_id, opts \\ []) when is_binary(flow_run_id) do
     enqueue_jobs? = Keyword.get(opts, :enqueue_jobs, true)
 
@@ -5286,6 +5334,9 @@ defmodule MaveCore.Flow do
                  durable_original
                ),
              {:ok, promoted_run} <- promote_durable_source(run, durable_original) do
+          if current_run_video?(embed, video),
+            do: report_published_descriptions(embed, video, run.id, step_runs)
+
           maybe_make_upload_private(promoted_run, durable_original, space_hash, embed_hash)
         else
           {:error, reason} ->
@@ -5298,6 +5349,32 @@ defmodule MaveCore.Flow do
 
       _ ->
         :ok
+    end
+  end
+
+  defp report_published_descriptions(embed, video, run_id, steps) do
+    for %StepRun{
+          step_type: "media.mix_audio_description",
+          status: "succeeded",
+          output: %{"status" => "ok", "audio_description" => track}
+        } <- steps do
+      language = track["language"]
+
+      with %AudioDescription{deleted_at: nil, user_managed: false, audio_filename: filename} <-
+             Repo.get_by(AudioDescription, video_id: video.id, generation_language: language),
+           true <- filename == track["audio_filename"],
+           duration when is_number(duration) and duration > 0 <-
+             Repo.get!(Video, video.id).duration do
+        :ok =
+          MaveCore.AudioDescription.Publication.published(
+            embed,
+            video.id,
+            language,
+            :generation,
+            run_id,
+            round(duration)
+          )
+      end
     end
   end
 

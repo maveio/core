@@ -32,6 +32,8 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
   defp describe(ctx, scenes_output) do
     with {:ok, document} <- AD.get_json(ctx, scenes_output["scenes_key"]),
          duration = document["duration"] * 1.0,
+         :ok <-
+           MaveCore.AudioDescription.Publication.reserve_flow(ctx, AD.language(ctx), duration),
          {:ok, transcript} <- speech(ctx, duration),
          speech = transcript.intervals,
          scenes = intervals(document["scenes"]),
@@ -87,6 +89,9 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
 
       {:ok, Map.merge(output, narration.metadata), []}
     else
+      {:error, :insufficient_ad_credit} ->
+        {:ok, AD.skipped(@step_type, ctx, "insufficient_credit"), []}
+
       {:error, :no_descriptions} ->
         {:ok, AD.skipped(@step_type, ctx, "no_descriptions"), []}
 
