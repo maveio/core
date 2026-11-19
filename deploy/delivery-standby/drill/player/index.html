@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Delivery failover drill</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+      body { margin: 0 auto; max-width: 720px; padding: 24px; }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      p { margin: 0 0 16px; opacity: 0.75; }
+      video { aspect-ratio: 16 / 9; background: #000; border-radius: 8px; width: 100%; }
+      #side { border-radius: 6px; display: inline-block; font-weight: 600; margin: 16px 0 8px; padding: 6px 12px; }
+      #side[data-side="primary"] { background: #1f7a3f; color: #fff; }
+      #side[data-side="standby"] { background: #1d5fbf; color: #fff; }
+      #side[data-side="down"] { background: #b3261e; color: #fff; }
+      #log { font: 13px/1.6 ui-monospace, monospace; list-style: none; margin: 0; padding: 0; }
+    </style>
+  </head>
+  <body>
+    <h1>Delivery failover drill</h1>
+    <p id="url"></p>
+    <video id="video" controls muted playsinline></video>
+    <div id="side" data-side="down">Waiting for delivery</div>
+    <ul id="log"></ul>
+    <script>
+      // A stand-in for an embedded player: it only knows the public media URL.
+      // Needs a browser that plays HLS in a video element, such as Safari or
+      // Chrome 142 and newer.
+      const params = new URLSearchParams(location.search);
+      const base = `http://space-${params.get("space")}.cdn.drill.test/${params.get("embed")}`;
+      const video = document.getElementById("video");
+      const side = document.getElementById("side");
+      const log = document.getElementById("log");
+      const labels = { primary: "Delivered by the primary", standby: "Delivered by the standby", down: "Delivery is unreachable" };
+      let current = null;
+      let position = 0;
+      let progressed = Date.now();
+      let reload = false;
+
+      document.getElementById("url").textContent = `${base}/playlist.m3u8`;
+
+      function note(text) {
+        const item = document.createElement("li");
+        item.textContent = `${new Date().toISOString().slice(11, 19)}  ${text}`;
+        log.prepend(item);
+        while (log.children.length > 8) log.lastChild.remove();
+      }
+
+      function load() {
+        reload = false;
+        progressed = Date.now();
+        video.src = `${base}/playlist.m3u8`;
+        video.currentTime = position;
+        video.play().catch(() => {});
+      }
+
+      video.addEventListener("timeupdate", () => {
+        if (video.currentTime > position) progressed = Date.now();
+        if (video.currentTime > 0) position = video.currentTime;
+      });
+
+      function stalled() {
+        return !video.ended && Date.now() - progressed > 3000;
+      }
+
+      async function probe() {
+        let next = "down";
+        try {
+          const response = await fetch(`${base}/manifest.json`, { cache: "no-store", signal: AbortSignal.timeout(1500) });
+          if (response.ok) next = response.headers.get("x-mave-delivery") || "primary";
+        } catch (_error) {}
+
+        if (next !== current) {
+          current = next;
+          side.dataset.side = next;
+          side.textContent = labels[next] || next;
+          note(labels[next] || next);
+        }
+
+        // A stalled player does not always recover by itself. Reloading the
+        // same URL is what a viewer does by refreshing the page.
+        if (stalled() && !reload) {
+          reload = true;
+          note("Playback stalled");
+        }
+
+        if (next !== "down" && reload) {
+          note("Player reloaded from the same URL");
+          load();
+        }
+      }
+
+      load();
+      probe();
+      setInterval(probe, 1000);
+    </script>
+  </body>
+</html>

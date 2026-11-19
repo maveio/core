@@ -1,0 +1,111 @@
+# Local stand-in for two independent delivery providers and their DNS.
+# Started by drill.sh; see docs/emergency_delivery_failover.md.
+name: mave-delivery-drill
+
+x-minio: &minio
+  image: ${MAVE_DRILL_MINIO_IMAGE:-mave-core-minio:drill}
+  build:
+    context: ../../minio
+    target: server
+  command: server /data
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mave_core_dev
+    ports:
+      - "127.0.0.1:${MAVE_DRILL_POSTGRES_PORT:-55432}:5432"
+    networks: [drill]
+
+  primary-storage:
+    <<: *minio
+    environment:
+      MINIO_ROOT_USER: drill-primary
+      MINIO_ROOT_PASSWORD: drill-primary-secret
+    ports:
+      - "127.0.0.1:${MAVE_DRILL_PRIMARY_PORT:-19010}:9000"
+    networks:
+      drill:
+        ipv4_address: ${MAVE_DRILL_NET:-10.77.0}.10
+
+  primary-cdn:
+    image: caddy:2.10.2-alpine
+    volumes:
+      - ./Caddyfile.primary:/etc/caddy/Caddyfile:ro
+    networks:
+      drill:
+        ipv4_address: ${MAVE_DRILL_NET:-10.77.0}.11
+
+  standby-storage:
+    <<: *minio
+    environment:
+      MINIO_ROOT_USER: drill-standby
+      MINIO_ROOT_PASSWORD: drill-standby-secret
+    ports:
+      - "127.0.0.1:${MAVE_DRILL_STANDBY_PORT:-19020}:9000"
+    networks:
+      drill:
+        ipv4_address: ${MAVE_DRILL_NET:-10.77.0}.20
+
+  standby-edge:
+    image: caddy:2.10.2-alpine
+    environment:
+      MAVE_STANDBY_EDGE_ADDRESS: "http://*.cdn.drill.test, http://cdn.drill.test"
+      MAVE_STANDBY_ORIGIN: standby-storage:9000
+    volumes:
+      - ../Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "127.0.0.1:${MAVE_DRILL_EDGE_PORT:-19021}:80"
+    networks:
+      drill:
+        ipv4_address: ${MAVE_DRILL_NET:-10.77.0}.21
+
+  dns:
+    image: coredns/coredns:1.12.0
+    command: -conf /etc/coredns/Corefile
+    volumes:
+      - ./Corefile.authority:/etc/coredns/Corefile:ro
+      - ${MAVE_DRILL_STATE:-/tmp/mave-delivery-drill}/zones:/zones:ro
+    networks:
+      drill:
+        ipv4_address: ${MAVE_DRILL_NET:-10.77.0}.2
+
+  resolver:
+    image: coredns/coredns:1.12.0
+    command: -conf /etc/coredns/Corefile
+    environment:
+      DRILL_AUTHORITY: ${MAVE_DRILL_NET:-10.77.0}.2
+    volumes:
+      - ./Corefile.resolver:/etc/coredns/Corefile:ro
+    networks:
+      drill:
+        ipv4_address: ${MAVE_DRILL_NET:-10.77.0}.3
+
+  player:
+    image: caddy:2.10.2-alpine
+    volumes:
+      - ./Caddyfile.player:/etc/caddy/Caddyfile:ro
+      - ./player:/srv:ro
+    networks:
+      drill:
+        ipv4_address: ${MAVE_DRILL_NET:-10.77.0}.30
+
+  viewer:
+    image: caddy:2.10.2-alpine
+    profiles: [viewer]
+    dns: ${MAVE_DRILL_NET:-10.77.0}.3
+    entrypoint: ["/bin/sh", "/viewer.sh", "${MAVE_DRILL_VIEWER_URL:-http://cdn.drill.test/}"]
+    volumes:
+      - ./viewer.sh:/viewer.sh:ro
+    networks: [drill]
+
+networks:
+  drill:
+    ipam:
+      config:
+        - subnet: ${MAVE_DRILL_NET:-10.77.0}.0/24
+          # Keeps automatic addresses clear of the fixed ones above.
+          ip_range: ${MAVE_DRILL_NET:-10.77.0}.128/25

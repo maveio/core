@@ -1,0 +1,7 @@
+# Caching resolver used by viewers. It keeps answers for their TTL, so the
+# drill shows how long old answers survive a switch.
+.:53 {
+	forward . {$DRILL_AUTHORITY}
+	cache
+	errors
+}
