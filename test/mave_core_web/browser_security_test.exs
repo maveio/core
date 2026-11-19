@@ -37,6 +37,20 @@ defmodule MaveCoreWeb.BrowserSecurityTest do
     assert csp =~ "https://components.saas.orb.local"
   end
 
+  test "browser CSP lets the dashboard frame the live player only when live streaming is on",
+       %{conn: conn} do
+    original = Application.get_env(:mave_core, :live_streams, [])
+    on_exit(fn -> Application.put_env(:mave_core, :live_streams, original) end)
+
+    Application.put_env(:mave_core, :live_streams, enabled: false)
+    assert [csp] = conn |> get(~p"/health") |> get_resp_header("content-security-policy")
+    refute csp =~ "frame-src"
+
+    Application.put_env(:mave_core, :live_streams, enabled: true)
+    assert [csp] = build_conn() |> get(~p"/health") |> get_resp_header("content-security-policy")
+    assert csp =~ "frame-src 'self'"
+  end
+
   test "browser CSP allows explicit self-hosted storage and upload origins", %{conn: conn} do
     original_cdn_base_url = Application.get_env(:mave_core, :public_cdn_base_url)
     original_upload = Application.get_env(:mave_core, :upload)

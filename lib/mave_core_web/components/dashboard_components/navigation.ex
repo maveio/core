@@ -968,6 +968,11 @@ defmodule MaveCoreWeb.DashboardComponents.Navigation do
         />
         <%!-- <.item label={gettext("showcase") |> String.capitalize()} route="/showcase" /> --%>
         <.item
+          :if={MaveCore.LiveStreams.available?(@current_space)}
+          label={gettext("live") |> String.capitalize()}
+          route={DashboardRoutes.live_streams_path(@current_space)}
+        />
+        <.item
           label={gettext("data") |> String.capitalize()}
           route={DashboardRoutes.data_path(@current_space)}
         />

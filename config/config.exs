@@ -202,7 +202,9 @@ config :mave_core, MaveCore.Mailer, adapter: Swoosh.Adapters.Local
 
 # Configure esbuild (the version is required)
 js_entrypoints =
-  if config_env() in [:dev, :test], do: ~w(js/app.js js/storybook.js), else: ~w(js/app.js)
+  if config_env() in [:dev, :test],
+    do: ~w(js/app.js js/live_player.js js/live_watch.js js/storybook.js),
+    else: ~w(js/app.js js/live_player.js js/live_watch.js)
 
 config :esbuild,
   version: "0.25.4",

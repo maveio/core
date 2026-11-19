@@ -86,6 +86,8 @@ defmodule MaveCore.MixProject do
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.14.1"},
+      # The RTMP listener for live streams uses Bandit's socket server directly.
+      {:thousand_island, "~> 1.6"},
       {:flame_k8s_backend, "~> 0.5.7"},
       {:ch, "~> 0.9.3"},
       {:broadway, "~> 1.0"},

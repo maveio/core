@@ -49,6 +49,10 @@ SOFTWARE.
   [assets/package-lock.json](assets/package-lock.json) identify the direct and
   transitive npm dependencies. The direct-package notices above do not replace
   the notices required by their dependencies.
+- The live stream player in `assets/js/live_player.js` and the watch page in
+  `assets/js/live_watch.js` bundle
+  [hls.js 1.7.4](https://github.com/video-dev/hls.js), Copyright (c) 2017
+  Dailymotion, licensed under Apache-2.0; `LICENSE` in the resolved npm package.
 - `mix ua_inspector.download` fetches parser data from
   [Matomo Device Detector 6.5.0](https://github.com/matomo-org/device-detector/tree/6.5.0),
   licensed under LGPL-3.0-or-later. The YAML source is included in `priv/ua_inspector` in

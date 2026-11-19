@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <meta name="robots" content="noindex" />
+    <.live_title default={gettext("Live stream")}>{assigns[:page_title]}</.live_title>
+    <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+    <link rel="stylesheet" href="/css/fonts.css" />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/live_watch.js"}>
+    </script>
+  </head>
+  <body class="h-full overflow-hidden bg-stone-950 text-stone-200 antialiased">
+    {@inner_content}
+  </body>
+</html>

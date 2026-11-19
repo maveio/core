@@ -113,6 +113,14 @@ end
 config :mave_core, MaveCoreWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# Live streaming is off unless enabled. The node that enables it accepts RTMP
+# connections from encoders on MAVE_LIVE_RTMP_PORT.
+config :mave_core, :live_streams,
+  enabled: parse_boolean_env.("MAVE_LIVE_ENABLED", false),
+  rtmp_port: parse_integer_env.("MAVE_LIVE_RTMP_PORT", 1935),
+  rtmp_url: parse_optional_string_env.("MAVE_LIVE_RTMP_URL"),
+  reconnect_seconds: parse_integer_env.("MAVE_LIVE_RECONNECT_SECONDS", 60)
+
 external_uri =
   case System.get_env("MAVE_DOMAIN") do
     nil ->

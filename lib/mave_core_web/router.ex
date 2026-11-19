@@ -65,6 +65,10 @@ defmodule MaveCoreWeb.Router do
     plug MaveCoreWeb.Plugs.RequireHost, env_var: "MAVE_MANAGE_HOST"
   end
 
+  pipeline :live_viewer do
+    plug MaveCoreWeb.Plugs.ViewerSession
+  end
+
   pipeline :redirect_if_authenticated do
     plug :redirect_if_user_is_authenticated
   end
@@ -85,12 +89,24 @@ defmodule MaveCoreWeb.Router do
     pipe_through [:public_cors]
     get "/playback/media/:id/*path", Api.PlaybackController, :show, log: false
     options "/playback/media/:id/*path", Api.PlaybackController, :show, log: false
+
+    get "/live/:id", Api.LivePlaybackController, :show, log: false
+    get "/live/:id/index.m3u8", Api.LivePlaybackController, :playlist, log: false
+    get "/live/:id/embed", Api.LivePlaybackController, :embed, log: false
+
+    options "/live/:id/*path", Api.LivePlaybackController, :show, log: false
   end
 
   scope "/v1", MaveCoreWeb do
     pipe_through [:api_host, :public_cors]
     get "/playback/media/:id/*path", Api.PlaybackController, :show, log: false
     options "/playback/media/:id/*path", Api.PlaybackController, :show, log: false
+
+    get "/live/:id", Api.LivePlaybackController, :show, log: false
+    get "/live/:id/index.m3u8", Api.LivePlaybackController, :playlist, log: false
+    get "/live/:id/embed", Api.LivePlaybackController, :embed, log: false
+
+    options "/live/:id/*path", Api.LivePlaybackController, :show, log: false
   end
 
   scope "/", MaveCoreWeb do
@@ -186,6 +202,16 @@ defmodule MaveCoreWeb.Router do
 
       get "/videos/:embed_id/data", Api.Data.VideosController, :show
       get "/spaces/:space_hash/data", Api.Data.SpacesController, :show
+
+      options "/live_streams", Api.LiveStreamsController, :index
+      options "/live_streams/:id", Api.LiveStreamsController, :index
+      options "/live_streams/:id/reset_key", Api.LiveStreamsController, :index
+      get "/live_streams", Api.LiveStreamsController, :index
+      post "/live_streams", Api.LiveStreamsController, :create
+      get "/live_streams/:id", Api.LiveStreamsController, :show
+      put "/live_streams/:id", Api.LiveStreamsController, :update
+      delete "/live_streams/:id", Api.LiveStreamsController, :delete
+      post "/live_streams/:id/reset_key", Api.LiveStreamsController, :reset_key
     end
   end
 
@@ -212,6 +238,16 @@ defmodule MaveCoreWeb.Router do
 
       get "/videos/:embed_id/data", Api.Data.VideosController, :show
       get "/spaces/:space_hash/data", Api.Data.SpacesController, :show
+
+      options "/live_streams", Api.LiveStreamsController, :index
+      options "/live_streams/:id", Api.LiveStreamsController, :index
+      options "/live_streams/:id/reset_key", Api.LiveStreamsController, :index
+      get "/live_streams", Api.LiveStreamsController, :index
+      post "/live_streams", Api.LiveStreamsController, :create
+      get "/live_streams/:id", Api.LiveStreamsController, :show
+      put "/live_streams/:id", Api.LiveStreamsController, :update
+      delete "/live_streams/:id", Api.LiveStreamsController, :delete
+      post "/live_streams/:id/reset_key", Api.LiveStreamsController, :reset_key
     end
   end
 
@@ -230,6 +266,16 @@ defmodule MaveCoreWeb.Router do
     scope "/v1" do
       options "/:embed_id", Api.LegacyEmbedController, :embed
       get "/:embed_id", Api.LegacyEmbedController, :embed
+    end
+  end
+
+  # The public watch page of a live stream. It comes before the dashboard so a
+  # stream's address is never read as a space.
+  scope "/", MaveCoreWeb do
+    pipe_through [:browser, :manage_host, :live_viewer]
+
+    live_session :live_watch, root_layout: {MaveCoreWeb.Layouts, :watch_root} do
+      live "/watch/:id", Watch.Show, :show
     end
   end
 
@@ -257,6 +303,8 @@ defmodule MaveCoreWeb.Router do
       live "/", Dashboard.Videos.Index, :index
       live "/videos", Dashboard.Videos.Index, :index
       live "/videos/:id", Dashboard.Videos.Show, :show
+      live "/live", Dashboard.Live.Index, :index
+      live "/live/:id", Dashboard.Live.Show, :show
       live "/data", Dashboard.Data.Index, :index
       live "/data/top", Dashboard.Data.Index, :top_list
       live "/settings", Dashboard.Settings.Index, :general
@@ -287,6 +335,8 @@ defmodule MaveCoreWeb.Router do
       live "/flow/runs", Dashboard.Flow.Runs, :index
       live "/:space_id/videos", Dashboard.Videos.Index, :index
       live "/:space_id/videos/:id", Dashboard.Videos.Show, :show
+      live "/:space_id/live", Dashboard.Live.Index, :index
+      live "/:space_id/live/:id", Dashboard.Live.Show, :show
       live "/:space_id/data", Dashboard.Data.Index, :index
       live "/:space_id/data/top", Dashboard.Data.Index, :top_list
       live "/:space_id/settings", Dashboard.Settings.Index, :general

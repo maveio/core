@@ -32,6 +32,14 @@ defmodule MaveCoreWeb.DashboardRoutes do
     )
   end
 
+  def live_streams_path(space_or_user, opts \\ []) do
+    path_for(space_or_user, "/live", [], opts)
+  end
+
+  def live_stream_path(space_or_user, id, opts \\ []) do
+    path_for(space_or_user, "/live/#{id}", [], opts)
+  end
+
   def data_path(space_or_user, opts \\ []) do
     path_for(space_or_user, "/data", period_params(opts), opts)
   end
