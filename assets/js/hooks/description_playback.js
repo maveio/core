@@ -39,7 +39,7 @@ export function selectEditorSubtitle(player, elements, language, source) {
   const target = matches.length === 1 ? matches[0] : matches.find(el => el.src === source)
   if (!target) return null
 
-  const previous = captions.map(({ track }) => [track, track.mode])
+  const previous = captions.map(element => [element, element.track.mode])
   if (target.track.mode !== "showing") {
     // Notify the player of an explicit selection before changing native modes.
     // Otherwise its subtitle sync reapplies the configured default.
@@ -59,11 +59,15 @@ export function offsetPlayback(player, seconds, duration) {
   player.currentTime = Math.max(0, Math.min(duration, (player.currentTime || 0) + seconds))
 }
 
-export function nextSeekStep(previous, direction, now) {
+export function repeatedStep(previous, direction, now, sizes) {
   const repeated = previous && previous.direction === direction && now - previous.at < 350
-  const count = repeated ? Math.min(previous.count + 1, 7) : 1
-  const seconds = count <= 3 ? 1 : count <= 6 ? 5 : 10
-  return { direction, at: now, count, seconds: direction * seconds }
+  const count = repeated ? Math.min(previous.count + 1, sizes.length * 3 - 2) : 1
+  return { direction, at: now, count, delta: direction * sizes[Math.floor((count - 1) / 3)] }
+}
+
+export function nextSeekStep(previous, direction, now) {
+  const step = repeatedStep(previous, direction, now, [1, 5, 10])
+  return { ...step, seconds: step.delta }
 }
 
 function clock(seconds) {
@@ -80,6 +84,13 @@ export const DescriptionPlaybackHook = {
     this.back = this.el.querySelector("[data-playback-back]")
     this.forward = this.el.querySelector("[data-playback-forward]")
     this.onPlay = () => this.toggle()
+    this.form = this.el.closest("form")
+    this.onMoment = event => {
+      const button = event.target.closest("[data-play-moment]")
+      if (button?.hasAttribute("data-pause-moment")) this.player?.pause()
+      else if (button) this.toggle(Number(button.dataset.playMoment))
+    }
+    this.form.addEventListener("click", this.onMoment)
     this.onBack = () => this.skip(-1)
     this.onForward = () => this.skip(1)
     this.onMedia = () => this.sync()
@@ -106,7 +117,19 @@ export const DescriptionPlaybackHook = {
 
   unbindPlayer() {
     if (this.subtitleSelection?.track.mode === "showing") {
-      for (const [track, mode] of this.subtitleSelection.previous) track.mode = mode
+      const { track, previous } = this.subtitleSelection
+      const edited = previous.find(([element]) => element.track === track)
+      if (edited[1] !== "showing") {
+        // The player also paints captions into its theme. Changing native
+        // modes alone can leave the last painted cue visible on a paused video.
+        this.player.dispatchEvent(new CustomEvent("mediadisablesubtitlesrequest", {
+          detail: [{ kind: edited[0].kind, language: edited[0].srclang, label: edited[0].label }],
+          bubbles: true, composed: true,
+        }))
+      }
+      for (const [element, mode] of previous) element.track.mode = mode
+      const showing = previous.find(([, mode]) => mode === "showing")
+      if (showing && showing[0].track !== track) showing[0].dispatchEvent(new Event("cuechange"))
     }
     this.subtitleSelection = null
     if (this.subtitleFilter !== undefined && this.player?.subtitles === "all") {
@@ -159,7 +182,7 @@ export const DescriptionPlaybackHook = {
     this.playButton.setAttribute("aria-label", playing ? this.el.dataset.pauseLabel : this.el.dataset.playLabel)
     this.time.textContent = `${clock(this.player?.currentTime)} / ${clock(Number(this.el.dataset.duration))}`
     this.el.dispatchEvent(new CustomEvent("description:playhead", {
-      detail: { time: this.player?.currentTime }, bubbles: true,
+      detail: { time: this.player?.currentTime, playing }, bubbles: true,
     }))
     if (!this.error) {
       this.status.textContent = this.subtitle ? "" : !available ? this.el.dataset.waitingLabel
@@ -167,11 +190,11 @@ export const DescriptionPlaybackHook = {
     }
   },
 
-  async toggle() {
+  async toggle(moment) {
     this.lastSeek = null
     this.sync()
     if (!this.player || (!this.subtitle && !this.track)) return
-    if (!this.player.paused) { this.player.pause(); return }
+    if (!Number.isFinite(moment) && !this.player.paused) { this.player.pause(); return }
     if (!this.subtitle && !selectAudioTrack(this.menu, this.track)) {
       this.showError()
       return
@@ -179,6 +202,7 @@ export const DescriptionPlaybackHook = {
     this.starting = true
     this.error = false
     if (!this.subtitle) this.player.muted = false
+    if (Number.isFinite(moment)) this.player.currentTime = Math.max(0, moment)
     this.sync()
     try {
       await this.player.play()
@@ -207,6 +231,7 @@ export const DescriptionPlaybackHook = {
     clearInterval(this.poll)
     this.unbindPlayer()
     this.playButton.removeEventListener("click", this.onPlay)
+    this.form.removeEventListener("click", this.onMoment)
     this.back.removeEventListener("click", this.onBack)
     this.forward.removeEventListener("click", this.onForward)
     if (this.menu && this.track && this.menu.selected === this.track.id && this.previousTrack != null) {

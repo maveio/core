@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { descriptionTrack, selectEditorSubtitle, selectAudioTrack, offsetPlayback, findEditorPlayer, findAudioMenu, DescriptionPlaybackHook, nextSeekStep } from '../js/hooks/description_playback.js'
+import { repeatedStep, descriptionTrack, selectEditorSubtitle, selectAudioTrack, offsetPlayback, findEditorPlayer, findAudioMenu, DescriptionPlaybackHook, nextSeekStep } from '../js/hooks/description_playback.js'
 
 test('selects the matching AD and does not guess between ambiguous tracks', () => {
   const tracks = [{ id: 'original', label: 'Dutch', language: 'nl' }, { id: 'ad', label: 'Dutch (AD)', language: 'nl' }]
@@ -124,7 +124,7 @@ test('opening captions overrides the player default and closing restores the pre
   const player = new EventTarget()
   let language
   player.addEventListener('mediashowsubtitlesrequest', event => { language = event.detail[0].language })
-  const track = (srclang, src, mode) => ({ kind: 'subtitles', srclang, src, track: { mode } })
+  const track = (srclang, src, mode) => Object.assign(new EventTarget(), { kind: 'subtitles', srclang, src, track: { mode } })
   const original = track('en', 'original.vtt', 'showing')
   const other = track('nl', 'other.vtt', 'disabled')
   const edited = track('nl', 'edited.vtt', 'disabled')
@@ -133,6 +133,40 @@ test('opening captions overrides the player default and closing restores the pre
   const selection = selectEditorSubtitle(player, tracks, 'NL', 'edited.vtt')
   assert.equal(language, 'nl')
   assert.deepEqual(tracks.map(el => el.track.mode), ['disabled', 'disabled', 'showing'])
+  let visible = 'nl'
+  player.addEventListener('mediadisablesubtitlesrequest', () => { visible = null })
+  original.addEventListener('cuechange', () => { visible = 'en' })
   DescriptionPlaybackHook.unbindPlayer.call({ player, subtitleSelection: selection, onMedia() {} })
   assert.deepEqual(tracks.map(el => el.track.mode), ['showing', 'disabled', 'disabled'])
+  assert.equal(visible, 'en')
+
+  original.track.mode = 'disabled'
+  const preview = selectEditorSubtitle(player, tracks, 'NL', 'edited.vtt')
+  visible = 'nl'
+  DescriptionPlaybackHook.unbindPlayer.call({ player, subtitleSelection: preview, onMedia() {} })
+  assert.deepEqual(tracks.map(el => el.track.mode), ['disabled', 'disabled', 'disabled'])
+  assert.equal(visible, null)
+})
+
+test('playing a moment seeks to its exact timestamp even during playback', async () => {
+  for (const moment of [0, 0.2, 7]) {
+    let played = false
+    const player = { paused: false, currentTime: 20, play() { played = true } }
+    await DescriptionPlaybackHook.toggle.call({ player, subtitle: true, sync() {} }, moment)
+    assert.equal(player.currentTime, moment)
+    assert.equal(played, true)
+  }
+})
+
+test('rapid timestamp nudges advance in milliseconds and reset after a pause or reversal', () => {
+  const sizes = [1, 10, 100, 1000]
+  let step = null
+  const deltas = []
+  for (let n = 0; n < 11; n++) {
+    step = repeatedStep(step, 1, n * 100, sizes)
+    deltas.push(step.delta)
+  }
+  assert.deepEqual(deltas, [1, 1, 1, 10, 10, 10, 100, 100, 100, 1000, 1000])
+  assert.equal(repeatedStep(step, -1, 1100, sizes).delta, -1)
+  assert.equal(repeatedStep(step, 1, 1350, sizes).delta, 1)
 })

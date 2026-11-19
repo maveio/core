@@ -1212,6 +1212,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
                   else: gettext("Audio description text")
               }
               data-edit-time-label={gettext("Edit moment")}
+              data-play-moment-label={gettext("Play from")}
+              data-pause-moment-label={gettext("Pause")}
               data-start-label={gettext("Start time")}
               data-end-label={gettext("End time")}
               data-remove-time-label={gettext("Remove time label")}

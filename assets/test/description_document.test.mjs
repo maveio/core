@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { Slice } from 'prosemirror-model'
 import { EditorState, TextSelection } from 'prosemirror-state'
 import { history, undo, redo } from 'prosemirror-history'
-import { addTimedLine, subtitleLineBreak, subtitlePaste, descriptionSchema, documentFromMoments, momentsFromDocument, formatMoment, parseMoment, replaceWithMoment, DescriptionDocumentHook, activeMomentRange, invalidMomentIds, invalidTypedTimeRanges, backspaceMoment, momentDeletionPlugin, momentDeletionKey } from '../js/hooks/description_document.js'
+import { stepMoment, cueTextCaret, addTimedLine, subtitleLineBreak, subtitlePaste, descriptionSchema, documentFromMoments, momentsFromDocument, formatMoment, parseMoment, replaceWithMoment, DescriptionDocumentHook, activeMomentRange, invalidMomentIds, invalidTypedTimeRanges, backspaceMoment, momentDeletionPlugin, momentDeletionKey } from '../js/hooks/description_document.js'
 
 const moments = [
   { id: 'first', start: 2.5, text: 'A plane.\nA new paragraph.' },
@@ -297,4 +297,37 @@ test('converting a typed time before another label keeps cues in separate paragr
   assert.deepEqual(momentsFromDocument(state.doc).moments, [
     moments[0], { id: 'new', start: 4, text: 'New subtitle' }, moments[1],
   ])
+})
+
+test('only the playing moment offers pause and pausing clears it at the same time', () => {
+  const state = EditorState.create({ doc: documentFromMoments(moments) })
+  const hook = {
+    feedback: [], currentTime: 6, playing: true,
+    playbackWindows: [{ id: 'first', start: 2.5, end: 4 }, { id: 'second', start: 6, end: 8 }],
+  }
+  const pauseButtons = () => DescriptionDocumentHook.decorations.call(hook, state).find().filter(d => d.spec.playing)
+  assert.deepEqual(pauseButtons().map(d => state.doc.nodeAt(d.from).attrs.id), ['second'])
+  hook.playing = false
+  assert.equal(pauseButtons().length, 0)
+})
+
+test('a collapsed caret at the start of a timed paragraph lands at the cue text', () => {
+  const doc = documentFromMoments(moments)
+  doc.forEach((paragraph, offset) => {
+    const start = TextSelection.create(doc, offset + 1)
+    assert.equal(cueTextCaret(start).from, start.from + (paragraph.firstChild.type.name === 'moment' ? 1 : 0))
+  })
+  const range = TextSelection.create(doc, 1, 4)
+  assert.equal(cueTextCaret(range), range)
+})
+
+test('arrow steps keep cue starts ordered and subtitle ends within the video', () => {
+  const doc = documentFromMoments([{id: 'a', start: 0, text: 'One'}, {id: 'b', start: 2, text: 'Two'}])
+  const second = doc.firstChild.nodeSize + 1
+  assert.equal(stepMoment(doc, 1, '00:00.000', -100, 4, false), '00:00.000')
+  assert.equal(stepMoment(doc, 1, '00:01.800', 100, 4, false), '00:01.900')
+  assert.equal(stepMoment(doc, 1, '00:01.800', 1000, 4, false), '00:01.999')
+  assert.equal(stepMoment(doc, second, '00:02.000', 100, 4, false, 2.05), '00:02.049')
+  assert.equal(stepMoment(doc, second, '00:02.040', -100, 4, true), '00:02.001')
+  assert.equal(stepMoment(doc, second, '00:03.500', 1000, 4, true), '00:04.000')
 })

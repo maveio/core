@@ -5,7 +5,7 @@ import { baseKeymap } from "prosemirror-commands"
 import { history, undo, redo } from "prosemirror-history"
 import { keymap } from "prosemirror-keymap"
 import { InputRule, inputRules } from "prosemirror-inputrules"
-import { findEditorPlayer } from "./description_playback.js"
+import { findEditorPlayer, repeatedStep } from "./description_playback.js"
 
 export function formatMoment(seconds) {
   const ms = Math.round(seconds * 1000)
@@ -108,6 +108,15 @@ export function addTimedLine(state, cursor, windows, duration, id) {
     tr.insert(insertAt, cue)
   }
   return tr.setSelection(TextSelection.create(tr.doc, insertAt + 3))
+}
+
+// The leading timestamp and playback controls belong to the cue, outside its text.
+export function cueTextCaret(selection) {
+  const cursor = selection.$cursor
+  if (cursor?.parentOffset === 0 && cursor.nodeAfter?.type === descriptionSchema.nodes.moment) {
+    return TextSelection.create(cursor.doc, cursor.pos + cursor.nodeAfter.nodeSize)
+  }
+  return selection
 }
 
 export const momentDeletionKey = new PluginKey("momentDeletion")
@@ -253,6 +262,27 @@ export function activeMomentRange(doc, time, windows = []) {
   return active < 0 ? null : { ...anchors[active], to: anchors[active + 1]?.from ?? doc.content.size }
 }
 
+export function stepMoment(doc, position, value, deltaMs, duration, editingEnd, cueEnd) {
+  const time = parseMoment(value)
+  if (time == null) return null
+  let minMs = 0
+  let maxMs = Math.ceil(duration * 1000) - 1
+  if (editingEnd) {
+    minMs = Math.round(doc.nodeAt(position).attrs.start * 1000) + 1
+    maxMs = Math.floor(duration * 1000)
+  } else {
+    if (cueEnd != null) maxMs = Math.min(maxMs, Math.ceil(cueEnd * 1000) - 1)
+    doc.descendants((node, pos) => {
+      if (node.type.name !== "moment") return
+      const ms = Math.round(node.attrs.start * 1000)
+      if (pos < position) minMs = Math.max(minMs, ms + 1)
+      if (pos > position) maxMs = Math.min(maxMs, ms - 1)
+    })
+  }
+  if (minMs > maxMs) return null
+  return formatMoment(Math.max(minMs, Math.min(maxMs, Math.round(time * 1000) + deltaMs)) / 1000)
+}
+
 export function invalidMomentIds(doc, duration = Infinity, originalStarts = new Map()) {
   const anchors = []
   doc.descendants(node => {
@@ -306,9 +336,10 @@ export const DescriptionDocumentHook = {
     })
     const subtitle = this.el.dataset.kind === "subtitle"
     const lineKeys = subtitle ? { Enter: subtitleLineBreak, "Shift-Enter": subtitleLineBreak } : {}
+    const doc = documentFromMoments(initial, this.el.dataset.kind)
     this.view = new EditorView(this.el, {
       state: EditorState.create({
-        doc: documentFromMoments(initial, this.el.dataset.kind),
+        doc, selection: cueTextCaret(TextSelection.atStart(doc)),
         plugins: [history(), keymap({ ...lineKeys, "Backspace": backspaceMoment, "Mod-z": undo, "Shift-Mod-z": redo, "Mod-y": redo }), keymap(baseKeymap), inputRules({ rules: [typedMoment] }), uniqueMoments(), momentDeletionPlugin(), feedbackPlugin],
       }),
       editable: () => this.el.dataset.readOnly !== "true",
@@ -317,6 +348,8 @@ export const DescriptionDocumentHook = {
       nodeViews: { moment: (node, view, getPos, decorations) => this.momentView(node, view, getPos, decorations) },
       dispatchTransaction: transaction => {
         if (transaction.docChanged && this.el.dataset.readOnly === "true") return
+        const selection = cueTextCaret(transaction.selection)
+        if (selection !== transaction.selection) transaction.setSelection(selection)
         this.view.updateState(this.view.state.apply(transaction))
         if (transaction.docChanged) {
           this.linePicked = true
@@ -326,6 +359,7 @@ export const DescriptionDocumentHook = {
       },
     })
     this.pickLine = event => {
+      if (event.target.closest("[data-play-moment]")) return
       this.linePicked = true
       const label = event.target.closest(".description-moment")
       this.pickedLabel = label ? this.view.posAtDOM(label, 0) : null
@@ -351,10 +385,12 @@ export const DescriptionDocumentHook = {
     this.form.addEventListener("submit", this.beforeSubmit, true)
     this.onPlayhead = event => {
       const time = event.detail.time
-      if (time === this.currentTime) return
+      const playbackChanged = event.detail.playing !== this.playing
+      if (time === this.currentTime && !playbackChanged) return
       const before = activeMomentRange(this.view.state.doc, this.currentTime, this.playbackWindows)?.id
       this.currentTime = time
-      if (activeMomentRange(this.view.state.doc, time, this.playbackWindows)?.id !== before) this.view.updateState(this.view.state)
+      this.playing = event.detail.playing
+      if (playbackChanged || activeMomentRange(this.view.state.doc, time, this.playbackWindows)?.id !== before) this.view.updateState(this.view.state)
     }
     this.form.addEventListener("description:playhead", this.onPlayhead)
     this.currentTime = findEditorPlayer(this.form.dataset.playerEmbed)?.currentTime
@@ -402,7 +438,7 @@ export const DescriptionDocumentHook = {
     const active = activeMomentRange(state.doc, this.currentTime, this.playbackWindows)
     if (active) {
       decorations.push(Decoration.inline(active.from, active.to, { class: "description-active-text" }))
-      decorations.push(Decoration.node(active.from, active.from + 1, { class: "description-active-moment", "aria-current": "true" }))
+      decorations.push(Decoration.node(active.from, active.from + 1, { class: "description-active-moment", "aria-current": "true" }, { playing: !!this.playing }))
     }
     const ducking = new Set(this.playbackWindows.filter(window => window.ducks_speech).map(window => window.id))
     const invalid = invalidMomentIds(state.doc, Number(this.el?.dataset.duration ?? Infinity), this.originalStarts)
@@ -440,6 +476,7 @@ export const DescriptionDocumentHook = {
   momentView(node, view, getPos, decorations) {
     const subtitle = this.el.dataset.kind === "subtitle"
     let cueTiming = decorations.find(d => d.spec.end != null)?.spec
+    let playing = decorations.some(d => d.spec.playing)
     let current = node
     const dom = document.createElement("span")
     dom.className = "description-moment"
@@ -448,9 +485,23 @@ export const DescriptionDocumentHook = {
     button.type = "button"
     button.className = "description-time"
     const endButton = subtitle ? button.cloneNode(false) : null
+    const play = document.createElement("button")
+    play.type = "button"
+    play.className = "description-line-play"
+    play.addEventListener("mousedown", event => event.preventDefault())
+    const icon = document.createElement("span")
+    icon.className = "hero-play size-3.5"
+    icon.setAttribute("aria-hidden", "true")
+    play.append(icon)
     const refresh = () => {
       button.textContent = formatMoment(current.attrs.start)
       button.dataset.previewTime = current.attrs.start
+      play.dataset.playMoment = current.attrs.start
+      play.toggleAttribute("data-pause-moment", playing)
+      icon.classList.toggle("hero-play", !playing)
+      icon.classList.toggle("hero-pause", playing)
+      play.title = playing ? this.el.dataset.pauseMomentLabel : `${this.el.dataset.playMomentLabel} ${button.textContent}`
+      play.setAttribute("aria-label", play.title)
       button.setAttribute("aria-label", `${subtitle ? this.el.dataset.startLabel : this.el.dataset.editTimeLabel} ${button.textContent}`)
       if (endButton) {
         const end = current.attrs.end ?? cueTiming?.end
@@ -458,12 +509,14 @@ export const DescriptionDocumentHook = {
         if (endButton.title) endButton.setAttribute("aria-description", endButton.title)
         else endButton.removeAttribute("aria-description")
         endButton.disabled = !Number.isFinite(end)
+        if (endButton.disabled) delete endButton.dataset.previewTime
+        else endButton.dataset.previewTime = end
         endButton.textContent = endButton.disabled ? "…" : formatMoment(end)
         endButton.setAttribute("aria-label", `${this.el.dataset.endLabel} ${endButton.textContent}`)
       }
     }
     refresh()
-    dom.appendChild(button)
+    dom.append(play, button)
     const volumeTemplate = this.form.querySelector("[data-original-volume-template]")
     if (volumeTemplate) dom.append(volumeTemplate.content.cloneNode(true))
     if (endButton) dom.append("–", endButton)
@@ -504,7 +557,22 @@ export const DescriptionDocumentHook = {
         close()
         if (focusEditor) view.focus()
       }
+      let lastStep = null
       input.addEventListener("keydown", event => {
+        if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+          event.preventDefault()
+          event.stopPropagation()
+          const direction = event.key === "ArrowUp" ? 1 : -1
+          lastStep = event.shiftKey ? null : repeatedStep(lastStep, direction, performance.now(), [1, 10, 100, 1000])
+          const value = stepMoment(view.state.doc, getPos(), input.value,
+            lastStep?.delta ?? direction * 1000, Number(this.el.dataset.duration),
+            editingEnd, subtitle ? current.attrs.end ?? cueTiming?.end : null)
+          if (value != null) {
+            input.value = value
+            input.removeAttribute("aria-invalid")
+            input.setCustomValidity("")
+          }
+        }
         if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); commit() }
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); view.focus() }
       })
@@ -526,6 +594,7 @@ export const DescriptionDocumentHook = {
         if (updated.type !== current.type) return false
         current = updated
         cueTiming = decorations.find(d => d.spec.end != null)?.spec
+        playing = decorations.some(d => d.spec.playing)
         refresh()
         return true
       },
