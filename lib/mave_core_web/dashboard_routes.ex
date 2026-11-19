@@ -15,6 +15,10 @@ defmodule MaveCoreWeb.DashboardRoutes do
     path_for(space_or_user, "/videos/#{id}", params, opts)
   end
 
+  def subtitle_editor_path(space_or_user, video_id, subtitle_id, opts \\ []) do
+    path_for(space_or_user, "/videos/#{video_id}/subtitles/#{subtitle_id}", [], opts)
+  end
+
   def subtitle_download_path(space_or_user, video_id, subtitle_id, opts \\ []) do
     path_for(space_or_user, "/videos/#{video_id}/subtitles/#{subtitle_id}/download", [], opts)
   end
