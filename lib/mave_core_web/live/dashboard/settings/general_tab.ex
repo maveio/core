@@ -6,6 +6,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
 
   alias MaveCore.{AccountDeletion, Accounts, GoogleOAuth, SharedStorageSpace}
   alias MaveCore.Flow
+  alias MaveCore.MultiRegion
   alias MaveCore.Spaces
   alias MaveCore.Spaces.Domain
   alias MaveCore.Spaces.Space
@@ -133,6 +134,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
           active={region_active?(@current_region, region.id)}
         />
       </div>
+      <.multi_region_panel :if={@multi_region} multi_region={@multi_region} target={@myself} />
 
       <.divider />
 
@@ -479,6 +481,178 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
     """
   end
 
+  attr :multi_region, :map, required: true
+  attr :target, :any, required: true
+
+  defp multi_region_panel(assigns) do
+    ~H"""
+    <div id="multi-region" class="mt-8">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center text-sm text-stone-600">
+          {gettext("Multi-region delivery")}
+          <.info_hover>
+            {gettext(
+              "Keep a copy of your public videos in additional regions. When the serving region has problems, viewers are served from another region."
+            )}
+          </.info_hover>
+        </div>
+        <div :if={@multi_region.enabled} class="flex items-center">
+          <.dash_button
+            id="multi-region-check-button"
+            variant="ghost"
+            phx-click="multi_region_check"
+            phx-target={@target}
+          >
+            {gettext("check now")}
+          </.dash_button>
+          <.dash_button
+            id="multi-region-sync-button"
+            variant="ghost"
+            phx-click="multi_region_sync"
+            phx-target={@target}
+          >
+            {gettext("sync now")}
+          </.dash_button>
+        </div>
+      </div>
+      <div
+        :if={@multi_region.notice}
+        id="multi-region-notice"
+        class="mb-3 rounded-md bg-blue-50 px-3.5 py-2.5 text-xs text-blue-400"
+      >
+        {@multi_region.notice}
+      </div>
+      <.data_table>
+        <.data_table_row :for={row <- @multi_region.rows} id={"multi-region-row-#{row.id}"}>
+          <div
+            class={["w-2 h-2 rounded-full mr-3.5 flex-none", region_health_class(row.health)]}
+            data-health={row.health}
+          >
+          </div>
+          <div class="w-52 flex-none">
+            <div class="text-stone-600">
+              {row.name} <span class="text-stone-400">{row.provider}</span>
+            </div>
+            <div class="text-xs text-stone-400 mt-0.5">{row.location}</div>
+          </div>
+          <div class="flex-1 min-w-0 text-xs">
+            <div class="text-stone-600" id={"multi-region-status-#{row.id}"}>{row.status}</div>
+            <div
+              :if={row.detail}
+              class="text-stone-400 mt-0.5 truncate"
+              id={"multi-region-detail-#{row.id}"}
+            >
+              {row.detail}
+            </div>
+          </div>
+          <div
+            :if={row.serving}
+            id={"multi-region-serving-#{row.id}"}
+            class="flex-none text-xs text-blue-400 bg-blue-50 rounded px-1.5 py-0.5 ml-3"
+          >
+            {gettext("serving viewers")}
+          </div>
+          <:actions>
+            <.dash_button
+              :if={row.can_serve}
+              id={"multi-region-serve-#{row.id}"}
+              variant="ghost"
+              class="whitespace-nowrap"
+              phx-click="multi_region_serve"
+              phx-value-id={row.id}
+              phx-target={@target}
+            >
+              {gettext("serve from here")}
+            </.dash_button>
+            <.dash_button
+              :if={row.role == :replica}
+              id={"multi-region-remove-#{row.id}"}
+              variant="ghost"
+              class="whitespace-nowrap"
+              phx-click="multi_region_remove"
+              phx-value-id={row.id}
+              phx-target={@target}
+              data-confirm={
+                gettext(
+                  "Remove this region? Its copy of your videos is deleted. Your primary region is not affected."
+                )
+              }
+            >
+              {gettext("remove")}
+            </.dash_button>
+            <.dash_button
+              :if={row.role == :available}
+              id={"multi-region-add-#{row.id}"}
+              variant="ghost"
+              class="whitespace-nowrap"
+              disabled={!@multi_region.can_add}
+              phx-click="multi_region_add"
+              phx-value-id={row.id}
+              phx-target={@target}
+            >
+              {gettext("add region")}
+            </.dash_button>
+          </:actions>
+        </.data_table_row>
+        <.data_table_row :if={@multi_region.enabled} id="multi-region-failover-row">
+          <div>{gettext("Automatic failover")}</div>
+          <.info_hover>
+            {gettext(
+              "Move viewers to a healthy region when the serving region is unavailable, and back to the primary once it has recovered. Switch off to choose the serving region yourself."
+            )}
+          </.info_hover>
+          <:actions>
+            <div class="p-4">
+              <.toggle
+                id="multi-region-failover-toggle"
+                enabled={@multi_region.automatic_failover}
+                phx-click="multi_region_toggle_failover"
+                phx-target={@target}
+              />
+            </div>
+          </:actions>
+        </.data_table_row>
+      </.data_table>
+    </div>
+    """
+  end
+
+  defp region_health_class("healthy"), do: "bg-emerald-400"
+  defp region_health_class("unavailable"), do: "bg-red-400"
+  defp region_health_class(_health), do: "bg-stone-200"
+
+  def handle_event("multi_region_add", %{"id" => region}, socket) do
+    multi_region_update(socket, MultiRegion.add_region(socket.assigns.current_space, region))
+  end
+
+  def handle_event("multi_region_remove", %{"id" => region}, socket) do
+    multi_region_update(socket, MultiRegion.remove_region(socket.assigns.current_space, region))
+  end
+
+  def handle_event("multi_region_serve", %{"id" => region}, socket) do
+    multi_region_update(
+      socket,
+      MultiRegion.set_delivery_region(socket.assigns.current_space, region)
+    )
+  end
+
+  def handle_event("multi_region_toggle_failover", _params, socket) do
+    space = socket.assigns.current_space
+    mode = if space.delivery_failover == "manual", do: "automatic", else: "manual"
+
+    multi_region_update(socket, MultiRegion.set_failover_mode(space, mode))
+  end
+
+  def handle_event("multi_region_sync", _params, socket) do
+    MultiRegion.request_sync(socket.assigns.current_space)
+    {:noreply, reload_state(socket)}
+  end
+
+  def handle_event("multi_region_check", _params, socket) do
+    MultiRegion.request_health_check(socket.assigns.current_space)
+    {:noreply, reload_state(socket)}
+  end
+
   def handle_event("open_modal", %{"modal" => modal}, socket) do
     socket =
       case modal do
@@ -689,6 +863,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
     |> assign(:current_region, current_space.region)
     |> assign(:region_cards, dashboard_region_cards(current_space))
     |> assign(:region_help, dashboard_region_help(current_space))
+    |> assign(:multi_region, multi_region_state(current_space))
     |> assign(:account_deletion_requirements, AccountDeletion.requirements())
     |> assign(:google_oauth_enabled, GoogleOAuth.enabled?())
     |> assign(
@@ -817,6 +992,196 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
   defp hotlink_protection_enabled?(%Space{} = space) do
     not SharedStorageSpace.shared?(space) and space.hotlink_protection_enabled
   end
+
+  defp multi_region_update(socket, {:ok, %Space{} = updated_space}) do
+    {:noreply,
+     socket
+     |> notify_parent(updated_space)
+     |> assign(:current_space, updated_space)
+     |> reload_state()}
+  end
+
+  defp multi_region_update(socket, {:error, reason}) do
+    {:noreply, put_flash(socket, :error, multi_region_error(reason))}
+  end
+
+  defp multi_region_error(:region_not_synced),
+    do: gettext("This region does not hold a complete copy of your videos yet.")
+
+  defp multi_region_error(:too_many_regions),
+    do: gettext("This space already uses the maximum number of regions.")
+
+  defp multi_region_error(reason) do
+    copy = UsageLimits.restriction_copy(:multi_region, reason)
+    Map.get(copy, :error, gettext("Could not update the regions of this space."))
+  end
+
+  # Nil when the space cannot use more than one region, which keeps the single
+  # region card as the whole story.
+  defp multi_region_state(%Space{} = space) do
+    if MultiRegion.available?(space) do
+      cards = Map.new(dashboard_region_cards(space), &{&1.id, &1})
+      replicas = MultiRegion.replica_regions(space)
+      now = DateTime.utc_now()
+
+      used =
+        space
+        |> MultiRegion.list_states()
+        |> Enum.map(&used_region_row(space, cards, &1, now))
+
+      available =
+        space
+        |> MultiRegion.selectable_regions()
+        |> Enum.reject(&(&1 in replicas))
+        |> Enum.map(&available_region_row(cards, &1))
+
+      %{
+        enabled: replicas != [],
+        notice: delivery_notice(space, used, now),
+        can_add: length(replicas) < MultiRegion.max_replicas(),
+        automatic_failover: space.delivery_failover != "manual",
+        rows: used ++ available
+      }
+    end
+  end
+
+  defp used_region_row(space, cards, state, now) do
+    role = if state.region == MultiRegion.primary_region(space), do: :primary, else: :replica
+    serving? = state.region == MultiRegion.delivery_region(space)
+    complete? = role == :primary or not is_nil(state.synced_at)
+
+    multi_region_row(cards, state.region, %{
+      role: role,
+      health: state.health,
+      serving: serving?,
+      can_serve:
+        MultiRegion.enabled?(space) and not serving? and complete? and
+          state.health != "unavailable",
+      status: region_status(role, state),
+      detail: region_detail(role, state, now)
+    })
+  end
+
+  defp available_region_row(cards, region) do
+    multi_region_row(cards, region, %{
+      role: :available,
+      health: "unknown",
+      serving: false,
+      can_serve: false,
+      status: gettext("Not in use"),
+      detail: nil
+    })
+  end
+
+  defp delivery_notice(%Space{delivery_region_reason: "failover"} = space, rows, now) do
+    serving = MultiRegion.delivery_region(space)
+
+    if serving != MultiRegion.primary_region(space) do
+      names = Map.new(rows, &{&1.id, &1.name})
+
+      gettext(
+        "Viewers moved to %{region} %{time} because %{primary} is unavailable. They return once it has recovered.",
+        region: names[serving],
+        primary: names[MultiRegion.primary_region(space)],
+        time: relative_time(space.delivery_region_changed_at, now)
+      )
+    end
+  end
+
+  defp delivery_notice(_space, _rows, _now), do: nil
+
+  defp multi_region_row(cards, region, attrs) do
+    card = Map.get(cards, region) || default_region_card(region)
+
+    Map.merge(
+      %{id: region, name: card.name, provider: card.provider, location: card.location},
+      attrs
+    )
+  end
+
+  # Reachable again, but not yet for long enough to serve viewers.
+  defp region_status(role, %{health: "unavailable", consecutive_successes: successes})
+       when successes > 0 do
+    case role do
+      :primary -> gettext("Primary · recovering")
+      :replica -> gettext("Replica · recovering")
+    end
+  end
+
+  defp region_status(role, %{health: "unavailable"}) do
+    case role do
+      :primary -> gettext("Primary · unavailable")
+      :replica -> gettext("Replica · unavailable")
+    end
+  end
+
+  defp region_status(:primary, %{health: "healthy"}), do: gettext("Primary · healthy")
+  defp region_status(:primary, _state), do: gettext("Primary")
+  defp region_status(:replica, %{sync_status: "syncing"}), do: gettext("Replica · copying videos")
+  defp region_status(:replica, %{sync_status: "failed"}), do: gettext("Replica · copy failed")
+  defp region_status(:replica, %{synced_at: nil}), do: gettext("Replica · waiting for first copy")
+  defp region_status(:replica, _state), do: gettext("Replica · in sync")
+
+  defp region_detail(_role, %{health: "unavailable", consecutive_successes: successes}, _now)
+       when successes > 0 do
+    gettext("Reachable again, waiting for another successful check")
+  end
+
+  defp region_detail(_role, %{health: "unavailable"} = state, now) do
+    gettext("Not reachable since %{time}",
+      time: relative_time(state.health_changed_at || state.health_checked_at, now)
+    ) <> if(state.health_error, do: " · " <> state.health_error, else: "")
+  end
+
+  defp region_detail(:primary, state, now) do
+    if state.health_checked_at,
+      do: gettext("Checked %{time}", time: relative_time(state.health_checked_at, now)),
+      else: gettext("Uploads and processing use this region")
+  end
+
+  defp region_detail(:replica, %{sync_status: "failed"} = state, now) do
+    [
+      state.sync_error,
+      state.synced_at &&
+        gettext("last complete copy %{time}", time: relative_time(state.synced_at, now))
+    ]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.join(" · ")
+  end
+
+  defp region_detail(:replica, %{synced_at: %DateTime{} = synced_at} = state, now) do
+    ngettext("%{count} file", "%{count} files", state.objects_total) <>
+      " · " <>
+      format_bytes(state.bytes_total) <>
+      " · " <> gettext("compared %{time}", time: relative_time(synced_at, now))
+  end
+
+  defp region_detail(:replica, _state, _now), do: nil
+
+  defp relative_time(nil, _now), do: gettext("just now")
+
+  defp relative_time(%DateTime{} = time, now) do
+    case DateTime.diff(now, time) do
+      seconds when seconds < 60 ->
+        gettext("just now")
+
+      seconds when seconds < 3600 ->
+        ngettext("%{count} minute ago", "%{count} minutes ago", div(seconds, 60))
+
+      seconds when seconds < 86_400 ->
+        ngettext("%{count} hour ago", "%{count} hours ago", div(seconds, 3600))
+
+      seconds ->
+        ngettext("%{count} day ago", "%{count} days ago", div(seconds, 86_400))
+    end
+  end
+
+  defp format_bytes(bytes) when bytes >= 1_073_741_824,
+    do: "#{Float.round(bytes / 1_073_741_824, 1)} GB"
+
+  defp format_bytes(bytes) when bytes >= 1_048_576, do: "#{Float.round(bytes / 1_048_576, 1)} MB"
+  defp format_bytes(bytes) when bytes >= 1024, do: "#{Float.round(bytes / 1024, 1)} KB"
+  defp format_bytes(bytes), do: "#{bytes} B"
 
   defp dashboard_region_cards(%Space{} = current_space) do
     static_region_cards = Application.get_env(:mave_core, :extra_dashboard_regions, [])

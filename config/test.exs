@@ -72,6 +72,9 @@ config :mave_core, :s3,
   endpoint: System.get_env("S3_ENDPOINT") || "http://localhost:9000",
   region: System.get_env("AWS_REGION") || "us-east-1"
 
+# Tests request replication explicitly instead of following embed events.
+config :mave_core, :multi_region_change_listener, false
+
 config :mave_core, :internal_secret, System.get_env("MAVE_CORE_INTERNAL_SECRET") || "test_secret"
 
 config :mave_core, Oban,

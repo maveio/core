@@ -202,6 +202,9 @@ No local component build is needed, but browser clients need outbound HTTPS/DNS.
 `MAVE_COMPONENTS_BASE_URL` and `MAVE_COMPONENTS_SRC` can override the bundle;
 this distribution does not vendor one.
 
+A space can keep a copy of its public media in additional storage regions and
+fail over between them; see [multi-region delivery](../../docs/multi_region_delivery.md).
+
 ### Storage compatibility
 
 The bundle pins MinIO, which is exercised by the upload, processing, bucket-policy,

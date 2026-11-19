@@ -146,6 +146,77 @@ defmodule MaveCore.Media.Storage do
     list_prefix_keys(bucket, prefix, storage_profile)
   end
 
+  @doc """
+  Lists objects under a prefix with the metadata needed to compare two buckets.
+
+  Returns a map of key to `%{size_bytes, etag, last_modified}`. A missing bucket
+  is an empty listing.
+  """
+  def list_objects(bucket, prefix, storage_profile \\ nil)
+      when is_binary(bucket) and is_binary(prefix) do
+    list_prefix_objects(bucket, prefix, storage_profile, nil, %{})
+  end
+
+  @doc """
+  Checks that a bucket answers through the storage API within `timeout_ms`.
+
+  A missing bucket still proves that the region answers, so it counts as
+  reachable. Transport errors, server errors and denied requests do not.
+  """
+  def probe_bucket(bucket, storage_profile \\ nil, timeout_ms \\ 5_000)
+      when is_binary(bucket) do
+    result =
+      build_service_req(storage_profile, bucket)
+      |> Req.merge(
+        retry: false,
+        receive_timeout: timeout_ms,
+        connect_options: [timeout: timeout_ms]
+      )
+      |> Req.head(url: "/#{bucket}")
+
+    case result do
+      {:ok, %Req.Response{status: status}} when status in 200..299 or status == 404 -> :ok
+      {:ok, %Req.Response{status: status}} -> {:error, {:bucket_probe_failed, status}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Whether two profile/bucket pairs resolve to the same physical bucket.
+
+  Replication uses this to refuse a replica that would overwrite or delete the
+  objects it is supposed to protect.
+  """
+  def same_bucket?(left_profile, left_bucket, right_profile, right_bucket) do
+    left_bucket == right_bucket and
+      same_storage_backend?(left_profile, left_bucket, right_profile, right_bucket)
+  end
+
+  @doc "Whether a named storage profile has its own provider configuration."
+  def profile_configured?(storage_profile) when is_binary(storage_profile) do
+    providers = Application.get_env(:mave_core, :storage_providers, %{})
+    profile = StorageProfiles.resolve(storage_profile)
+
+    profile == StorageProfiles.default() or Map.has_key?(providers, profile)
+  end
+
+  def profile_configured?(_storage_profile), do: false
+
+  @doc """
+  Browser-reachable base URL of a storage profile, without a bucket.
+
+  Uses the profile's `:public_base_url` and falls back to its storage endpoint,
+  which is correct for stores that serve public objects directly.
+  """
+  def profile_public_base_url(storage_profile) do
+    config = config_for_profile(storage_profile)
+
+    case config_value(config, :public_base_url) || config_value(config, :endpoint) do
+      value when is_binary(value) and value != "" -> String.trim_trailing(value, "/")
+      _value -> nil
+    end
+  end
+
   @doc "Fetches at most `max_bytes` from the beginning of an object."
   def get_prefix(bucket, path, storage_profile, max_bytes)
       when is_binary(bucket) and is_binary(path) do
@@ -2664,6 +2735,71 @@ defmodule MaveCore.Media.Storage do
         {:error, reason}
     end
   end
+
+  defp list_prefix_objects(bucket, prefix, storage_profile, continuation_token, acc) do
+    params =
+      [{"list-type", "2"}, {"prefix", prefix}]
+      |> maybe_add_continuation_token(continuation_token)
+
+    case Req.get(build_req(bucket, storage_profile), url: "/", params: params) do
+      {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
+        acc = Map.merge(acc, extract_listed_objects(body))
+        next_token = extract_xml_value(body, "NextContinuationToken")
+
+        if extract_xml_value(body, "IsTruncated") == "true" and is_binary(next_token) and
+             next_token != "" do
+          list_prefix_objects(bucket, prefix, storage_profile, next_token, acc)
+        else
+          {:ok, acc}
+        end
+
+      {:ok, %Req.Response{status: 404}} ->
+        {:ok, acc}
+
+      {:ok, %Req.Response{status: status}} ->
+        {:error, {:list_objects_failed, status}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp extract_listed_objects(body) when is_binary(body) do
+    ~r/<Contents>(.*?)<\/Contents>/s
+    |> Regex.scan(body, capture: :all_but_first)
+    |> Map.new(fn [contents] ->
+      {extract_xml_value(contents, "Key"),
+       %{
+         size_bytes: contents |> extract_xml_value("Size") |> listed_size(),
+         etag: contents |> extract_xml_value("ETag") |> listed_etag(),
+         last_modified: contents |> extract_xml_value("LastModified") |> listed_time()
+       }}
+    end)
+    |> Map.delete(nil)
+  end
+
+  defp extract_listed_objects(_body), do: %{}
+
+  defp listed_size(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {size, ""} -> size
+      _other -> nil
+    end
+  end
+
+  defp listed_size(_value), do: nil
+
+  defp listed_etag(value) when is_binary(value), do: String.trim(value, "\"")
+  defp listed_etag(_value), do: nil
+
+  defp listed_time(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      _other -> nil
+    end
+  end
+
+  defp listed_time(_value), do: nil
 
   defp delete_keys(_bucket, [], _storage_profile), do: :ok
 

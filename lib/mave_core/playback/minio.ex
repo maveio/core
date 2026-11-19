@@ -80,9 +80,20 @@ defmodule MaveCore.Playback.Minio do
     end
   end
 
+  # Additional storage profiles are fine as long as they are local stores too,
+  # such as a second MinIO used as a replica region.
   defp local_storage? do
-    URI.parse(s3()[:endpoint] || "").host in ["localhost", "127.0.0.1", "::1", "cdn", "minio"] and
-      Application.get_env(:mave_core, :storage_providers, %{}) == %{}
+    local_endpoint?(s3()[:endpoint]) and
+      :mave_core
+      |> Application.get_env(:storage_providers, %{})
+      |> Enum.all?(fn {_profile, config} -> local_endpoint?(Map.new(config)[:endpoint]) end)
+  end
+
+  defp local_endpoint?(endpoint) do
+    host = URI.parse(endpoint || "").host
+
+    host in ["localhost", "127.0.0.1", "::1", "cdn", "minio"] or
+      (is_binary(host) and String.starts_with?(host, "minio-"))
   end
 
   defp s3, do: Application.get_env(:mave_core, :s3, [])

@@ -6,6 +6,8 @@ defmodule MaveCore.Workers.AccountDeletionWorker do
   alias MaveCore.Embeds.Embed
   alias MaveCore.Flow
   alias MaveCore.Media.Storage
+  alias MaveCore.MultiRegion
+  alias MaveCore.MultiRegion.Replicator
   alias MaveCore.Repo
   alias MaveCore.Spaces
   alias MaveCore.Spaces.Space
@@ -30,7 +32,23 @@ defmodule MaveCore.Workers.AccountDeletionWorker do
     end
   end
 
-  defp protect_batch(space, cursor, job) do
+  # Replicas hold public copies only, so a deleted space keeps none of them.
+  defp protect_batch(space, nil, job) do
+    with :ok <- purge_replicas(space), do: protect_embeds(space, nil, job)
+  end
+
+  defp protect_batch(space, cursor, job), do: protect_embeds(space, cursor, job)
+
+  defp purge_replicas(space) do
+    Enum.reduce_while(MultiRegion.replica_regions(space), :ok, fn region, :ok ->
+      case Replicator.purge(space, region) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp protect_embeds(space, cursor, job) do
     query = from(e in Embed, where: e.space_id == ^space.id and e.type == :video)
     query = if cursor, do: where(query, [e], e.id > ^cursor), else: query
     embeds = Repo.all(from(e in query, order_by: e.id, limit: @batch_size))

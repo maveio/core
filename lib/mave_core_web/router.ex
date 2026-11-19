@@ -87,6 +87,12 @@ defmodule MaveCoreWeb.Router do
     options "/playback/media/:id/*path", Api.PlaybackController, :show, log: false
   end
 
+  scope "/delivery", MaveCoreWeb do
+    pipe_through [:public_cors]
+    get "/:bucket/*path", DeliveryController, :show, log: false
+    options "/:bucket/*path", DeliveryController, :show, log: false
+  end
+
   scope "/v1", MaveCoreWeb do
     pipe_through [:api_host, :public_cors]
     get "/playback/media/:id/*path", Api.PlaybackController, :show, log: false

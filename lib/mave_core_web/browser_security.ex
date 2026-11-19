@@ -1,5 +1,6 @@
 defmodule MaveCoreWeb.BrowserSecurity do
   @moduledoc false
+  alias MaveCore.MultiRegion.Delivery
   alias MaveCore.Playback.URLs
 
   def init(opts), do: opts
@@ -57,6 +58,7 @@ defmodule MaveCoreWeb.BrowserSecurity do
       Keyword.get(upload, :endpoint),
       Keyword.get(upload, :public_base_url)
     ]
+    |> Kernel.++(Delivery.public_base_urls())
     |> Enum.flat_map(&extract_origin/1)
     |> Enum.uniq()
   end
