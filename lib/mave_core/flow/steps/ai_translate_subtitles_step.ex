@@ -13,6 +13,18 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
   @target_language "en"
 
   @impl true
+  def run(step, %{run_input: %{"automatic_subtitles_enabled" => false}}) do
+    target = get_in(step, ["params", "target_language"]) || @target_language
+
+    {:ok,
+     skipped_output(
+       step["id"] || "translate_subtitles",
+       "automatic subtitles disabled",
+       nil,
+       target
+     ), []}
+  end
+
   def run(step_definition, context) do
     run_input = Map.get(context, :run_input, %{})
     params = Map.get(step_definition, "params", %{})
@@ -51,7 +63,13 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
            source_language || detect_language_from_text(transcription.text, transcribe_output),
          :ok <- continue_unless_target_language(source_language, target_language),
          {:ok, translation} <-
-           translate(translation_provider, transcription, source_language, target_language),
+           translate(
+             translation_provider,
+             transcription,
+             source_language,
+             target_language,
+             run_input["subtitle_vocabulary"] || []
+           ),
          {:ok, subtitle_body} <-
            translation_to_vtt(translation, transcription_duration(transcription)),
          {:ok, subtitle_json} <-
@@ -217,8 +235,9 @@ defmodule MaveCore.Flow.Steps.AiTranslateSubtitlesStep do
 
   defp subtitle_json_uri_key(_), do: {:error, :missing_transcription_json}
 
-  defp translate(provider, transcription, source_language, target_language) do
+  defp translate(provider, transcription, source_language, target_language, vocabulary) do
     case provider.translate(transcription,
+           vocabulary: vocabulary,
            source_language: source_language,
            target_language: target_language
          ) do

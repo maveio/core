@@ -44,7 +44,8 @@ defmodule MaveCore.Workers.SubtitleTranslationWorker do
   def enqueue(%Embed{} = embed, source_id, target) do
     embed = Repo.preload(embed, [:space, asset: :current_video], force: true)
 
-    with %Video{} = video <- embed.asset.current_video,
+    with :enabled <- if(embed.space.automatic_subtitles_enabled, do: :enabled, else: :disabled),
+         %Video{} = video <- embed.asset.current_video,
          %Subtitle{} = source <- Assets.get_subtitle_for_video(source_id, video.id),
          true <- source.language == Assets.subtitle_source_language(video),
          true <- is_binary(target) and Languages.spoken_language(target) != nil,
@@ -59,6 +60,7 @@ defmodule MaveCore.Workers.SubtitleTranslationWorker do
         "source_id" => source.id,
         "target" => target,
         "revision" => Base.encode16(editor.revision),
+        "subtitle_vocabulary" => embed.space.subtitle_vocabulary,
         "quantity" => quantity
       }
 
@@ -71,6 +73,7 @@ defmodule MaveCore.Workers.SubtitleTranslationWorker do
         end
       end)
     else
+      :disabled -> {:error, :automatic_subtitles_disabled}
       _ -> {:error, :invalid_translation}
     end
   end
@@ -126,6 +129,7 @@ defmodule MaveCore.Workers.SubtitleTranslationWorker do
            Enum.map(cues, &%{start: &1.start_seconds, end: &1.end_seconds, text: &1.text}),
          {:ok, %{segments: translated}} <-
            provider.translate(%{segments: segments},
+             vocabulary: args["subtitle_vocabulary"] || [],
              source_language: editor.language,
              target_language: target,
              usage_context: %{
@@ -158,8 +162,17 @@ defmodule MaveCore.Workers.SubtitleTranslationWorker do
         error -> error
       end
     else
-      {:error, _} -> {:error, :translation_failed}
-      _ -> {:cancel, :obsolete}
+      {:error, reason} when is_atom(reason) ->
+        {:error, reason}
+
+      {:error, {:mistral_translation_failed, status, _}} when is_integer(status) ->
+        {:error, {:translation_http_error, status}}
+
+      {:error, _} ->
+        {:error, :translation_failed}
+
+      _ ->
+        {:cancel, :obsolete}
     end
   end
 

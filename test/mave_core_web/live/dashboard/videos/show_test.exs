@@ -1964,6 +1964,13 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
 
       refute has_element?(reopened, "#subtitle-translation-de")
     end)
+
+    {:ok, _} = Spaces.update_space_features(space, %{automatic_subtitles_enabled: false})
+    assert {:error, :automatic_subtitles_disabled} = worker.enqueue(embed, original.id, "it")
+    {:ok, disabled_view, _} = live(conn, "/videos/#{embed.id}")
+    disabled_view |> element("[phx-click=add_subtitle]") |> render_click()
+    refute has_element?(disabled_view, "#generate-subtitle-translation")
+    assert has_element?(disabled_view, "#new-subtitle-upload-form")
   end
 
   @tag :text_editor

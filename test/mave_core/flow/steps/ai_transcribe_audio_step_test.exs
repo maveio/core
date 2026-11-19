@@ -30,6 +30,35 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
     :ok
   end
 
+  test "disabling automatic subtitles skips both steps but keeps a private transcript for descriptions" do
+    step = %{}
+
+    input = %{
+      "automatic_subtitles_enabled" => false,
+      "space_hash" => "test",
+      "embed_hash" => "video",
+      "transcription_language" => "nl",
+      "transcription_text" => "Hallo wereld"
+    }
+
+    assert {:ok, %{"status" => "skipped"}, []} =
+             AiTranscribeAudioStep.run(step, %{run_input: input})
+
+    ctx = %{run_input: Map.put(input, "audio_description", %{"languages" => ["original"]})}
+
+    assert {:ok, %{"status" => "skipped"}, []} =
+             MaveCore.Flow.Steps.AiTranslateSubtitlesStep.run(step, ctx)
+
+    assert {:ok, output, []} = AiTranscribeAudioStep.run(step, ctx)
+    assert output["language"] == "nl"
+    refute output["subtitle"]
+
+    assert {:ok, json} =
+             FlowStorageAdapterStub.get("space-test", output["ad_transcript_key"], nil)
+
+    assert Jason.decode!(json)["text"] == "Hallo wereld"
+  end
+
   test "produces subtitle artifact from transcription text" do
     step_definition = %{
       "id" => "transcribe_audio",
@@ -205,6 +234,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
 
     context = %{
       run_input: %{
+        "subtitle_vocabulary" => ["Open Science"],
         "space_hash" => "ubg50",
         "embed_hash" => "LeDE9v86ye",
         "version" => 0
@@ -228,6 +258,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
     assert_receive {:transcribe_url_called,
                     "https://space-ubg50.video-dns.com/LeDE9v86ye/audio.mp3", opts}
 
+    assert opts[:vocabulary] == ["Open Science"]
     assert opts[:filename] == "audio.mp3"
     assert opts[:content_type] == "audio/mpeg"
     assert output["status"] == "ok"

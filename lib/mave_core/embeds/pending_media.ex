@@ -159,6 +159,9 @@ defmodule MaveCore.Embeds.PendingMedia do
 
   defp media_kind(_), do: nil
 
+  defp eligible?(:subtitles, %{input: %{"automatic_subtitles_enabled" => false}}, _outputs),
+    do: false
+
   defp eligible?(:audio_descriptions, run, outputs) do
     duration = get_in(outputs, ["inspect_media", "duration"])
 

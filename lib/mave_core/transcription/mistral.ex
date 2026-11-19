@@ -25,7 +25,7 @@ defmodule MaveCore.Transcription.Mistral do
     granularity = timestamp_granularity(model, opts)
 
     with {:ok, api_key} <- fetch_api_key(),
-         {:ok, response} <- request_transcription_url(file_url, api_key, model, granularity),
+         {:ok, response} <- request_transcription_url(file_url, api_key, model, granularity, opts),
          {:ok, transcription} <- normalize_response(response.body, granularity) do
       {:ok, transcription}
     else
@@ -52,17 +52,29 @@ defmodule MaveCore.Transcription.Mistral do
         {"timestamp_granularities", granularity}
       ]
 
-    request(multipart, api_key, :form_multipart)
+    bias = Enum.map(vocabulary(opts), &{"context_bias", &1})
+    request(multipart ++ bias, api_key, :form_multipart)
   end
 
-  defp request_transcription_url(file_url, api_key, model, granularity) do
+  defp request_transcription_url(file_url, api_key, model, granularity, opts) do
     body = %{
       "file_url" => file_url,
       "model" => model,
       "timestamp_granularities" => [granularity]
     }
 
+    body =
+      case vocabulary(opts) do
+        [] -> body
+        terms -> Map.put(body, "context_bias", terms)
+      end
+
     request(body, api_key, :json)
+  end
+
+  defp vocabulary(opts) do
+    terms = opts[:vocabulary] || []
+    if MaveCore.Transcription.Vocabulary.valid?(terms), do: terms, else: []
   end
 
   defp request(body, api_key, body_option) do

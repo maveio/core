@@ -623,11 +623,31 @@ defmodule MaveCore.Spaces do
     end
   end
 
+  def update_subtitle_vocabulary(%Space{id: id}, text) do
+    with {:ok, terms} <- MaveCore.Transcription.Vocabulary.parse(text) do
+      case Repo.update_all(
+             from(s in Space, where: s.id == ^id and s.automatic_subtitles_enabled, select: s),
+             set: [subtitle_vocabulary: terms]
+           ) do
+        {1, [space]} ->
+          Events.broadcast_updated(id)
+          {:ok, space}
+
+        _ ->
+          {:error, :disabled}
+      end
+    end
+  end
+
   def update_space_features(%Space{} = space, attrs) when is_map(attrs) do
     attrs =
       attrs
       |> stringify_keys()
-      |> Map.take(["hotlink_protection_enabled", "audio_description_enabled"])
+      |> Map.take([
+        "hotlink_protection_enabled",
+        "automatic_subtitles_enabled",
+        "audio_description_enabled"
+      ])
 
     with :ok <- authorize_feature_change(space, attrs),
          {:ok, updated_space} <- space |> Space.features_changeset(attrs) |> Repo.update() do

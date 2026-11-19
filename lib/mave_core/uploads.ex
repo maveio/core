@@ -726,6 +726,9 @@ defmodule MaveCore.Uploads do
           present(metadata, "callback_url") ||
             present(metadata, "webhook_url") ||
             present(metadata, "notify_webhook_url"),
+        "subtitle_vocabulary" => MaveCore.Transcription.Vocabulary.snapshot(space),
+        "automatic_subtitles_enabled" =>
+          !match?(%Space{automatic_subtitles_enabled: false}, space),
         "audio_description" => AudioDescription.run_input(space)
       }
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)

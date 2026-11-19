@@ -313,8 +313,10 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
   defp cue_kind(_cue), do: "action"
 
   defp speech(ctx, duration) do
-    case Map.get(ctx.outputs, "transcribe_audio") do
-      %{"status" => "ok", "subtitle_json_key" => key} when is_binary(key) ->
+    output = Map.get(ctx.outputs, "transcribe_audio") || %{}
+
+    case {output["status"], output["ad_transcript_key"] || output["subtitle_json_key"]} do
+      {"ok", key} when is_binary(key) ->
         with {:ok, %{"segments" => segments}} <- AD.get_json(ctx, key) do
           {:ok, transcript_data(segments, duration)}
         end
