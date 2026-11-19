@@ -146,9 +146,7 @@ defmodule MaveCore.Assets do
          label: AudioDescription.display_label(description),
          render_status:
            description.text_draft && Map.get(description.text_draft, "render_status", "draft"),
-         render_enabled:
-           MaveCore.Spaces.audio_description_active?(embed.space) and
-             duration <= MaveCore.AudioDescription.max_seconds(),
+         render_enabled: MaveCore.Spaces.audio_description_active?(embed.space),
          vtt_basis: is_binary((description.text_draft || %{})["vtt"]),
          source_texts: SubtitleDocument.texts(source_document),
          speech_intervals: speech,
@@ -181,10 +179,9 @@ defmodule MaveCore.Assets do
   end
 
   defp queue_description_audio(embed, saved) do
-    video = embed.asset.current_video
     config = MaveCore.AudioDescription.run_input(embed.space)
 
-    if config && video.duration <= MaveCore.AudioDescription.max_seconds() do
+    if config do
       render_id = Ecto.UUID.generate()
 
       draft =
@@ -883,10 +880,49 @@ defmodule MaveCore.Assets do
     embed = Repo.preload(embed, [:space, :settings, asset: [:current_video]])
 
     case selected_thumbnail_action(embed) do
-      {:timecode, seconds} -> publish_timecode_thumbnail(embed, seconds)
+      {:timecode, seconds} -> publish_or_queue_timecode(embed, seconds)
       :restore_default -> restore_default_thumbnail_if_customized(embed)
       :ignore -> :ok
     end
+  end
+
+  defp publish_or_queue_timecode(embed, seconds) do
+    video = embed.asset.current_video
+
+    case publish_timecode_thumbnail(embed, seconds) do
+      {:error, reason}
+      when reason in [:not_found, :no_variant_found, :out_of_range] and
+             video.status in ["uploading", "preparing", "playable"] ->
+        with {:ok, _job} <-
+               %{embed_id: embed.id, video_id: video.id, seconds: seconds}
+               |> MaveCore.Workers.TimecodeThumbnailWorker.new()
+               |> Oban.insert() do
+          :ok
+        end
+
+      result ->
+        result
+    end
+  end
+
+  def finish_timecode_thumbnail(embed_id, video_id, seconds) do
+    :global.trans({{:publish_settings, embed_id}, self()}, fn ->
+      with %Embed{deleted_at: nil} = embed <- Repo.get(Embed, embed_id),
+           embed = Repo.preload(embed, [:settings, :space, asset: :current_video]),
+           %Video{id: ^video_id} <- embed.asset && embed.asset.current_video,
+           {:timecode, ^seconds} <- selected_thumbnail_action(embed),
+           :ok <- publish_timecode_thumbnail(embed, seconds),
+           {:ok, _manifest} <- ManifestPublisher.publish(embed) do
+        MaveCore.Embeds.Events.broadcast_updated(embed.space_id, embed.id, %{
+          "action" => "settings_published"
+        })
+
+        :ok
+      else
+        {:error, _reason} = error -> error
+        _obsolete -> :ok
+      end
+    end)
   end
 
   def ingest_uploaded_audio_track(%Embed{} = embed, attrs, source_bucket, source_key)
@@ -1311,7 +1347,8 @@ defmodule MaveCore.Assets do
   defp render_timecode_thumbnail_rendition(%Embed{} = embed, seconds, region, container) do
     with {:ok, _cache_key, body} <-
            thumbnail_image_processor().process(embed.space.hash, embed.hash, seconds,
-             format: container
+             format: container,
+             source_version: Embeds.current_video_version(embed)
            ) do
       put_timecode_thumbnail_rendition(embed, body, region, container)
     end

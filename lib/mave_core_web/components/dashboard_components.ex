@@ -58,6 +58,7 @@ defmodule MaveCoreWeb.DashboardComponents do
   defdelegate logo(assigns), to: MaveCoreWeb.DashboardComponents.Navigation
   defdelegate menu(assigns), to: MaveCoreWeb.DashboardComponents.Navigation
   defdelegate sidebar_usage(assigns), to: MaveCoreWeb.DashboardComponents.Navigation
+  defdelegate space_hierarchy(assigns), to: MaveCoreWeb.DashboardComponents.Navigation
   defdelegate spacepicker(assigns), to: MaveCoreWeb.DashboardComponents.Navigation
   defdelegate suggest(assigns), to: MaveCoreWeb.DashboardComponents.Navigation
   defdelegate usermenu(assigns), to: MaveCoreWeb.DashboardComponents.Navigation

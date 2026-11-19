@@ -7,6 +7,7 @@ defmodule MaveCore.Spaces.Space do
   alias MaveCore.Spaces.{Domain, Key, Membership, Webhook}
 
   schema "spaces" do
+    field :hierarchy_role, Ecto.Enum, values: [:main, :subspace], virtual: true
     field :hash, :string
     field :region, :string
     field :public_sharing_enabled, :boolean

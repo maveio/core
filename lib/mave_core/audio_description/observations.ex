@@ -78,34 +78,58 @@ defmodule MaveCore.AudioDescription.Observations do
   end
 
   def collect(ctx, document, provider, language, transcript \\ %{segments: []}) do
-    document["stills"]
+    stills = document["stills"]
+
+    stills
     |> Enum.with_index()
     |> Enum.chunk_every(12)
-    |> Enum.reduce_while({:ok, []}, fn batch, {:ok, observations} ->
-      with {:ok, content} <- images(ctx, batch),
-           {:ok, %{"observations" => rows}} when is_list(rows) <-
-             provider.chat_json(
-               instruction(language) <> transcript_context(batch, transcript),
-               content,
-               schema: schema(),
-               max_tokens: 8_000,
-               usage_context: ctx[:usage_context],
-               usage_operation: "vision"
-             ),
-           {:ok, anchored} <- anchor(rows, batch) do
+    |> Task.async_stream(&observe_batch(ctx, &1, provider, language, transcript),
+      max_concurrency: 3,
+      ordered: true,
+      timeout: :infinity
+    )
+    |> Enum.reduce_while({[], 0}, fn
+      {:ok, {:ok, rows}}, {batches, count} ->
+        count = count + length(rows)
+
         StepSupport.report_progress(ctx[:progress_reporter], %{
           "stage" => "visual_observations",
           "source" => "audio_description",
-          "frame" => length(observations) + length(anchored),
-          "percent" => 70 * (length(observations) + length(anchored)) / length(document["stills"])
+          "frame" => count,
+          "percent" => 70 * count / length(stills)
         })
 
-        {:cont, {:ok, observations ++ with_spoken_context(anchored, transcript)}}
-      else
-        {:error, reason} -> {:halt, {:error, {:visual_observations_failed, reason}}}
-        _ -> {:halt, {:error, :invalid_visual_observations}}
-      end
+        {:cont, {[rows | batches], count}}
+
+      {:ok, {:error, _} = error}, _acc ->
+        {:halt, error}
+
+      {:exit, reason}, _acc ->
+        {:halt, {:error, {:visual_observations_failed, reason}}}
     end)
+    |> case do
+      {:error, _} = error -> error
+      {batches, _count} -> {:ok, batches |> Enum.reverse() |> Enum.concat()}
+    end
+  end
+
+  defp observe_batch(ctx, batch, provider, language, transcript) do
+    with {:ok, content} <- images(ctx, batch),
+         {:ok, %{"observations" => rows}} when is_list(rows) <-
+           provider.chat_json(
+             instruction(language) <> transcript_context(batch, transcript),
+             content,
+             schema: schema(),
+             max_tokens: 8_000,
+             usage_context: ctx[:usage_context],
+             usage_operation: "vision"
+           ),
+         {:ok, anchored} <- anchor(rows, batch) do
+      {:ok, with_spoken_context(anchored, transcript)}
+    else
+      {:error, reason} -> {:error, {:visual_observations_failed, reason}}
+      _ -> {:error, :invalid_visual_observations}
+    end
   end
 
   defp transcript_context(batch, transcript) do

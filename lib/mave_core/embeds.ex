@@ -525,13 +525,14 @@ defmodule MaveCore.Embeds do
   def refresh_video_dashboard_processing_payload(
         %Space{} = space,
         %Embed{} = video_embed,
-        previous_payload
+        previous_payload,
+        settings_override \\ nil
       )
       when is_map(previous_payload) do
     build_video_dashboard_payload(
       space,
       video_embed,
-      nil,
+      settings_override,
       dashboard_payload_analytics(previous_payload),
       false
     )
@@ -741,6 +742,12 @@ defmodule MaveCore.Embeds do
 
   @spec publish_settings(Embed.t(), map() | Changeset.t()) :: {:ok, Embed.t()} | {:error, term()}
   def publish_settings(%Embed{} = embed, attrs_or_changeset) do
+    :global.trans({{:publish_settings, embed.id}, self()}, fn ->
+      do_publish_settings(embed, attrs_or_changeset)
+    end)
+  end
+
+  defp do_publish_settings(embed, attrs_or_changeset) do
     with {:ok, embed} <- update_settings(embed, attrs_or_changeset),
          :ok <- MaveCore.Assets.publish_selected_thumbnail(embed),
          {:ok, _manifest} <- ManifestPublisher.publish(embed) do
@@ -1664,17 +1671,42 @@ defmodule MaveCore.Embeds do
        ) do
     duration = max(video.duration || 0.0, 0.0)
     original_src = original_preview_src(space, embed, version)
+    flow_run = if flow_run_version(flow_run) == version, do: flow_run
     hls_src = hls_preview_src(video, space, embed, flow_run)
+    fallback_src = processing_mp4_preview_src(space, embed, flow_run, version) || original_src
 
     %{
       duration: duration,
-      preferred_src: hls_src || original_src,
-      fallback_src: original_src,
+      preferred_src: hls_src || fallback_src,
+      fallback_src: fallback_src,
       frame_srcs: preview_frame_srcs(space, embed, duration, version)
     }
   end
 
   defp thumbnail_preview(_space, _embed, _video, _flow_run, _version, _audio_only), do: nil
+
+  defp processing_mp4_preview_src(space, embed, %Run{status: status} = run, version)
+       when status in ["queued", "running"] do
+    key =
+      if version > 0,
+        do: "#{embed.hash}/v#{version}/h264_sd.mp4",
+        else: "#{embed.hash}/h264_sd.mp4"
+
+    ready? =
+      Enum.any?(run.step_runs, fn step ->
+        step.status == "succeeded" and
+          Enum.any?(
+            get_in(step.output || %{}, ["renditions"]) || [],
+            &match?(%{"rendition_key" => ^key}, &1)
+          )
+      end)
+
+    if ready?,
+      do:
+        preview_storage_url(space, embed, Storage.bucket_for_space(space.hash, space.region), key)
+  end
+
+  defp processing_mp4_preview_src(_space, _embed, _run, _version), do: nil
 
   defp original_preview_src(%Space{} = space, %Embed{} = embed, version) do
     bucket = Storage.bucket_for_space(space.hash, space.region)

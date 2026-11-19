@@ -41,10 +41,15 @@ defmodule MaveCore.Workers.SubtitleTranslationWorker do
     }
   end
 
+  def available?(space),
+    do:
+      space.automatic_subtitles_enabled and
+        MaveCore.UsageLimits.can_translate_subtitles?(space) == :ok
+
   def enqueue(%Embed{} = embed, source_id, target) do
     embed = Repo.preload(embed, [:space, asset: :current_video], force: true)
 
-    with :enabled <- if(embed.space.automatic_subtitles_enabled, do: :enabled, else: :disabled),
+    with :enabled <- if(available?(embed.space), do: :enabled, else: :disabled),
          %Video{} = video <- embed.asset.current_video,
          %Subtitle{} = source <- Assets.get_subtitle_for_video(source_id, video.id),
          true <- source.language == Assets.subtitle_source_language(video),
@@ -118,7 +123,8 @@ defmodule MaveCore.Workers.SubtitleTranslationWorker do
 
     id = args["video_id"]
 
-    with %Video{id: ^id} = video <- embed.asset.current_video,
+    with :enabled <- if(available?(embed.space), do: :enabled, else: :disabled),
+         %Video{id: ^id} = video <- embed.asset.current_video,
          false <- target_exists?(id, target),
          {:ok, editor} <- Assets.load_subtitle_document(embed, args["source_id"]),
          true <-
@@ -162,6 +168,9 @@ defmodule MaveCore.Workers.SubtitleTranslationWorker do
         error -> error
       end
     else
+      :disabled ->
+        {:cancel, :translation_disabled}
+
       {:error, reason} when is_atom(reason) ->
         {:error, reason}
 

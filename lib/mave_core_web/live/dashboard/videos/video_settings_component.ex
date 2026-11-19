@@ -258,7 +258,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
          |> assign(:uploading_poster, false)}
 
       {:error, _reason} ->
-        {:noreply, socket}
+        {:noreply, put_flash(socket, :error, gettext("Could not publish video settings."))}
     end
   end
 
@@ -2242,6 +2242,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       data-preview-src={@preview.preferred_src}
       data-fallback-src={@preview.fallback_src}
       data-selected-time={@selected_time}
+      data-duration={@preview.duration}
       class="mb-3"
     >
       <div id="scrub_area" class="relative h-20 w-full">
@@ -3181,7 +3182,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         />
 
         <%= if @subtitle_form && @subtitle_form.mode == :new do %>
-          <div class="w-full flex items-center">
+          <div class="w-full flex items-center gap-1">
             <div class="min-w-0 flex-1">
               <form
                 id="new-subtitle-form"
@@ -3201,7 +3202,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             </div>
 
             <button
-              :if={@current_space.automatic_subtitles_enabled && @source}
+              :if={@source && MaveCore.Workers.SubtitleTranslationWorker.available?(@current_space)}
               id="generate-subtitle-translation"
               type="button"
               phx-click="translate_subtitle"
@@ -3209,7 +3210,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
               disabled={blank_to_nil(@subtitle_form.language) == nil or Enum.any?(@subtitles ++ @generated_tracks, &(&1.language == @subtitle_form.language))}
               title={gettext("Translate from %{language}", language: @source.label)}
               aria-label={gettext("Translate from %{language}", language: @source.label)}
-              class="mx-1 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-sm bg-stone-800 text-stone-400 hover:bg-stone-600 disabled:pointer-events-none disabled:opacity-50"
+              class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-sm bg-stone-800 text-stone-400 hover:bg-stone-600 disabled:pointer-events-none disabled:opacity-50"
             >
               <.icon name="hero-sparkles" class="size-4" />
             </button>

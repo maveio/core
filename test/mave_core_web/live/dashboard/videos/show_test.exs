@@ -1160,10 +1160,18 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     })
     |> Repo.insert!()
 
-    {:ok, _view, html} = live(conn, "/videos/#{video.id}")
+    payload = MaveCore.Embeds.get_video_dashboard_payload(space, video)
+    assert URI.parse(payload.thumbnail_preview.preferred_src).path =~ "/#{video.hash}/h264_sd.mp4"
+    {:ok, view, html} = live(conn, "/videos/#{video.id}")
 
     assert html =~ "<mave-player"
     refute html =~ "processing..."
+    render_change(element(view, "#settings-style-form"), %{"settings" => %{"color" => "ff0000"}})
+    send(view.pid, {:processing_player_settle_elapsed, video.id})
+    assert has_element?(view, "mave-player[color='#ff0000']")
+    render_click(element(view, "#settings-publish"))
+    assert has_element?(view, "#processing-#{space.hash}#{video.hash}")
+    assert has_element?(view, "mave-player[color='#ff0000']")
   end
 
   test "/videos/:id keeps the processing player visible after a refresh", %{conn: conn} do

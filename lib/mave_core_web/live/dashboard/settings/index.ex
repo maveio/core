@@ -5,7 +5,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.Index do
   import MaveCoreWeb.DashboardComponents, except: [icon: 1]
   import Ecto.Query, only: [from: 2]
 
-  alias MaveCore.Accounts
+  alias MaveCore.SpaceCreation
   alias MaveCore.Repo
   alias MaveCore.Spaces.Domain
   alias MaveCore.Spaces.Events, as: SpaceEvents
@@ -14,7 +14,14 @@ defmodule MaveCoreWeb.Dashboard.Settings.Index do
   alias MaveCoreWeb.DashboardRoutes
 
   def mount(_params, _session, socket) do
-    extra_tabs = Application.get_env(:mave_core, :extra_settings_tabs, [])
+    extra_tabs =
+      Application.get_env(:mave_core, :extra_settings_tabs, [])
+      |> Enum.filter(fn tab ->
+        case tab[:visible] do
+          nil -> true
+          {module, function} -> apply(module, function, [socket.assigns.current_user])
+        end
+      end)
 
     if connected?(socket) and match?(%Space{id: _}, socket.assigns[:current_space]) do
       SpaceEvents.subscribe(socket.assigns.current_space.id)
@@ -187,6 +194,6 @@ defmodule MaveCoreWeb.Dashboard.Settings.Index do
 
     socket
     |> assign(:current_space, current_space)
-    |> assign(:spaces, Accounts.list_user_spaces(socket.assigns.current_user))
+    |> assign(:spaces, SpaceCreation.picker_spaces(socket.assigns.current_user))
   end
 end

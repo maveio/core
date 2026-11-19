@@ -163,10 +163,7 @@ defmodule MaveCore.Embeds.PendingMedia do
     do: false
 
   defp eligible?(:audio_descriptions, run, outputs) do
-    duration = get_in(outputs, ["inspect_media", "duration"])
-
     AudioDescription.requested?(run.input) and
-      (not is_number(duration) or duration <= AudioDescription.max_seconds()) and
       get_in(outputs, ["inspect_media", "has_video"]) != false and
       Enum.all?(run.step_runs, fn step ->
         step.step_type not in @ad_types or

@@ -22,10 +22,21 @@ defmodule MaveCore.SpaceCreation do
               {:ok, MaveCore.Accounts.User.t()} | {:error, term()}
   @callback standalone_description() :: String.t()
 
-  @optional_callbacks can_create_space_for_user?: 2, standalone_description: 0
+  @callback group_picker_spaces([MaveCore.Spaces.Space.t()]) :: [MaveCore.Spaces.Space.t()]
+
+  @optional_callbacks group_picker_spaces: 1, can_create_space_for_user?: 2, standalone_description: 0
 
   def backend do
     Application.get_env(:mave_core, :space_creation_backend, Accounts)
+  end
+
+  def picker_spaces(user) do
+    spaces = Accounts.list_user_spaces(user)
+    backend = backend()
+
+    if Code.ensure_loaded?(backend) and function_exported?(backend, :group_picker_spaces, 1),
+      do: backend.group_picker_spaces(spaces),
+      else: spaces
   end
 
   def can_create_space_for_user?(user, current_space) do

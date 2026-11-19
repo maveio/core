@@ -597,7 +597,7 @@ const ThumbnailPreviewHook = {
     const availableWidth = Math.max(areaRect.width - this.handleWidth(), 0)
     const left = this.clamp(pointerX - offset, 0, availableWidth)
     const ratio = availableWidth > 0 ? left / availableWidth : 0
-    const duration = Number.isFinite(this.video.duration) ? this.video.duration : 0
+    const duration = this.previewDuration()
     const seconds = ratio * duration
 
     this.video.currentTime = seconds
@@ -610,12 +610,18 @@ const ThumbnailPreviewHook = {
       return
     }
 
-    const duration = Number.isFinite(this.video.duration) && this.video.duration > 0 ? this.video.duration : 0
+    const duration = this.previewDuration()
     const availableWidth = Math.max(this.scrubArea.clientWidth - this.handleWidth(), 0)
     const ratio = duration > 0 ? seconds / duration : 0
     const left = availableWidth * ratio
 
     this.videoContainer.style.left = `${left}px`
+  },
+
+  previewDuration() {
+    return Number.isFinite(this.video.duration) && this.video.duration > 0
+      ? this.video.duration
+      : Number(this.el.dataset.duration) || 0
   },
 
   writeInputs(seconds) {
