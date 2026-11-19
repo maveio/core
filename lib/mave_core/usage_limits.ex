@@ -11,11 +11,13 @@ defmodule MaveCore.UsageLimits do
   @callback can_view_space_data?(Space.t()) :: :ok | {:error, term()}
   @callback can_upload_file?(Space.t(), non_neg_integer() | nil) :: :ok | {:error, term()}
   @callback can_manage_audio_description?(Space.t()) :: :ok | {:error, term()}
+  @callback can_translate_subtitles?(Space.t()) :: :ok | {:error, term()}
   @callback can_use_audio_description?(Space.t()) :: :ok | {:error, term()}
   @callback restriction_copy(atom(), term()) :: %{optional(atom()) => String.t()}
 
   @optional_callbacks can_view_space_data?: 1,
                       can_upload_file?: 2,
+                      can_translate_subtitles?: 1,
                       can_use_audio_description?: 1,
                       can_manage_audio_description?: 1,
                       restriction_copy: 2
@@ -44,6 +46,8 @@ defmodule MaveCore.UsageLimits do
   def can_manage_audio_description?(%Space{} = space) do
     dispatch(:can_manage_audio_description?, [space])
   end
+
+  def can_translate_subtitles?(%Space{} = space), do: dispatch(:can_translate_subtitles?, [space])
 
   def can_upload_file?(%Space{} = space, size) when is_integer(size) or is_nil(size) do
     with :ok <- enforce_core_media_input_limit(size) do

@@ -133,7 +133,7 @@ defmodule MaveCoreWeb.UserLiveAuth do
   end
 
   defp assign_authenticated_space(user_with_space, socket, current_space) do
-    spaces = Accounts.list_user_spaces(user_with_space)
+    spaces = SpaceCreation.picker_spaces(user_with_space)
 
     socket
     |> MaveCoreWeb.SpaceLiveAuth.attach_view()
@@ -166,7 +166,7 @@ defmodule MaveCoreWeb.UserLiveAuth do
         |> assign(:user_token, user_token)
         |> assign(:current_user, user)
         |> assign(:current_space, current_space(user))
-        |> assign(:spaces, Accounts.list_user_spaces(user))
+        |> assign(:spaces, SpaceCreation.picker_spaces(user))
 
       if maintenance_allows_user?(user) do
         {:cont, socket}
@@ -187,7 +187,7 @@ defmodule MaveCoreWeb.UserLiveAuth do
         |> assign(:user_token, user_token)
         |> assign(:current_user, user)
         |> assign(:current_space, current_space(user))
-        |> assign(:spaces, Accounts.list_user_spaces(user))
+        |> assign(:spaces, SpaceCreation.picker_spaces(user))
 
       if maintenance_allows_user?(user) do
         {:cont, socket}
@@ -223,7 +223,7 @@ defmodule MaveCoreWeb.UserLiveAuth do
              |> assign(:current_space, current_space(user))
              |> assign(:sidebar_usage, resolve_sidebar_usage(current_space(user)))
              |> assign(:suggests, [])
-             |> assign(:spaces, Accounts.list_user_spaces(user))
+             |> assign(:spaces, SpaceCreation.picker_spaces(user))
              |> assign_can_create_space()
              |> redirect(to: DashboardRoutes.signed_in_path(user))}
 
@@ -368,7 +368,7 @@ defmodule MaveCoreWeb.UserLiveAuth do
      |> assign(:current_space, current_space(user))
      |> assign(:sidebar_usage, resolve_sidebar_usage(current_space(user)))
      |> assign(:suggests, [])
-     |> assign(:spaces, Accounts.list_user_spaces(user))
+     |> assign(:spaces, SpaceCreation.picker_spaces(user))
      |> assign_can_create_space()
      |> redirect(to: DashboardRoutes.signed_in_path(user))}
   end

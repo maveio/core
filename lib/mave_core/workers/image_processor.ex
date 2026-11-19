@@ -48,7 +48,8 @@ defmodule MaveCore.Workers.ImageProcessor do
     manifest_path = "#{embed_hash}/manifest.json"
 
     with {:ok, manifest_json} <- storage.get(bucket, manifest_path, region),
-         {:ok, manifest} <- Manifest.parse(manifest_json) do
+         {:ok, manifest} <- Manifest.parse(manifest_json),
+         :ok <- check_source_version(manifest, opts[:source_version]) do
       legacy_output_path = build_output_path(embed_hash, manifest, time, opts)
 
       case storage.get(bucket, legacy_output_path, region) do
@@ -75,6 +76,14 @@ defmodule MaveCore.Workers.ImageProcessor do
         Logger.error("Failed to load manifest for image generation: #{inspect(error)}")
         error
     end
+  end
+
+  defp check_source_version(_manifest, nil), do: :ok
+
+  defp check_source_version(manifest, version) do
+    if (get_in(manifest.video || %{}, [:version]) || 0) == version,
+      do: :ok,
+      else: {:error, :not_found}
   end
 
   defp prepare_and_handle_request(
@@ -150,7 +159,14 @@ defmodule MaveCore.Workers.ImageProcessor do
     requested_opts = canonicalize_requested_dimensions(opts)
 
     with {:ok, asset_base, root_content} <-
-           load_source_playlist(storage, bucket, embed_hash, manifest, region),
+           load_source_playlist(
+             storage,
+             bucket,
+             embed_hash,
+             manifest,
+             region,
+             opts[:source_version]
+           ),
          {:ok, variant_path, variant_resolution} <-
            Playlist.select_variant(root_content, requested_opts),
          :ok <- validate_requested_dimensions(requested_opts, variant_resolution),
@@ -189,9 +205,9 @@ defmodule MaveCore.Workers.ImageProcessor do
     end
   end
 
-  defp load_source_playlist(storage, bucket, embed_hash, manifest, region) do
+  defp load_source_playlist(storage, bucket, embed_hash, manifest, region, version) do
     embed_hash
-    |> source_asset_base_candidates(manifest)
+    |> source_asset_base_candidates(manifest, version)
     |> Enum.reduce_while({:error, :not_found}, fn asset_base, _acc ->
       case storage.get(bucket, Path.join(asset_base, "playlist.m3u8"), region) do
         {:ok, content} -> {:halt, {:ok, asset_base, content}}
@@ -367,10 +383,13 @@ defmodule MaveCore.Workers.ImageProcessor do
     end
   end
 
-  defp source_asset_base_candidates(embed_hash, manifest) do
+  defp source_asset_base_candidates(embed_hash, manifest, nil) do
     [Manifest.asset_base_path(embed_hash, manifest), embed_hash]
     |> Enum.uniq()
   end
+
+  defp source_asset_base_candidates(embed_hash, manifest, _version),
+    do: [Manifest.asset_base_path(embed_hash, manifest)]
 
   defp generate_via_flame(ctx) do
     flame_caller().call(image_flame_pool(), fn ->

@@ -75,9 +75,7 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
     ctx = AD.run_context(%{"id" => "edit_description_audio"}, %{run_input: run_input})
     ctx = %{ctx | usage_context: Map.put(ctx.usage_context, :space_id, embed.space_id)}
 
-    with true <-
-           Spaces.audio_description_active?(embed.space) and
-             video.duration <= MaveCore.AudioDescription.max_seconds(),
+    with true <- Spaces.audio_description_active?(embed.space),
          {:ok, editor} <- Assets.load_description_document(embed, description.id),
          {_, %{"render_id" => ^render_id}} <- editor.revision,
          {:ok, outputs} <- original_audio(ctx, video),

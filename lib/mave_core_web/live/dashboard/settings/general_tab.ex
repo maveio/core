@@ -197,11 +197,11 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
                 <span>{gettext("AI subtitles")}</span>
                 <.info_hover>
                   {gettext("New uploads get subtitles in the original language and English.")}
-                  {Map.get(
+                  <span :if={UsageLimits.can_translate_subtitles?(@current_space) == :ok}>{Map.get(
                     UsageLimits.restriction_copy(:subtitle_translation, :additional_languages),
                     :help,
                     gettext("Generate extra languages on demand.")
-                  )}
+                  )}</span>
                 </.info_hover>
               </div>
               <div

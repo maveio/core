@@ -47,3 +47,19 @@ test('failed native HLS falls back once and stays on the original during updates
   onError()
   assert.equal(loads, 2)
 })
+
+test('selecting a frame before video metadata loads uses the known duration', () => {
+  let chosen
+  const context = {
+    ...hook,
+    video: { duration: NaN },
+    el: { dataset: { duration: '80' } },
+    scrubArea: { getBoundingClientRect: () => ({ left: 0, width: 110 }) },
+    videoContainer: {},
+    handleWidth: () => 10,
+    positionHandle() {},
+    writeInputs(seconds) { chosen = seconds },
+  }
+  context.seekToPointer({ clientX: 55 })
+  assert.equal(chosen, 40)
+})

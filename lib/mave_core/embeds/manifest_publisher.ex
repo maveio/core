@@ -21,7 +21,11 @@ defmodule MaveCore.Embeds.ManifestPublisher do
   end
 
   defp do_publish(%Embed{} = embed, opts) do
-    embed = Repo.preload(embed, [:space, :settings, asset: [:current_video]])
+    embed =
+      embed
+      |> Repo.preload(:settings, force: true)
+      |> Repo.preload([:space, asset: [:current_video]])
+
     storage = Application.get_env(:mave_core, :flow_storage_adapter, Storage)
     bucket = Storage.bucket_for_space(embed.space.hash, embed.space.region)
     region = embed.space.region

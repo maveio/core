@@ -8,7 +8,6 @@ defmodule MaveCore.Flow.Steps.MediaDetectScenesStep do
   """
   @behaviour MaveCore.Flow.Step
 
-  alias MaveCore.AudioDescription
   alias MaveCore.AudioDescription.Timeline
   alias MaveCore.Flow.Steps.AudioDescriptionSupport, as: AD
   alias MaveCore.Flow.Steps.Support, as: StepSupport
@@ -33,13 +32,6 @@ defmodule MaveCore.Flow.Steps.MediaDetectScenesStep do
 
       not (is_number(duration_ms) and duration_ms > 0) ->
         {:ok, AD.skipped(@step_type, ctx, "unknown_duration"), []}
-
-      duration_ms / 1000 > AudioDescription.max_seconds() ->
-        {:ok,
-         AD.skipped(@step_type, ctx, "video_too_long", %{
-           "video_duration_seconds" => Float.round(duration_ms / 1000, 3),
-           "max_duration_seconds" => AudioDescription.max_seconds()
-         }), []}
 
       true ->
         detect(ctx, context, duration_ms / 1000)

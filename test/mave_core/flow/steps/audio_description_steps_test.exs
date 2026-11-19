@@ -42,7 +42,10 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
 
     # Describes every batch of stills with one cue per scene and translates by prefixing.
     def chat_json(system, content, opts) do
-      send(Process.get(:ad_test_pid) || self(), {:chat, system, content})
+      send(
+        Process.get(:ad_test_pid) || List.last(Process.get(:"$callers", [self()])),
+        {:chat, system, content}
+      )
 
       case opts[:schema]["required"] do
         ["observations"] ->
@@ -245,20 +248,35 @@ defmodule MaveCore.Flow.Steps.AudioDescriptionStepsTest do
     end
   end
 
-  test "videos over the limit are skipped with their length" do
-    context = %{
-      run_input: Map.put(base_input(), "audio_description", @requested),
-      dependency_outputs: %{"inspect_media" => %{"duration" => 601.0, "has_video" => true}}
-    }
+  @tag :integration
+  @tag :tmp_dir
+  test "scene detection covers an eleven-minute video through its final frame", %{tmp_dir: dir} do
+    path = Path.join(dir, "long.mp4")
 
-    assert {:ok, output, []} = MediaDetectScenesStep.run(%{"id" => "detect_scenes"}, context)
+    {_, 0} =
+      System.cmd(
+        "ffmpeg",
+        ~w(-v error -f lavfi -i color=c=blue:s=32x32:r=1:d=660 -c:v libx264) ++ [path]
+      )
 
-    assert %{
-             "status" => "skipped",
-             "reason" => "video_too_long",
-             "video_duration_seconds" => 601.0,
-             "max_duration_seconds" => 600
-           } = output
+    input =
+      Map.merge(base_input(), %{
+        "audio_description" => @requested,
+        "source_body" => File.read!(path),
+        "source_content_type" => "video/mp4"
+      })
+
+    assert {:ok, %{"status" => "ok", "scenes_key" => key}, []} =
+             MediaDetectScenesStep.run(%{"id" => "detect_scenes"}, %{
+               run_input: input,
+               dependency_outputs: %{
+                 "inspect_media" => %{"duration" => 660.0, "has_video" => true}
+               }
+             })
+
+    assert {:ok, body} = Storage.get(@bucket, key, nil)
+    assert %{"duration" => 660.0, "stills" => stills} = Jason.decode!(body)
+    assert List.last(stills)["time"] > 659
   end
 
   test "the HLS master marks audio descriptions for assistive technology" do

@@ -12,7 +12,6 @@ defmodule MaveCore.AudioDescription do
 
   @source_language "en"
   @languages ["en", "nl"]
-  @default_max_seconds 600
 
   def source_language, do: @source_language
   def languages, do: @languages
@@ -72,23 +71,6 @@ defmodule MaveCore.AudioDescription do
   defp normalize_language(_), do: nil
 
   def requested?(run_input), do: requested_languages(run_input) != []
-
-  @doc "Longest video that gets an audio description, in seconds."
-  def max_seconds do
-    case config(:max_seconds, System.get_env("MAVE_AUDIO_DESCRIPTION_MAX_SECONDS")) do
-      value when is_integer(value) and value > 0 ->
-        value
-
-      value when is_binary(value) ->
-        case Integer.parse(value) do
-          {seconds, ""} when seconds > 0 -> seconds
-          _ -> @default_max_seconds
-        end
-
-      _ ->
-        @default_max_seconds
-    end
-  end
 
   @doc "Object key prefix of a video version (`<embed>/vN` or `<embed>`)."
   def version_prefix(embed_hash, version) when is_integer(version) and version > 0,

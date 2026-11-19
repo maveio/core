@@ -272,7 +272,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   def handle_info({VideoSettingsComponent, {:settings_published, %Embed{} = embed}}, socket) do
     {:noreply,
      socket
-     |> assign_video_embed(embed)
+     |> assign_video_by_state(embed, update_mode: :event)
      |> put_flash(:info, gettext("Settings published"))}
   end
 
@@ -1201,15 +1201,30 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   defp assign_video_processing(socket, %Embed{} = video_embed, opts \\ []) do
     reuse_analytics? = Keyword.get(opts, :reuse_analytics, false)
 
+    previous_video = socket.assigns[:video]
+
+    draft =
+      if socket.assigns[:video_processing] && previous_video &&
+           socket.assigns.resource_embed.asset.current_video_id ==
+             video_embed.asset.current_video_id &&
+           previous_video.settings != socket.assigns.persisted_settings do
+        previous_video.settings
+      end
+
     video_payload =
-      if reuse_analytics? and is_map(socket.assigns[:video]) do
+      if reuse_analytics? and is_map(previous_video) do
         Embeds.refresh_video_dashboard_processing_payload(
           socket.assigns.current_space,
           video_embed,
-          socket.assigns.video
+          previous_video,
+          draft
         )
       else
-        Embeds.get_preloaded_video_dashboard_payload(socket.assigns.current_space, video_embed)
+        Embeds.get_preloaded_video_dashboard_payload(
+          socket.assigns.current_space,
+          video_embed,
+          draft
+        )
       end
 
     {video, visible_after_ms} =
@@ -1226,7 +1241,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
     |> assign(:videos, [])
     |> assign(:video, video)
     |> assign(:engagement, encode_dropoff_chart_points(video.engagement))
-    |> assign(:persisted_settings, video.settings)
+    |> assign(:persisted_settings, SettingsSerializer.form_values(video_embed.settings))
     |> assign(:player_dom_id, "processing-#{video.public_id}")
     |> assign(:video_ready, false)
     |> assign(:video_processing, true)

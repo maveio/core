@@ -1151,22 +1151,8 @@ defmodule MaveCoreWeb.DashboardComponents.Navigation do
             phx-click={show_element("#spacepicker")}
             phx-click-away={hide_element("#spacepicker")}
           >
-            <div class="ml-2 shrink-0 text-stone-700">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                class="h-5 w-5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                stroke-width="1"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
-                />
-              </svg>
-            </div>
+            <.space_hierarchy role={Map.get(@selected_space, :hierarchy_role)} />
+            <.icon name="hero-square-2-stack" class="ml-2 size-5 shrink-0 text-stone-500" />
             <div
               class="min-w-0 grow truncate py-1.5 px-1 select-none text-sm border-b border-transparent"
               title={space_domain_label(@selected_space)}
@@ -1241,22 +1227,21 @@ defmodule MaveCoreWeb.DashboardComponents.Navigation do
       class={[
         "flex items-center hover:ring-blue-500 active:bg-blue-500 text-stone-500 active:text-white",
         "border-b border-stone-900/70 cursor-pointer ring-inset ring-transparent ring-1 hover:ring-blue-500",
+        Map.get(@space, :hierarchy_role) == :subspace && "pl-2.5",
         @index == 0 && !@allow_creation && "rounded-t-md",
         @index == @total - 1 && "rounded-b-md border-b-none"
       ]}
       phx-click="switch_space"
       phx-value-id={@space.id}
     >
-      <div class="ml-1.5 shrink-0">
-        <.animated_icon
-          name="globe"
-          class={[
-            "w-6 h-6 transition-opacity duration-150",
-            if(@current_space.id == @space.id, do: "opacity-100", else: "opacity-20")
-          ]}
-          speed="1"
-        />
-      </div>
+      <.space_hierarchy role={Map.get(@space, :hierarchy_role)} />
+      <.icon
+        name="hero-square-2-stack"
+        class={[
+          "ml-2 size-5 shrink-0 transition-opacity",
+          @current_space.id != @space.id && "opacity-60"
+        ]}
+      />
       <div
         class="min-w-0 grow truncate py-1.5 px-1 select-none text-sm border-b border-transparent"
         title={space_domain_label(@space)}
@@ -1266,6 +1251,23 @@ defmodule MaveCoreWeb.DashboardComponents.Navigation do
     </div>
     """
   end
+
+  attr :role, :atom, default: nil
+
+  def space_hierarchy(assigns) do
+    ~H"""
+    <span
+      :if={@role}
+      role="img"
+      aria-label={hierarchy_label(@role)}
+      title={hierarchy_label(@role)}
+      class="sr-only"
+    >{hierarchy_label(@role)}</span>
+    """
+  end
+
+  defp hierarchy_label(:main), do: gettext("Main space")
+  defp hierarchy_label(:subspace), do: gettext("Subspace")
 
   defp space_domain_label(space) do
     case first_space_domain(space) do

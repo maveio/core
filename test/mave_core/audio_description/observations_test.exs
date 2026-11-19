@@ -35,8 +35,8 @@ defmodule MaveCore.AudioDescription.ObservationsTest do
   end
 
   defmodule Vision do
-    def chat_json(system, _content, _opts) do
-      send(self(), {:vision_instruction, system})
+    def chat_json(system, _content, opts) do
+      send(opts[:usage_context].test_pid, {:vision_instruction, system})
 
       {:ok,
        %{
@@ -70,7 +70,12 @@ defmodule MaveCore.AudioDescription.ObservationsTest do
 
     assert {:ok, [observation]} =
              Observations.collect(
-               %{storage: Storage, bucket: "synthetic", region: nil},
+               %{
+                 storage: Storage,
+                 bucket: "synthetic",
+                 region: nil,
+                 usage_context: %{test_pid: self()}
+               },
                document,
                Vision,
                "en",
@@ -83,6 +88,44 @@ defmodule MaveCore.AudioDescription.ObservationsTest do
     assert observation["spoken_context"] == [hd(transcript.segments)]
     assert [%{"prominence" => "incidental", "role" => "interface"}] = observation["text_elements"]
     assert instruction =~ "never use spoken words as proof"
+  end
+
+  defmodule ConcurrentVision do
+    def chat_json(_system, content, opts) do
+      ids =
+        for %{"type" => "text", "text" => label} <- content do
+          [_, id] = Regex.run(~r/^Frame (\d+);/, label)
+          String.to_integer(id)
+        end
+
+      send(opts[:usage_context].test_pid, {:batch, hd(ids), self()})
+
+      receive do
+        :finish -> {:ok, %{"observations" => Enum.map(ids, opts[:usage_context].row)}}
+      end
+    end
+  end
+
+  test "concurrent batches retain every frame in chronological order" do
+    ctx = %{
+      storage: Storage,
+      bucket: "synthetic",
+      region: nil,
+      usage_context: %{test_pid: self(), row: &row/1}
+    }
+
+    document = %{
+      "stills" => for(id <- 0..35, do: %{"key" => "image", "scene" => 0, "time" => id})
+    }
+
+    task = Task.async(fn -> Observations.collect(ctx, document, ConcurrentVision, "en") end)
+
+    assert_receive {:batch, 0, first}, 1000
+    assert_receive {:batch, 12, second}, 1000
+    assert_receive {:batch, 24, third}, 1000
+    for pid <- [third, second, first], do: send(pid, :finish)
+    assert {:ok, observations} = Task.await(task)
+    assert Enum.map(observations, & &1["id"]) == Enum.to_list(0..35)
   end
 
   test "text prominence is retained and unsupported classifications are rejected" do

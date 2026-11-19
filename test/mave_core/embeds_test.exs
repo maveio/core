@@ -14,7 +14,10 @@ defmodule MaveCore.EmbedsTest do
   defmodule TimecodeThumbnailImageProcessor do
     def process(_space_hash, _embed_hash, seconds, opts) do
       format = Keyword.fetch!(opts, :format)
-      {:ok, "cache/#{format}", "thumbnail #{format} at #{seconds}"}
+
+      if Process.get(:thumbnail_source_missing),
+        do: {:error, :not_found},
+        else: {:ok, "cache/#{format}", "thumbnail #{format} at #{seconds}"}
     end
   end
 
@@ -649,8 +652,29 @@ defmodule MaveCore.EmbedsTest do
 
     bucket = "space-#{space.hash}"
 
+    Process.put(:thumbnail_source_missing, true)
+
+    Oban.Testing.with_testing_mode(:manual, fn ->
+      assert {:ok, pending} = Embeds.publish_settings(published_embed, %{poster_time_second: 7.5})
+      assert {:ok, _} = Embeds.publish_settings(pending, %{poster_time_second: 14.0})
+    end)
+
+    jobs =
+      Repo.all(
+        from(j in Oban.Job,
+          where: j.worker == "MaveCore.Workers.TimecodeThumbnailWorker",
+          order_by: j.id
+        )
+      )
+
+    assert [older, latest] = jobs
+    assert :ok = MaveCore.Workers.TimecodeThumbnailWorker.perform(older)
+    assert {:error, :not_found} = MaveCore.Workers.TimecodeThumbnailWorker.perform(latest)
+    Process.delete(:thumbnail_source_missing)
+    assert :ok = MaveCore.Workers.TimecodeThumbnailWorker.perform(latest)
+
     for format <- ["jpg", "webp", "avif"] do
-      body = "thumbnail #{format} at 12.5"
+      body = "thumbnail #{format} at 14.0"
       root_key = "#{embed.hash}/thumbnail.#{format}"
       version_key = "#{embed.hash}/v1/custom_thumbnail.#{format}"
 
@@ -682,7 +706,7 @@ defmodule MaveCore.EmbedsTest do
     assert manifest["poster"]["image_src"] ==
              SettingsSerializer.storage_object_url(bucket, "#{embed.hash}/thumbnail.jpg")
 
-    assert manifest["settings"]["poster"] == 12.5
+    assert manifest["settings"]["poster"] == 14.0
 
     assert_received {:purged, ^space_hash, _region, purged_paths}
     assert "#{embed.hash}/thumbnail.jpg" in purged_paths

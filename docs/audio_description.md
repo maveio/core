@@ -198,9 +198,8 @@ Run input:
 Uploads and the public `input_url` API add this when the space has the feature on
 and the host allows it at that moment (see below). Existing runs keep their
 original versioned flow definition; newly started runs use the single-language preset.
-Videos longer than `MAVE_AUDIO_DESCRIPTION_MAX_SECONDS` (default `600`) are
-skipped with `reason: "video_too_long"`, `video_duration_seconds` and
-`max_duration_seconds`; videos without a video stream with `no_video`.
+Scene detection processes videos with a known positive duration. It skips inputs
+without a video stream with `no_video` and unknown durations with `unknown_duration`.
 
 Transient provider and storage errors (timeouts, 408/429/5xx) are retried with the
 flow engine's retry budget. Other failures make the step `unavailable`; they never
@@ -297,7 +296,6 @@ speech timings and description text are sent to the configured providers.
 | `MAVE_AUDIO_DESCRIPTION_TTS_MODEL` | `voxtral-mini-tts-3-0` | Mistral text-to-speech model |
 | `MAVE_AUDIO_DESCRIPTION_VOICES` | `en:gb_jane_neutral,nl:voice_3145` | Voice per language |
 | `MAVE_AUDIO_DESCRIPTION_VOICE` | `gb_jane_neutral` | Voice for languages without one |
-| `MAVE_AUDIO_DESCRIPTION_MAX_SECONDS` | `600` | Longest video that gets descriptions |
 
 The default voices are Jane (English) and Lotte (Dutch), both presets. Lotte
 requires Voxtral 3; the older `voxtral-mini-tts-2603` model rejects this voice.
@@ -315,6 +313,5 @@ Tests replace the providers through application config:
 config :mave_core, :audio_description,
   chat_provider: MyChatStub,
   writer_provider: MyWriterStub,     # chat_json(system, content, opts)
-  speech_provider: MySpeechStub, # speak(text, language) -> {:ok, wav_bytes}
-  max_seconds: 600
+  speech_provider: MySpeechStub      # speak(text, language) -> {:ok, wav_bytes}
 ```
