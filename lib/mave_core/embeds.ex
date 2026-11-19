@@ -554,7 +554,15 @@ defmodule MaveCore.Embeds do
     audio_descriptions =
       audio_descriptions_for(space, video_embed, current_video, current_version)
 
-    subtitles = subtitles_for(space, video_embed, current_video, current_version)
+    original_language =
+      current_video &&
+        (Languages.normalize_media_language(current_video.language) ||
+           Enum.find_value(audio_tracks, &(&1.default && &1.language)))
+
+    subtitles =
+      space
+      |> subtitles_for(video_embed, current_video, current_version)
+      |> Enum.sort_by(&(&1.language != original_language or is_nil(original_language)))
 
     pending_media =
       PendingMedia.for_run(flow_run, current_version, %{
@@ -562,6 +570,18 @@ defmodule MaveCore.Embeds do
         audio_descriptions: audio_descriptions,
         subtitles: subtitles
       })
+
+    translations =
+      current_video
+      |> MaveCore.Workers.SubtitleTranslationWorker.pending()
+      |> Enum.reject(fn row -> Enum.any?(subtitles, &(&1.language == row.language)) end)
+
+    pending_media =
+      Map.update!(
+        pending_media,
+        :subtitles,
+        &Enum.uniq_by(&1 ++ translations, fn row -> row.language end)
+      )
 
     audio_tracks = PendingMedia.audio_tracks_for_run(audio_tracks, flow_run, current_version)
 
@@ -604,6 +624,7 @@ defmodule MaveCore.Embeds do
       component_config_json: SettingsSerializer.component_config_json(),
       processing_player_ready: processing_player_ready_for_version?(flow_run, current_version),
       original: %{
+        language: original_language,
         audio_only: audio_only?,
         width: int_or_zero(current_video && current_video.max_width),
         height: int_or_zero(current_video && current_video.max_height),

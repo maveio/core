@@ -1873,6 +1873,99 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     stop_live_view(view)
   end
 
+  defmodule SubtitleTranslatorStub do
+    import ExUnit.Assertions
+
+    def translate(%{segments: [cue]}, opts) do
+      assert opts[:source_language] == "nl"
+      assert opts[:target_language] == "fr"
+      assert cue.text == "Hallo wereld"
+      {:ok, %{segments: [%{cue | text: "Bonjour le monde"}]}}
+    end
+  end
+
+  @tag :subtitle_translation
+  test "a substantially copied transcript cannot be published as a translation" do
+    worker = MaveCore.Workers.SubtitleTranslationWorker
+    source = for index <- 1..10, do: %{text: "This is sentence #{index}."}
+    translated = List.replace_at(source, 0, %{text: "Questa è la prima frase."})
+    assert {:error, :copied_source_text} = worker.validate_translation(source, translated)
+    assert :ok = worker.validate_translation([%{text: "Roma"}], [%{text: "Roma"}])
+  end
+
+  @tag :subtitle_translation
+  test "translate a selected language from the original subtitle with its timing", %{conn: conn} do
+    previous = Application.get_env(:mave_core, :subtitle_translation_provider)
+    Application.put_env(:mave_core, :subtitle_translation_provider, SubtitleTranslatorStub)
+    on_exit(fn -> restore_env(:subtitle_translation_provider, previous) end)
+    {conn, space} = authenticated_conn(conn)
+
+    embed =
+      video_embed_fixture(space, %{name: "Translation"}) |> Repo.preload(asset: [:current_video])
+
+    video = embed.asset.current_video |> Ecto.Changeset.change(language: "nl") |> Repo.update!()
+    key = "#{embed.hash}/subtitle_nl.vtt"
+    bucket = Storage.bucket_for_space(space.hash, space.region)
+    body = "WEBVTT\n\n00:00:01.000 --> 00:00:03.000 align:start\nHallo wereld\n"
+    {:ok, _} = FlowStorageAdapterStub.put_public(bucket, key, body, "text/vtt", space.region)
+
+    english =
+      Repo.insert!(%Subtitle{
+        video_id: video.id,
+        language: "en",
+        path: "#{embed.hash}/subtitle_en.vtt"
+      })
+
+    original = Repo.insert!(%Subtitle{video_id: video.id, language: "nl", path: key})
+
+    {:ok, view, html} = live(conn, "/videos/#{embed.id}")
+    {original_position, _} = :binary.match(html, "subtitle-language-form-#{original.id}")
+    {english_position, _} = :binary.match(html, "subtitle-language-form-#{english.id}")
+    assert original_position < english_position
+    view |> element("[phx-click=add_subtitle]") |> render_click()
+    assert has_element?(view, "#generate-subtitle-translation[disabled]")
+    view |> element("#new-subtitle-form") |> render_change(%{"subtitle" => %{"language" => "fr"}})
+    view |> element("#generate-subtitle-translation") |> render_click()
+    translated = Repo.get_by!(Subtitle, video_id: video.id, language: "fr")
+    assert {:ok, result} = FlowStorageAdapterStub.get(bucket, translated.path, space.region)
+    assert result == String.replace(body, "Hallo wereld", "Bonjour le monde")
+    assert {:ok, ^body} = FlowStorageAdapterStub.get(bucket, key, space.region)
+
+    worker = MaveCore.Workers.SubtitleTranslationWorker
+
+    Oban.Testing.with_testing_mode(:manual, fn ->
+      assert {:ok, job} = worker.enqueue(embed, original.id, "de")
+
+      send(
+        view.pid,
+        {MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent,
+         {:subtitle_translation_queued, embed.id, "de", job.state}}
+      )
+
+      assert has_element?(
+               view,
+               "#subtitle-translation-de[aria-busy=true] option[selected]",
+               "German"
+             )
+
+      {:ok, reopened, _} = live(conn, "/videos/#{embed.id}")
+      assert has_element?(reopened, "#subtitle-translation-de[aria-busy=true]")
+
+      send(
+        reopened.pid,
+        {:embed_updated,
+         %{
+           "space_id" => space.id,
+           "embed_id" => embed.id,
+           "subtitle_translation" => "failed",
+           "language" => "de"
+         }}
+      )
+
+      refute has_element?(reopened, "#subtitle-translation-de")
+    end)
+  end
+
   @tag :text_editor
   test "audio descriptions have their own editable settings and appear under Audio in Info", %{
     conn: conn
@@ -2394,6 +2487,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     assert has_element?(view, "#subtitle-text-editor")
 
     moments = [%{"id" => "1", "start" => 2, "text" => "Another edit"}]
+
     view
     |> element("#subtitle-text-form")
     |> render_submit(%{"editor" => %{"document" => Jason.encode!(moments)}})
@@ -2655,8 +2749,9 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
           MaveCore.Assets.save_description_edit(embed, description.id, editor.revision, contents)
 
         Repo.one!(
-          from j in Oban.Job,
+          from(j in Oban.Job,
             where: fragment("?->>'render_id' = ?", j.args, ^saved.text_draft["render_id"])
+          )
         )
       end)
     end
@@ -2688,8 +2783,9 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
 
     job =
       Repo.one!(
-        from j in Oban.Job,
+        from(j in Oban.Job,
           where: fragment("?->>'render_id' = ?", j.args, ^queued.text_draft["render_id"])
+        )
       )
 
     pending = [%{"id" => "0", "start" => 4.0, "text" => "New description."}]
@@ -2765,8 +2861,9 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
 
     moved_job =
       Repo.one!(
-        from j in Oban.Job,
+        from(j in Oban.Job,
           where: fragment("?->>'render_id' = ?", j.args, ^queued.text_draft["render_id"])
+        )
       )
 
     assert :ok = worker.perform(moved_job)
