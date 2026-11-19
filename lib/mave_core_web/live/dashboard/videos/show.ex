@@ -147,7 +147,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
            "embed_id" => embed_id,
            "description_audio" => status,
            "render_id" => render_id
-         }},
+         } = event},
         %{assigns: %{current_space: %{id: space_id}, resource_embed: %{id: embed_id}}} = socket
       )
       when status in ["published", "failed"] do
@@ -163,11 +163,18 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
         )
 
       "failed" ->
+        message =
+          if event["insufficient_credit"],
+            do: MaveCore.AudioDescription.Publication.unavailable_notice()
+
         {:noreply,
          put_flash(
            socket,
            :error,
-           gettext("Description audio could not be updated. Check the saved text in the editor.")
+           message ||
+             gettext(
+               "Description audio could not be updated. Check the saved text in the editor."
+             )
          )}
     end
   end

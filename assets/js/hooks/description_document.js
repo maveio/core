@@ -84,11 +84,23 @@ export function addTimedLine(state, cursor, windows, duration, id) {
     if (previous.attrs.end > start) tr.setNodeMarkup(previous.label, null, { ...previous.attrs, end: start })
   }
   if (start * 1000 >= limit) return null
+  const label = [descriptionSchema.nodes.moment.create({ id, start }), descriptionSchema.text(" ")]
+  const caret = cursor == null ? null : state.doc.resolve(cursor)
+  if (caret?.parent.type === descriptionSchema.nodes.paragraph &&
+      (!previous || previous.label < cursor) && (!next || cursor < next.position)) {
+    if (!caret.parent.content.size) {
+      tr.insert(cursor, label)
+      return tr.setSelection(TextSelection.create(tr.doc, cursor + 2))
+    }
+    if (caret.nodeBefore?.type === descriptionSchema.nodes.hard_break && !caret.nodeAfter) {
+      tr.delete(cursor - 1, cursor)
+      tr.split(cursor - 1)
+      tr.insert(cursor + 1, label)
+      return tr.setSelection(TextSelection.create(tr.doc, cursor + 3))
+    }
+  }
   let insertAt = next?.position ?? state.doc.content.size
-  const cue = descriptionSchema.nodes.paragraph.create(null, [
-    descriptionSchema.nodes.moment.create({ id, start }),
-    descriptionSchema.text(" "),
-  ])
+  const cue = descriptionSchema.nodes.paragraph.create(null, label)
   if (state.doc.childCount === 1 && !state.doc.firstChild.content.size) {
     tr.replaceWith(0, state.doc.content.size, cue)
     insertAt = 0
@@ -306,7 +318,11 @@ export const DescriptionDocumentHook = {
       dispatchTransaction: transaction => {
         if (transaction.docChanged && this.el.dataset.readOnly === "true") return
         this.view.updateState(this.view.state.apply(transaction))
-        if (transaction.docChanged) this.changed()
+        if (transaction.docChanged) {
+          this.linePicked = true
+          this.pickedLabel = null
+          this.changed()
+        }
       },
     })
     this.pickLine = event => {
@@ -347,6 +363,8 @@ export const DescriptionDocumentHook = {
 
   updated() {
     const readOnly = this.el.dataset.readOnly === "true"
+    if (this.readOnly === readOnly) return
+    this.readOnly = readOnly
     this.addButton.disabled = readOnly
     this.view.dom.setAttribute("aria-readonly", String(readOnly))
     this.view.updateState(this.view.state)
@@ -355,7 +373,6 @@ export const DescriptionDocumentHook = {
   changed() {
     const { moments } = momentsFromDocument(this.view.state.doc)
     this.hidden.value = JSON.stringify(moments)
-    this.feedback = []
     const sequence = ++this.sequence
     this.pushEventTo(this.form, "change_description_document", { moments }, reply => {
       if (sequence !== this.sequence || this.destroyedEditor) return

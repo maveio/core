@@ -57,7 +57,7 @@ defmodule MaveCoreWeb.CoreComponents do
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
       role="alert"
-      class="toast toast-top toast-end z-[55]"
+      class="toast toast-top toast-end z-70"
       {@rest}
     >
       <div class={[

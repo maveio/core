@@ -10,6 +10,23 @@ const moments = [
   { id: 'second', start: 6, text: 'A woman.' },
 ]
 
+test('typing keeps the feedback row in place until the newest timing reply arrives', () => {
+  const previous = [{ after_id: 'first', count: 1, label: '2 s left' }]
+  const next = [{ ...previous[0], label: '1 s left' }]
+  const replies = []
+  const state = EditorState.create({ doc: documentFromMoments(moments) })
+  const hook = {
+    feedback: previous, sequence: 0, hidden: {}, view: { state, updateState() {} },
+    pushEventTo(_target, _event, _payload, reply) { replies.push(reply) },
+  }
+  DescriptionDocumentHook.changed.call(hook)
+  DescriptionDocumentHook.changed.call(hook)
+  replies[0]({ groups: [] })
+  assert.equal(hook.feedback, previous)
+  replies[1]({ groups: next })
+  assert.equal(hook.feedback, next)
+})
+
 test('document round trips paragraphs, identities and time labels', () => {
   assert.deepEqual(momentsFromDocument(documentFromMoments(moments)).moments, moments)
 })
@@ -84,14 +101,14 @@ test('a time label at the end of a block creates a separate moment before the fo
 test('an empty new moment has no block feedback between its label and the caret', () => {
   const doc = documentFromMoments([{ id: 'new', start: 40, text: '' }])
   const state = EditorState.create({ doc })
-  const decorations = DescriptionDocumentHook.decorations.call({ feedback: [{ after_id: 'new', state: 'within' }] }, state)
+  const decorations = DescriptionDocumentHook.decorations.call({ playbackWindows: [], feedback: [{ after_id: 'new', state: 'within' }] }, state)
   assert.equal(decorations.find().length, 0)
 })
 
 test('shared feedback stays after a trailing empty moment when its group contains text', () => {
   const doc = documentFromMoments([{ id: 'first', start: 2, text: 'A plane.' }, { id: 'new', start: 3, text: '' }])
   const state = EditorState.create({ doc })
-  const decorations = DescriptionDocumentHook.decorations.call({ feedback: [{ after_id: 'new', state: 'within', count: 1 }] }, state)
+  const decorations = DescriptionDocumentHook.decorations.call({ playbackWindows: [], feedback: [{ after_id: 'new', state: 'within', count: 1 }] }, state)
   assert.equal(decorations.find().length, 1)
   assert.equal(decorations.find()[0].from, doc.content.size)
 })
@@ -237,6 +254,23 @@ test('Add line follows the selected multiline cue, including AD continuation par
     state = state.apply(state.tr.insertText('New line'))
     assert.deepEqual(momentsFromDocument(state.doc).moments, [
       moments[0], { id: 'new', start: 4.125, text: 'New line' }, moments[1],
+    ])
+  }
+})
+
+test('Add line reuses the empty line created by Enter and leaves the caret after its label', () => {
+  for (const kind of ['audio_description', 'subtitle']) {
+    const original = [{ id: 'first', start: 1, text: 'First.' }, { id: 'second', start: 8, text: 'Second.' }]
+    let state = EditorState.create({ doc: documentFromMoments(original, kind) })
+    const end = state.doc.firstChild.nodeSize - 1
+    state = state.apply(state.tr.setSelection(TextSelection.create(state.doc, end)))
+    if (kind === 'subtitle') subtitleLineBreak(state, tr => { state = state.apply(tr) })
+    else state = state.apply(state.tr.split(end))
+    state = state.apply(addTimedLine(state, state.selection.to, [{ id: 'first', end: 3 }], 12, 'new'))
+    state = state.apply(state.tr.insertText('Middle.'))
+    assert.equal(state.doc.childCount, 3)
+    assert.deepEqual(momentsFromDocument(state.doc).moments, [
+      original[0], { id: 'new', start: 3, text: 'Middle.' }, original[1],
     ])
   }
 })

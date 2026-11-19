@@ -22,10 +22,6 @@ defmodule MaveCore.AudioDescription.Publication do
     end
   end
 
-  def editor_notice(moments, space_id) do
-    if observer = observer(), do: observer.editor_notice(characters(moments), space_id)
-  end
-
   def generation_notice(space, user, access_context, skipped) do
     with module when not is_nil(module) <- observer(),
          true <- Code.ensure_loaded?(module) and function_exported?(module, :generation_notice, 4) do
@@ -37,15 +33,6 @@ defmodule MaveCore.AudioDescription.Publication do
 
   def unavailable_notice do
     if observer = observer(), do: observer.unavailable_notice()
-  end
-
-  defp characters(moments) do
-    moments
-    |> Enum.map(& &1["text"])
-    |> Enum.filter(&is_binary/1)
-    |> Enum.uniq()
-    |> Enum.map(&String.length/1)
-    |> Enum.sum()
   end
 
   defp observer, do: Application.get_env(:mave_core, :audio_description_publication)
