@@ -361,6 +361,27 @@ defmodule MaveCore.Assets do
     end)
   end
 
+  def subtitle_source_language(%Video{} = video),
+    do: normalize_language(video.language) || default_audio_language(video.id)
+
+  def publish_translated_subtitle(embed, video, target, body) do
+    region = embed.space.region || "default"
+    bucket = Storage.bucket_for_space(embed.space.hash, region)
+
+    key =
+      audio_source_key(embed.hash, Embeds.current_video_version(video), "subtitle_#{target}.vtt")
+
+    with {:ok, _} <- storage_adapter().put_public(bucket, key, body, "text/vtt", region),
+         {:ok, subtitle} <- create_subtitle(%{video_id: video.id, language: target, path: key}),
+         {:ok, _} <- update_subtitle_outputs(embed, subtitle, %{path: key}),
+         {:ok, _} <-
+           %{embed_id: embed.id, subtitle_id: subtitle.id, path: key}
+           |> MaveCore.Workers.SubtitleJsonWorker.new()
+           |> Oban.insert() do
+      {:ok, subtitle}
+    end
+  end
+
   def publish_subtitle_json(embed_id, subtitle_id, path) do
     Repo.transaction(fn ->
       with %Embed{deleted_at: nil} = embed <- Repo.get(Embed, embed_id),

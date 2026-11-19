@@ -180,6 +180,50 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   end
 
   def handle_info(
+        {VideoSettingsComponent, {:subtitle_translation_queued, embed_id, language, state}},
+        %{assigns: %{resource_embed: %{id: embed_id}, video: video}} = socket
+      ) do
+    if Enum.any?(video.subtitles, &(&1.language == language)) do
+      {:noreply, socket}
+    else
+      row = MaveCore.Workers.SubtitleTranslationWorker.pending_row(language, state)
+
+      video =
+        update_in(
+          video.pending_media.subtitles,
+          &Enum.uniq_by(&1 ++ [row], fn item -> item.id end)
+        )
+
+      {:noreply, assign(socket, :video, video)}
+    end
+  end
+
+  def handle_info({VideoSettingsComponent, {:subtitle_translation_queued, _, _, _}}, socket),
+    do: {:noreply, socket}
+
+  def handle_info(
+        {:embed_updated,
+         %{"space_id" => space_id, "embed_id" => embed_id, "subtitle_translation" => status} =
+           event},
+        %{assigns: %{current_space: %{id: space_id}, resource_embed: %{id: embed_id}}} = socket
+      ) do
+    if status == "published" do
+      handle_info({VideoSettingsComponent, :subtitles_updated}, socket)
+    else
+      row_id = "subtitle-translation-#{event["language"]}"
+      video = socket.assigns.video
+
+      video =
+        update_in(video.pending_media.subtitles, &Enum.reject(&1, fn row -> row.id == row_id end))
+
+      {:noreply,
+       socket
+       |> assign(:video, video)
+       |> put_flash(:error, gettext("Subtitle translation could not be completed."))}
+    end
+  end
+
+  def handle_info(
         {:embed_updated, %{"space_id" => space_id, "embed_id" => embed_id}},
         %{assigns: %{current_space: %{id: space_id}, resource_embed: %{id: embed_id}}} = socket
       ) do

@@ -451,6 +451,32 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     )
   end
 
+  def handle_event("translate_subtitle", _params, socket) do
+    video = socket.assigns.video
+    source = original_subtitle(video)
+    target = get_in(socket.assigns, [:subtitle_form, :language])
+
+    result =
+      source &&
+        MaveCore.Workers.SubtitleTranslationWorker.enqueue(
+          socket.assigns.embed,
+          source.id,
+          target
+        )
+
+    case result do
+      {:ok, job} ->
+        notify_parent({:subtitle_translation_queued, socket.assigns.embed.id, target, job.state})
+        {:noreply, assign(socket, :subtitle_form, nil)}
+
+      {:error, {:unavailable, message}} when is_binary(message) ->
+        {:noreply, put_flash(socket, :error, message)}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, gettext("Could not start subtitle translation."))}
+    end
+  end
+
   def handle_event("add_subtitle", _params, socket) do
     {:noreply,
      assign(socket, :subtitle_form, %{
@@ -3067,6 +3093,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
   defp subtitles_options_section(assigns) do
     assigns = assign(assigns, :language_options, language_options())
+    assigns = assign(assigns, :source, original_subtitle(assigns.video))
     has_subtitles = Enum.any?(assigns.subtitles || [])
     assigns = assign(assigns, :has_subtitles, has_subtitles)
 
@@ -3148,7 +3175,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
         <%= if @subtitle_form && @subtitle_form.mode == :new do %>
           <div class="w-full flex items-center">
-            <div class="flex-grow border-r border-stone-900 pr-2">
+            <div class="min-w-0 flex-1">
               <form
                 id="new-subtitle-form"
                 phx-change="change_new_subtitle"
@@ -3166,6 +3193,19 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
               </form>
             </div>
 
+            <button
+              :if={@source}
+              id="generate-subtitle-translation"
+              type="button"
+              phx-click="translate_subtitle"
+              phx-target={@myself}
+              disabled={blank_to_nil(@subtitle_form.language) == nil or Enum.any?(@subtitles ++ @generated_tracks, &(&1.language == @subtitle_form.language))}
+              title={gettext("Translate from %{language}", language: @source.label)}
+              aria-label={gettext("Translate from %{language}", language: @source.label)}
+              class="mx-1 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-sm bg-stone-800 text-stone-400 hover:bg-stone-600 disabled:pointer-events-none disabled:opacity-50"
+            >
+              <.icon name="hero-sparkles" class="size-4" />
+            </button>
             <form
               id="new-subtitle-upload-form"
               phx-change="noop"
@@ -3177,7 +3217,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             >
               <.live_file_input
                 upload={@uploads.subtitle_file}
-                class="absolute inset-0 opacity-0 cursor-pointer"
+                class="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0 file:cursor-pointer"
               />
               <%= if @uploads.subtitle_file.entries == [] do %>
                 <svg
@@ -3795,7 +3835,12 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   end
 
   @preferred_media_languages ~w(nl en fr de es it pt da fi no sv pl cs el ro uk)
-  defp language_options, do: [{gettext("Select language"), ""} | Languages.spoken_languages()]
+  defp original_subtitle(video) do
+    language = get_in(video, [:original, :language])
+    if language, do: Enum.find(video.subtitles, &(&1.language == language))
+  end
+
+  defp language_options, do: [{gettext("Language"), ""} | Languages.spoken_languages()]
 
   attr :id, :string, required: true
   attr :name, :string, required: true
@@ -3819,8 +3864,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         aria-controls={"#{@id}-panel"}
         class="w-full h-6 items-center justify-between rounded-sm bg-stone-800 px-2 text-sm text-stone-400 cursor-pointer focus-visible:ring-1 focus-visible:ring-blue-500"
       >
-        <span>{Languages.spoken_language(@value) || blank_to_nil(@value) || gettext("Select language")}</span>
-        <.icon name="hero-chevron-down" class="h-3 w-3" />
+        <span class="min-w-0 truncate text-left">{Languages.spoken_language(@value) || blank_to_nil(@value) || gettext("Language")}</span>
+        <.icon name="hero-chevron-down" class="h-3 w-3 shrink-0" />
       </button>
       <div
         id={"#{@id}-panel"}

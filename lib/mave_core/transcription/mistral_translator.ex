@@ -22,15 +22,21 @@ defmodule MaveCore.Transcription.MistralTranslator do
 
     with {:ok, api_key} <- fetch_api_key(),
          {:ok, normalized} <- normalize_transcription(transcription) do
-      translate_normalized(normalized, api_key, source_language, target_language)
+      translate_normalized(normalized, api_key, source_language, target_language, opts)
     end
   end
 
-  defp translate_normalized(%{segments: [_ | _] = segments}, api_key, source_language, target) do
+  defp translate_normalized(
+         %{segments: [_ | _] = segments},
+         api_key,
+         source_language,
+         target,
+         opts
+       ) do
     with {:ok, translated_segments} <-
            segments
            |> Enum.chunk_every(@segment_batch_size)
-           |> translate_segment_batches(api_key, source_language, target) do
+           |> translate_segment_batches(api_key, source_language, target, opts) do
       {:ok,
        %{
          text: transcript_text_from_segments(translated_segments),
@@ -40,27 +46,27 @@ defmodule MaveCore.Transcription.MistralTranslator do
     end
   end
 
-  defp translate_normalized(%{text: text}, api_key, source_language, target)
+  defp translate_normalized(%{text: text}, api_key, source_language, target, opts)
        when is_binary(text) and text != "" do
-    with {:ok, translated_text} <- translate_text(text, api_key, source_language, target) do
+    with {:ok, translated_text} <- translate_text(text, api_key, source_language, target, opts) do
       {:ok, %{text: translated_text, language: target, segments: []}}
     end
   end
 
-  defp translate_normalized(_normalized, _api_key, _source_language, _target) do
+  defp translate_normalized(_normalized, _api_key, _source_language, _target, _opts) do
     {:error, :empty_translation_input}
   end
 
-  defp translate_segment_batches(batches, api_key, source_language, target) do
+  defp translate_segment_batches(batches, api_key, source_language, target, opts) do
     Enum.reduce_while(batches, {:ok, []}, fn batch, {:ok, acc} ->
-      case translate_segment_batch(batch, api_key, source_language, target) do
+      case translate_segment_batch(batch, api_key, source_language, target, opts) do
         {:ok, translated_batch} -> {:cont, {:ok, acc ++ translated_batch}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp translate_segment_batch(batch, api_key, source_language, target) do
+  defp translate_segment_batch(batch, api_key, source_language, target, opts) do
     entries =
       batch
       |> Enum.with_index()
@@ -69,8 +75,10 @@ defmodule MaveCore.Transcription.MistralTranslator do
       end)
 
     with {:ok, content} <-
-           request_chat(segment_prompt(entries, source_language, target), api_key,
-             max_tokens: 8_000
+           request_chat(
+             segment_prompt(entries, source_language, target),
+             api_key,
+             Keyword.put(opts, :max_tokens, 8_000)
            ),
          {:ok, translated_entries} <- parse_segment_translation(content) do
       translated_by_id =
@@ -89,15 +97,25 @@ defmodule MaveCore.Transcription.MistralTranslator do
           }
         end)
 
-      {:ok, translated_segments}
+      if opts[:usage_context] &&
+           (map_size(translated_by_id) != length(batch) ||
+              not Enum.all?(0..(length(batch) - 1), &(translated_by_id[&1] not in [nil, ""]))) do
+        {:error, :incomplete_translation}
+      else
+        {:ok, translated_segments}
+      end
     end
   end
 
-  defp translate_text(text, api_key, source_language, target) do
+  defp translate_text(text, api_key, source_language, target, opts) do
     text
     |> chunk_text()
     |> Enum.reduce_while({:ok, []}, fn chunk, {:ok, acc} ->
-      case request_chat(text_prompt(chunk, source_language, target), api_key, max_tokens: 8_000) do
+      case request_chat(
+             text_prompt(chunk, source_language, target),
+             api_key,
+             Keyword.put(opts, :max_tokens, 8_000)
+           ) do
         {:ok, translated_chunk} -> {:cont, {:ok, [String.trim(translated_chunk) | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
@@ -135,7 +153,16 @@ defmodule MaveCore.Transcription.MistralTranslator do
       max_retries: 3
     ]
 
-    case Req.post(@endpoint, options) do
+    request =
+      Req.new([url: @endpoint, method: :post] ++ options)
+      |> MaveCore.Usage.attach(opts[:usage_context], %{
+        provider: "mistral",
+        model: body["model"],
+        category: "subtitle_translation",
+        operation: "translate_subtitles"
+      })
+
+    case Req.request(request) do
       {:ok, %{status: status, body: body}} when status in 200..299 ->
         chat_content(body)
 
@@ -152,6 +179,16 @@ defmodule MaveCore.Transcription.MistralTranslator do
     {:ok, String.trim(content)}
   end
 
+  defp chat_content(%{"choices" => [%{"message" => %{"content" => parts}} | _]})
+       when is_list(parts) do
+    text = for %{"type" => "text", "text" => part} <- parts, is_binary(part), into: "", do: part
+
+    case String.trim(text) do
+      "" -> {:error, :empty_translation_response}
+      content -> {:ok, content}
+    end
+  end
+
   defp chat_content(body), do: {:error, {:mistral_translation_invalid_response, body}}
 
   defp segment_prompt(entries, source_language, target_language) do
@@ -165,7 +202,7 @@ defmodule MaveCore.Transcription.MistralTranslator do
     - Preserve meaning, tone, punctuation, and readable subtitle length.
     - Do not add explanations or markdown.
 
-    Source language: #{source_language || "auto"}
+    Source language hint: #{language_name(source_language)}. If the text differs from this hint, translate the actual text.
     Segments:
     #{Jason.encode!(entries)}
     """
@@ -180,7 +217,7 @@ defmodule MaveCore.Transcription.MistralTranslator do
     - Preserve meaning, tone, punctuation, and paragraph breaks.
     - Do not add explanations or markdown.
 
-    Source language: #{source_language || "auto"}
+    Source language hint: #{language_name(source_language)}. If the text differs from this hint, translate the actual text.
     Text:
     #{text}
     """
@@ -349,9 +386,10 @@ defmodule MaveCore.Transcription.MistralTranslator do
 
   defp normalize_text(_), do: nil
 
-  defp language_name("en"), do: "English"
-  defp language_name(language) when is_binary(language), do: language
-  defp language_name(_), do: "English"
+  defp language_name(language) when is_binary(language),
+    do: MaveCore.Languages.spoken_language(language) || language
+
+  defp language_name(_), do: "auto"
 
   defp normalize_language(language) when is_binary(language) do
     language
