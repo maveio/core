@@ -298,6 +298,18 @@
           </:player>
         </.video_embed_panel>
 
+        <%= if @video_ready and not @replace_mode do %>
+          <div class="w-12 my-8 mx-auto border-t border-stone-100"></div>
+
+          <.live_component
+            module={ChaptersComponent}
+            id="video-chapters"
+            embed={@resource_embed}
+            current_space={@current_space}
+            player_dom_id={@player_dom_id}
+          />
+        <% end %>
+
         <div class="w-12 my-8 mx-auto border-t border-stone-100"></div>
 
         <div class="grid grid-cols-3 gap-4">

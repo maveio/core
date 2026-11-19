@@ -112,6 +112,7 @@ defmodule MaveCore.Embeds.ManifestPublisher do
         )
     }
     |> maybe_put("audio_descriptions", manifest_audio_descriptions(embed, version))
+    |> maybe_put("chapters", MaveCore.Chapters.published_payload(embed, version))
   end
 
   defp manifest_waveform(opts, manifest, version) do

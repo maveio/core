@@ -12,12 +12,14 @@ defmodule MaveCore.UsageLimits do
   @callback can_upload_file?(Space.t(), non_neg_integer() | nil) :: :ok | {:error, term()}
   @callback can_manage_audio_description?(Space.t()) :: :ok | {:error, term()}
   @callback can_use_audio_description?(Space.t()) :: :ok | {:error, term()}
+  @callback can_use_automatic_chapters?(Space.t()) :: :ok | {:error, term()}
   @callback restriction_copy(atom(), term()) :: %{optional(atom()) => String.t()}
 
   @optional_callbacks can_view_space_data?: 1,
                       can_upload_file?: 2,
                       can_use_audio_description?: 1,
                       can_manage_audio_description?: 1,
+                      can_use_automatic_chapters?: 1,
                       restriction_copy: 2
 
   def can_create_video_embed?(%Space{} = space) do
@@ -43,6 +45,15 @@ defmodule MaveCore.UsageLimits do
   @doc "Whether space settings may change audio description. Allowed unless the host manages it."
   def can_manage_audio_description?(%Space{} = space) do
     dispatch(:can_manage_audio_description?, [space])
+  end
+
+  @doc """
+  Whether a space may have chapters suggested, automatically or on request.
+  Allowed when the host has no policy for it. Editing and publishing chapters
+  by hand is always allowed.
+  """
+  def can_use_automatic_chapters?(%Space{} = space) do
+    dispatch(:can_use_automatic_chapters?, [space])
   end
 
   def can_upload_file?(%Space{} = space, size) when is_integer(size) or is_nil(size) do

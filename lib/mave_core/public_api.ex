@@ -582,7 +582,8 @@ defmodule MaveCore.PublicApi do
       },
       subtitles: detailed_subtitles(space, embed, version),
       audio_tracks: detailed_audio_tracks(space, embed, version),
-      audio_descriptions: detailed_audio_descriptions(space, current_video, embed, version)
+      audio_descriptions: detailed_audio_descriptions(space, current_video, embed, version),
+      chapters: MaveCore.Chapters.published_cues(current_video)
     }
   end
 

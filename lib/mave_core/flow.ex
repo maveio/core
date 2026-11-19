@@ -4579,6 +4579,7 @@ defmodule MaveCore.Flow do
       video = maybe_apply_detected_video_language(video, step_runs)
       maybe_apply_detected_audio_track_language(video.id, step_runs)
       maybe_publish_completed_media_metadata(step_type, video, space_hash, embed_hash, step_runs)
+      maybe_suggest_chapters(step_type, embed, video)
     else
       _other -> :ok
     end
@@ -4593,6 +4594,19 @@ defmodule MaveCore.Flow do
   end
 
   defp maybe_sync_completed_media_metadata(_flow_run_id, _step_type, _output), do: :ok
+
+  # A new transcript is what chapter suggestions are made from. Suggesting is
+  # optional background work and must never affect the run.
+  defp maybe_suggest_chapters("ai.transcribe_audio", %Embed{} = embed, %Video{} = video) do
+    _ = MaveCore.Chapters.maybe_request_automatic_suggestion(embed, video)
+    :ok
+  rescue
+    exception ->
+      Logger.warning("Failed to request chapter suggestions: " <> Exception.message(exception))
+      :ok
+  end
+
+  defp maybe_suggest_chapters(_step_type, _embed, _video), do: :ok
 
   defp maybe_publish_completed_media_metadata(
          step_type,

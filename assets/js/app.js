@@ -27,6 +27,7 @@ import { hooks as colocatedHooks } from "phoenix-colocated/mave_core"
 import topbar from "../vendor/topbar"
 import "@lottiefiles/lottie-player"
 import { ChartHook } from "./hooks/chart"
+import { ChaptersHook } from "./hooks/chapters"
 import { cdn } from "./upload"
 import { FileMenuHook } from "./hooks/file_menu"
 
@@ -710,6 +711,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
   hooks: {
     ...colocatedHooks,
     chart: ChartHook,
+    chapters: ChaptersHook,
     content_editable: ContentEditableHook,
     upload_bridge: UploadBridgeHook,
     component_loader: ComponentLoaderHook,

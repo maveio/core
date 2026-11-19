@@ -520,6 +520,8 @@ defmodule MaveCore.Assets do
          {:ok, subtitle} <- upsert_uploaded_subtitle(video, attrs, language, copied.key),
          {:ok, _playlist} <- rebuild_hls_master_playlist(embed, region),
          {:ok, _manifest} <- ManifestPublisher.publish(embed) do
+      # Uploaded subtitles are a transcript too.
+      _ = MaveCore.Chapters.maybe_request_automatic_suggestion(embed, video)
       {:ok, subtitle}
     else
       nil -> {:error, :missing_current_video}

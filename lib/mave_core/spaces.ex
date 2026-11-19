@@ -627,7 +627,11 @@ defmodule MaveCore.Spaces do
     attrs =
       attrs
       |> stringify_keys()
-      |> Map.take(["hotlink_protection_enabled", "audio_description_enabled"])
+      |> Map.take([
+        "hotlink_protection_enabled",
+        "audio_description_enabled",
+        "automatic_chapters_enabled"
+      ])
 
     with :ok <- authorize_feature_change(space, attrs),
          {:ok, updated_space} <- space |> Space.features_changeset(attrs) |> Repo.update() do
@@ -654,6 +658,11 @@ defmodule MaveCore.Spaces do
     with :ok <- UsageLimits.can_manage_audio_description?(space) do
       if value in [true, "true"], do: UsageLimits.can_use_audio_description?(space), else: :ok
     end
+  end
+
+  defp authorize_feature_change(%Space{} = space, %{"automatic_chapters_enabled" => value})
+       when value in [true, "true"] do
+    UsageLimits.can_use_automatic_chapters?(space)
   end
 
   defp authorize_feature_change(_space, _attrs), do: :ok
