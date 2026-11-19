@@ -1065,28 +1065,21 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
                   {gettext("Audio updated.")}
                 <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "does_not_fit" and !subtitle_editor_changed?(@subtitle_editor) -> %>
                   {description_fit_message(@subtitle_editor.revision)}
-                <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "insufficient_credit" -> %>
-                  {MaveCore.AudioDescription.Publication.unavailable_notice() ||
-                    gettext("Audio generation is unavailable.")}
                 <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "failed" -> %>
                   {gettext("The audio update failed. Your edits are saved. Press Save to retry.")}
                 <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_status == "queued" -> %>
                   {gettext("Generating audio… Editing will be available when it finishes.")}
                 <% @subtitle_editor.webvtt_view -> %>
                   {gettext("Edit or paste WebVTT, including cue timings and line breaks.")}
-                <% @subtitle_editor.kind == :audio_description and @subtitle_editor.render_enabled -> %>
-                  {MaveCore.AudioDescription.Publication.editor_notice(
-                    @subtitle_editor.moments,
-                    @current_space.id
-                  ) || gettext("Saving your text generates updated audio.")}
-                <% @subtitle_editor.kind == :audio_description -> %>
+                <% @subtitle_editor.kind == :audio_description and !@subtitle_editor.render_enabled -> %>
                   {gettext(
                     "Changes are saved as a text draft. Audio generation is unavailable for this video."
                   )}
-                <% true -> %>
+                <% @subtitle_editor.kind == :subtitle -> %>
                   {gettext(
                     "Click a start or end time to edit it. Press Enter for a new line in the same subtitle."
                   )}
+                <% true -> %>
               <% end %>
             </div>
           </div>
@@ -1248,7 +1241,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
               phx-click="close_subtitle_editor"
               phx-target={@myself}
             >
-              {if @generating_audio, do: gettext("Close"), else: gettext("Cancel")}
+              {gettext("Close")}
             </.dash_button>
             <.dash_button
               id="toggle-editor-webvtt"
@@ -3987,7 +3980,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
     save =
       if editor && editor.kind == :subtitle,
-        do: &Assets.save_subtitle_document/4,
+        do: &Assets.save_subtitle_revision/4,
         else: &Assets.save_description_edit/4
 
     with %{} <- editor,
@@ -3996,36 +3989,53 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
            save.(socket.assigns.embed, editor.subtitle_id, editor.revision, contents) do
       case editor.kind do
         :subtitle ->
+          {_subtitle, body} = saved
+          {:ok, document} = SubtitleDocument.parse(body)
+          moments = DescriptionDocument.from_vtt(document)
+          raw = if editor.webvtt_view, do: body
+
+          editor = %{
+            editor
+            | revision: :crypto.hash(:sha256, body),
+              document: document,
+              moments: moments,
+              initial_moments: moments,
+              initial_document: document,
+              raw_vtt: raw,
+              opening_vtt: raw,
+              texts: SubtitleDocument.texts(document),
+              document_version: editor.document_version + 1,
+              error: nil
+          }
+
           notify_parent(:subtitles_updated)
 
           {:noreply,
            socket
-           |> assign(:subtitle_editor, nil)
+           |> assign(:subtitle_editor, editor)
            |> put_flash(:info, gettext("Subtitle text saved."))}
 
         :audio_description ->
-          if saved.text_draft["render_status"] == "queued" do
-            editor = if editor.webvtt_view, do: elem(import_webvtt(editor), 1), else: editor
-            moments = saved.text_draft["moments"] || editor.moments
-            {source, _} = editor.revision
+          editor = if editor.webvtt_view, do: elem(import_webvtt(editor), 1), else: editor
+          moments = saved.text_draft["moments"] || editor.moments
+          {source, _} = editor.revision
+          status = saved.text_draft["render_status"] || "draft"
 
-            {:noreply,
-             assign(socket, :subtitle_editor, %{
-               editor
-               | revision: {source, saved.text_draft},
-                 render_status: "queued",
-                 moments: moments,
-                 initial_moments: moments,
-                 initial_document: editor.document,
-                 opening_vtt: editor.raw_vtt,
-                 error: nil
-             })}
-          else
-            {:noreply,
-             socket
-             |> assign(:subtitle_editor, nil)
-             |> put_flash(:info, gettext("Description draft saved."))}
-          end
+          socket =
+            assign(socket, :subtitle_editor, %{
+              editor
+              | revision: {source, saved.text_draft},
+                render_status: status,
+                moments: moments,
+                initial_moments: moments,
+                initial_document: editor.document,
+                opening_vtt: editor.raw_vtt,
+                error: nil
+            })
+
+          if status == "queued",
+            do: {:noreply, socket},
+            else: {:noreply, put_flash(socket, :info, gettext("Description draft saved."))}
       end
     else
       {:error, reason} ->

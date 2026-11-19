@@ -27,6 +27,11 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     end
   end
 
+  defmodule ExhaustedAllowance do
+    def reserve_edit(_, _, _, _, _), do: {:error, :insufficient_ad_credit}
+    def unavailable_notice, do: "The processing allowance is exhausted."
+  end
+
   defmodule FailingStorage do
     def update_embed_visibility(_space, _embed_hash, _visibility, _region),
       do: {:error, :visibility_failed}
@@ -2324,7 +2329,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     view |> element("#toggle-editor-webvtt") |> render_click()
     refute has_element?(view, "#editor-webvtt")
 
-    view |> element("#subtitle-text-editor button", "Cancel") |> render_click()
+    view |> element("#subtitle-text-editor button", "Close") |> render_click()
     assert has_element?(view, "#discard-subtitle-edits")
     view |> element("#discard-subtitle-edits-cancel") |> render_click()
     send(view.pid, {:embed_updated, %{"space_id" => space.id, "embed_id" => embed.id}})
@@ -2335,7 +2340,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     |> element("#subtitle-text-form")
     |> render_submit(%{"editor" => %{"document" => Jason.encode!(moments)}})
 
-    refute has_element?(view, "#subtitle-text-editor")
+    assert has_element?(view, "#subtitle-text-editor")
     updated = Repo.get!(Subtitle, subtitle.id)
     assert updated.path != key
     assert {:ok, saved} = FlowStorageAdapterStub.get(bucket, updated.path, space.region)
@@ -2386,7 +2391,17 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     assert {:ok, ^json} =
              FlowStorageAdapterStub.get(bucket, "#{prefix}/subtitle.json", space.region)
 
-    view |> element("#subtitle-edit-text-#{subtitle.id}") |> render_click()
+    assert has_element?(view, "#subtitle-text-editor")
+
+    moments = [%{"id" => "1", "start" => 2, "text" => "Another edit"}]
+    view
+    |> element("#subtitle-text-form")
+    |> render_submit(%{"editor" => %{"document" => Jason.encode!(moments)}})
+
+    updated = Repo.get!(Subtitle, subtitle.id)
+    assert {:ok, edited} = FlowStorageAdapterStub.get(bucket, updated.path, space.region)
+    assert edited =~ "Another edit"
+    assert has_element?(view, "#subtitle-text-editor")
 
     {:ok, _} =
       FlowStorageAdapterStub.put_public(bucket, updated.path, body, "text/vtt", space.region)
@@ -2553,7 +2568,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
                invalid_moments
              )
 
-    view |> element("#subtitle-text-editor button", "Cancel") |> render_click()
+    view |> element("#subtitle-text-editor button", "Close") |> render_click()
 
     view |> element("#discard-subtitle-edits-confirm") |> render_click()
 
@@ -2855,6 +2870,19 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
                "#{embed.hash}/#{updated.vtt_filename}",
                space.region
              )
+
+    previous_observer = Application.get_env(:mave_core, :audio_description_publication)
+    on_exit(fn -> restore_env(:audio_description_publication, previous_observer) end)
+    Application.put_env(:mave_core, :audio_description_publication, ExhaustedAllowance)
+    blocked_job = save.("Another description.", 2.0)
+    view |> element("#audio-description-edit-text-#{description.id}") |> render_click()
+    assert {:cancel, _} = worker.perform(blocked_job)
+
+    assert_eventually(fn ->
+      has_element?(view, "#flash-error", ExhaustedAllowance.unavailable_notice())
+    end)
+
+    refute has_element?(view, "#subtitle-text-editor", ExhaustedAllowance.unavailable_notice())
   end
 
   test "audio downloads are attachments scoped to the current video", %{conn: conn} do

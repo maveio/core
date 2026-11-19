@@ -322,7 +322,12 @@ defmodule MaveCore.Assets do
   defp description_draft_document(_description, _body, _revision),
     do: {:error, :stale_document}
 
-  def save_subtitle_document(%Embed{} = embed, id, revision, texts)
+  def save_subtitle_document(embed, id, revision, texts) do
+    with {:ok, {subtitle, _body}} <- save_subtitle_revision(embed, id, revision, texts),
+         do: {:ok, subtitle}
+  end
+
+  def save_subtitle_revision(%Embed{} = embed, id, revision, texts)
       when is_map(texts) or is_list(texts) or is_binary(texts) do
     embed = Repo.preload(embed, [:space, :asset], force: true)
 
@@ -347,7 +352,7 @@ defmodule MaveCore.Assets do
              %{embed_id: embed.id, subtitle_id: updated.id, path: key}
              |> MaveCore.Workers.SubtitleJsonWorker.new()
              |> Oban.insert() do
-        updated
+        {updated, body}
       else
         nil -> Repo.rollback(:subtitle_not_found)
         false -> Repo.rollback(:stale_document)

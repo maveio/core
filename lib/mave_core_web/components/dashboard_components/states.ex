@@ -274,12 +274,14 @@ defmodule MaveCoreWeb.DashboardComponents.States do
   attr :percent, :float, required: true
   attr :class, :string, default: nil
 
+  slot :hint
+
   def usage_bar(assigns) do
     assigns = assign(assigns, :segments, usage_bar_segments(assigns.percent))
 
     ~H"""
     <div class={["flex-grow flex flex-col justify-center", @class]}>
-      <div class="text-stone-500 text-sm">{@label}</div>
+      <div class="flex items-center text-stone-500 text-sm">{@label}{render_slot(@hint)}</div>
       <div class="flex w-full h-0.5 mt-2.5 mb-1.5 overflow-hidden bg-stone-50 rounded-full">
         <div
           data-usage-segment="within-limit"

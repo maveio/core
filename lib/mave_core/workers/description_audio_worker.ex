@@ -40,6 +40,7 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
 
             Events.broadcast_updated(embed.space_id, embed.id, %{
               "description_audio" => "failed",
+              "insufficient_credit" => reason == :insufficient_ad_credit,
               "render_id" => id
             })
 
