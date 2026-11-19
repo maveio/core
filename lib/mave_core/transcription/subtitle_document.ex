@@ -13,6 +13,63 @@ defmodule MaveCore.Transcription.SubtitleDocument do
     end
   end
 
+  def validate_upload(body) when is_binary(body) and byte_size(body) <= 10_485_760 do
+    if String.valid?(body) and not String.contains?(body, <<0>>) do
+      [header | blocks] =
+        body
+        |> String.replace_prefix("\uFEFF", "")
+        |> String.replace(["\r\n", "\r"], "\n")
+        |> String.split(~r/\n[\t ]*\n(?:[\t ]*\n)*/, trim: false)
+
+      if Regex.match?(~r/\AWEBVTT(?:[ \t\n]|\z)/, header) and
+           not String.contains?(header, "-->") and valid_upload_blocks?(blocks) do
+        :ok
+      else
+        {:error, :invalid_vtt}
+      end
+    else
+      {:error, :invalid_vtt}
+    end
+  end
+
+  def validate_upload(_body), do: {:error, :invalid_vtt}
+
+  defp valid_upload_blocks?(blocks) do
+    Enum.reduce_while(blocks, false, fn block, has_cue ->
+      cond do
+        String.trim(block) == "" ->
+          {:cont, has_cue}
+
+        Regex.match?(~r/\A(?:NOTE(?:[ \t\n]|\z)|STYLE\n|REGION\n)/, block) ->
+          if String.contains?(block, "-->"), do: {:halt, false}, else: {:cont, has_cue}
+
+        valid_upload_cue?(block) ->
+          {:cont, true}
+
+        true ->
+          {:halt, false}
+      end
+    end)
+  end
+
+  defp valid_upload_cue?(block) do
+    lines = String.split(block, "\n", parts: 2)
+
+    [timing | payload] =
+      case lines do
+        [identifier, rest] ->
+          if String.contains?(identifier, "-->"),
+            do: lines,
+            else: String.split(rest, "\n", parts: 2)
+
+        _ ->
+          lines
+      end
+
+    Regex.match?(@timing, timing) and end_seconds(timing) > start_seconds(timing) and
+      not String.contains?(List.first(payload) || "", "-->")
+  end
+
   def parse_editor_vtt(body, duration, kind) do
     with {:ok, document} <- parse(body),
          false <- String.contains?(document.header, "-->"),
