@@ -2796,6 +2796,10 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         event: "edit_subtitle_text",
         value: %{id: subtitle.id}
       ),
+      menu_item("replace-subtitle-#{subtitle.id}", gettext("Replace VTT"), "hero-arrow-up-tray",
+        event: "replace_subtitle",
+        value: %{id: subtitle.id}
+      ),
       menu_item("delete-subtitle-#{subtitle.id}", gettext("Delete"), "hero-trash",
         event: "request_media_delete",
         value: %{kind: "subtitle", id: subtitle.id},

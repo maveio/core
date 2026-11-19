@@ -1631,6 +1631,24 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
                "description.vtt"
              )
 
+    assert {:ok, _} =
+             FlowStorageAdapterStub.put(
+               "mave-upload",
+               "invalid.vtt",
+               "WEBVTTjunk",
+               "text/vtt",
+               @upload_source_region
+             )
+
+    assert {:error, :invalid_vtt} =
+             Assets.ingest_uploaded_audio_description_vtt(
+               embed,
+               %{"subtitle_id" => first_id},
+               "mave-upload",
+               "invalid.vtt"
+             )
+
+    assert Repo.get!(AudioDescription, first_id).vtt_filename == replaced_vtt.vtt_filename
     refute replaced_vtt.vtt_filename == with_vtt.vtt_filename
     assert replaced_vtt.audio_origin == :uploaded
     assert replaced_vtt.audio_filename == replaced.audio_filename
@@ -2071,6 +2089,28 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
              FlowStorageAdapterStub.get("space-#{space.hash}", destination_key, space.region)
 
     assert subtitle_body =~ "WEBVTT"
+
+    assert {:ok, _} =
+             FlowStorageAdapterStub.put(
+               "mave-upload",
+               source_key,
+               "WEBVTT\n\ninvalid time range",
+               "text/vtt",
+               @upload_source_region
+             )
+
+    assert {:error, :invalid_vtt} =
+             Assets.ingest_uploaded_subtitle(
+               embed,
+               %{"language" => "nl", "subtitle_id" => subtitle_id},
+               "mave-upload",
+               source_key
+             )
+
+    assert {:ok, ^subtitle_body} =
+             FlowStorageAdapterStub.get("space-#{space.hash}", destination_key, space.region)
+
+    assert Repo.get!(Subtitle, subtitle_id) == subtitle
 
     assert {:ok, manifest_body} =
              FlowStorageAdapterStub.get(

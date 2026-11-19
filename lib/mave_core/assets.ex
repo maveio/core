@@ -718,9 +718,7 @@ defmodule MaveCore.Assets do
     with %AudioDescription{} = description <-
            get_audio_description_for_embed(attrs["subtitle_id"], embed),
          {:ok, body} <- storage.get(source_bucket, source_key, upload_source_storage_profile()),
-         true <-
-           is_binary(body) and String.valid?(body) and
-             String.starts_with?(String.trim_leading(body, "\uFEFF"), "WEBVTT"),
+         :ok <- SubtitleDocument.validate_upload(body),
          {:ok, _} <- storage.put_public(bucket, key, body, "text/vtt", region),
          {:ok, saved} <-
            description
@@ -734,7 +732,6 @@ defmodule MaveCore.Assets do
       {:ok, saved}
     else
       nil -> {:error, :audio_description_not_found}
-      false -> {:error, :invalid_vtt}
       {:error, _} = error -> error
     end
   end
@@ -1223,6 +1220,7 @@ defmodule MaveCore.Assets do
       subtitle_source_key(embed.hash, Embeds.current_video_version(embed), language)
 
     with {:ok, body} <- storage.get(source_bucket, source_key, source_region),
+         :ok <- SubtitleDocument.validate_upload(body),
          {:ok, _body} <-
            storage.put_public(
              destination_bucket,

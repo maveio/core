@@ -5,6 +5,25 @@ defmodule MaveCore.Transcription.SubtitleDocumentTest do
 
   @vtt "WEBVTT\nLanguage: en\n\nNOTE Keep this\n\nintro\n00:00:01.000 --> 00:00:03.000 align:start\n<v Speaker>Hello &amp; welcome</v>\n\n00:04.000 --> 00:06.000\nSecond line\n"
 
+  test "validates upload structure while accepting cue markup, metadata and alternate line endings" do
+    for newline <- ["\n", "\r\n", "\r"] do
+      assert :ok =
+               SubtitleDocument.validate_upload("\uFEFF" <> String.replace(@vtt, "\n", newline))
+    end
+
+    for body <- [
+          <<255>>,
+          "plain text",
+          "WEBVTTjunk",
+          "WEBVTT\n\nNOTE only",
+          @vtt <> <<0>>,
+          @vtt <> "\ninvalid block",
+          "WEBVTT\n\n00:03.000 --> 00:01.000\nCaption"
+        ] do
+      assert {:error, :invalid_vtt} = SubtitleDocument.validate_upload(body)
+    end
+  end
+
   test "edits text without changing timestamps, cue identifiers or settings" do
     assert {:ok, document} = SubtitleDocument.parse(@vtt)
 
