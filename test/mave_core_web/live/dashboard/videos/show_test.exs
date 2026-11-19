@@ -3844,6 +3844,21 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     refute Repo.get(Embed, folder.id)
   end
 
+  test "deleting a video returns to its immediate folder in the current space", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    outer = folder_embed_fixture(space, %{name: "Outer"})
+    inner = folder_embed_fixture(space, %{name: "Inner"})
+    video = video_embed_fixture(space, %{name: "Remove me"})
+    link_embed_to_folder(outer, inner)
+    link_embed_to_folder(inner, video)
+
+    {:ok, view, _} = live(conn, "/#{space.id}/videos/#{video.id}")
+    render_click(element(view, "#video-actions .cursor-pointer", "delete"))
+    destination = "/#{space.id}/videos/#{inner.id}"
+    assert {:error, {:live_redirect, %{to: ^destination}}} = render_click(element(view, "#dialog button", "confirm"))
+    assert Repo.get!(Embed, video.id).deleted_at
+  end
+
   test "/videos/:id delete failures show an error", %{conn: conn} do
     old_storage_module = Application.get_env(:mave_core, :storage_module)
     Application.put_env(:mave_core, :storage_module, FailingStorage)

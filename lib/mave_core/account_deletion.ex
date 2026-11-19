@@ -10,7 +10,30 @@ defmodule MaveCore.AccountDeletion do
   @callback requirements() :: [String.t()]
   @callback error_message(term()) :: String.t() | nil
 
-  @optional_callbacks enqueue_deleted_space_cleanup: 1, requirements: 0, error_message: 1
+  @callback settings_action(MaveCore.Accounts.User.t(), Space.t()) :: :account | :space | :hidden
+  @callback can_delete_subspace?(MaveCore.Accounts.User.t(), Space.t()) :: :ok | {:error, term()}
+  @callback has_subspaces?(Space.t()) :: boolean()
+
+  def has_subspaces?(space), do: call_backend(:has_subspaces?, [space], false)
+
+  def can_delete_subspace?(user, space),
+    do: call_backend(:can_delete_subspace?, [user, space], :ok)
+
+  @callback delete_subspace(MaveCore.Accounts.User.t(), Space.t()) ::
+              {:ok, Space.t()} | {:error, term()}
+
+  def settings_action(user, space), do: call_backend(:settings_action, [user, space], :account)
+
+  def delete_subspace(user, space),
+    do: call_backend(:delete_subspace, [user, space], {:error, :not_authorized})
+
+  @optional_callbacks has_subspaces?: 1,
+                      can_delete_subspace?: 2,
+                      settings_action: 2,
+                      delete_subspace: 2,
+                      enqueue_deleted_space_cleanup: 1,
+                      requirements: 0,
+                      error_message: 1
 
   def can_delete_space?(%Space{} = space) do
     case backend() do

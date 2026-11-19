@@ -741,32 +741,20 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   end
 
   def handle_event("confirm", _params, %{assigns: %{pending_action: :delete}} = socket) do
-    case Embeds.delete_embed(socket.assigns.resource_embed) do
-      {:ok, %Embed{type: :collection}} ->
-        {:noreply,
-         socket
-         |> push_navigate(
-           to:
-             videos_path(
-               socket.assigns.current_space,
-               socket.assigns.current_tab,
-               socket.assigns.route_scope
-             )
-         )
-         |> put_flash(:info, gettext("Folder deleted"))}
+    %{resource_embed: embed, current_space: space, current_tab: tab, route_scope: scope} =
+      socket.assigns
 
-      {:ok, _embed} ->
-        {:noreply,
-         socket
-         |> push_navigate(
-           to:
-             videos_path(
-               socket.assigns.current_space,
-               socket.assigns.current_tab,
-               socket.assigns.route_scope
-             )
-         )
-         |> put_flash(:info, gettext("Video deleted"))}
+    parent = if embed.type == :video, do: Embeds.parent_folder(embed, space)
+
+    case Embeds.delete_embed(embed) do
+      {:ok, deleted} ->
+        destination =
+          if parent,
+            do: video_path(space, Embeds.dashboard_embed_id(parent), tab, scope),
+            else: videos_path(space, tab, scope)
+
+        message = if deleted.type == :collection, do: gettext("Folder deleted"), else: gettext("Video deleted")
+        {:noreply, socket |> put_flash(:info, message) |> push_navigate(to: destination)}
 
       {:error, _reason} ->
         {:noreply,

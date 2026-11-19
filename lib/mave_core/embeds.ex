@@ -1337,7 +1337,8 @@ defmodule MaveCore.Embeds do
     end
   end
 
-  defp parent_folder(%Embed{id: embed_id}, %Space{} = space) when is_binary(embed_id) do
+  @doc "Returns the immediate folder containing an embed in this space."
+  def parent_folder(%Embed{id: embed_id}, %Space{} = space) when is_binary(embed_id) do
     from(ce in CollectionEmbed,
       join: e in Embed,
       on: e.collection_id == ce.collection_id,
@@ -1354,7 +1355,7 @@ defmodule MaveCore.Embeds do
     end
   end
 
-  defp parent_folder(_embed, _space), do: nil
+  def parent_folder(_embed, _space), do: nil
 
   defp do_folder_paths(nil, _space, acc, _visited), do: acc
 

@@ -247,7 +247,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.IndexTest do
     refute Accounts.get_user_by_email(user.email)
   end
 
-  test "/settings shows delete account eligibility errors in the first modal", %{conn: conn} do
+  test "/settings shows why account deletion is disabled", %{conn: conn} do
     {conn, space} = authenticated_conn(conn)
     user = Accounts.get_user_by_session_token(get_session(conn, :user_token))
 
@@ -255,22 +255,14 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.IndexTest do
 
     {:ok, view, _html} = live(conn, "/settings")
 
-    view
-    |> element("#settings-delete-account-button")
-    |> render_click()
+    assert has_element?(view, "#settings-delete-account-button[disabled]")
 
-    view
-    |> element("#delete_confirmation")
-    |> render_keyup(%{"value" => "DELETE"})
+    assert has_element?(
+             view,
+             "#delete-account-reason",
+             "You can only delete your account when you own a single space."
+           )
 
-    html =
-      view
-      |> element("#delete-account-submit")
-      |> render_click()
-
-    assert html =~ "delete-account-error"
-    assert html =~ "You can only delete your account when you own a single space."
-    assert html =~ "Delete account"
     stop_live_view(view)
     assert Repo.get!(Space, space.id).deleted_at == nil
     assert Accounts.get_user_by_email(user.email)

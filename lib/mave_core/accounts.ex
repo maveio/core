@@ -151,13 +151,13 @@ defmodule MaveCore.Accounts do
     end
   end
 
-  def delete_account_and_space(%User{} = user, %Space{} = space) do
-    Repo.transaction(fn -> delete_account_and_space_records(user, space) end)
+  def delete_account_and_space(%User{} = user, %Space{} = space, opts \\ []) do
+    Repo.transaction(fn -> delete_account_and_space_records(user, space, opts) end)
   end
 
-  defp delete_account_and_space_records(%User{} = user, %Space{} = space) do
+  defp delete_account_and_space_records(%User{} = user, %Space{} = space, opts) do
     with {:ok, current_space} <- lock_active_space(space.id),
-         :ok <- can_delete_account_and_space?(user, current_space),
+         :ok <- can_delete_account_and_space?(user, current_space, opts),
          {:ok, _space} <- Spaces.delete_space(current_space),
          {:ok, deleted_user} <- delete(user),
          {:ok, _job} <- enqueue_account_media_deletion(current_space),
@@ -192,11 +192,19 @@ defmodule MaveCore.Accounts do
     end
   end
 
-  def can_delete_account_and_space?(%User{} = user, %Space{} = space) do
-    case ensure_single_direct_membership(user, space) do
-      :ok -> Spaces.can_delete_space?(space)
-      {:error, _reason} = error -> error
+  def can_delete_account_and_space?(%User{} = user, %Space{} = space, opts \\ []) do
+    with :ok <- ensure_single_direct_membership(user, space),
+         :ok <- Spaces.can_delete_space?(space) do
+      if opts[:require_empty], do: ensure_no_videos(space), else: :ok
     end
+  end
+
+  def ensure_no_videos(%Space{id: id}) do
+    if Repo.exists?(
+         from(e in Embed, where: e.space_id == ^id and e.type == :video and is_nil(e.deleted_at))
+       ),
+       do: {:error, :videos_exist},
+       else: :ok
   end
 
   def delete(%User{} = user) do
