@@ -469,6 +469,9 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         notify_parent({:subtitle_translation_queued, socket.assigns.embed.id, target, job.state})
         {:noreply, assign(socket, :subtitle_form, nil)}
 
+      {:error, :automatic_subtitles_disabled} ->
+        {:noreply, put_flash(socket, :error, gettext("AI subtitles are turned off for this space."))}
+
       {:error, {:unavailable, message}} when is_binary(message) ->
         {:noreply, put_flash(socket, :error, message)}
 
@@ -3194,7 +3197,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             </div>
 
             <button
-              :if={@source}
+              :if={@current_space.automatic_subtitles_enabled && @source}
               id="generate-subtitle-translation"
               type="button"
               phx-click="translate_subtitle"

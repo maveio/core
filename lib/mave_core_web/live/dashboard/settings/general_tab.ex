@@ -19,6 +19,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
      |> assign(assigns)
      |> MaveCoreWeb.SpaceLiveAuth.attach_component()
      |> assign(:show_flow_settings, @show_flow_settings)
+     |> assign_new(:vocabulary_editor, fn -> nil end)
      |> assign_new(:show_link_domain, fn -> false end)
      |> assign_new(:show_delete_account, fn -> false end)
      |> assign_new(:show_confirm_delete, fn -> false end)
@@ -178,6 +179,57 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
                   enabled={@features.hotlink_protection}
                   disabled={@features.hotlink_protection_disabled}
                   phx-click="toggle_hotlink_protection"
+                  phx-target={@myself}
+                />
+              </div>
+            </:actions>
+          </.data_table_row>
+        </.data_table>
+      </div>
+
+      <.divider />
+      <.subtitle label={gettext("AI")} icon="hero-sparkles" />
+      <div class="mt-6">
+        <.data_table>
+          <.data_table_row id="automatic-subtitles-feature">
+            <div class="w-full">
+              <div class="flex items-center">
+                <span>{gettext("AI subtitles")}</span>
+                <.info_hover>
+                  {gettext("New uploads get subtitles in the original language and English.")}
+                  {Map.get(
+                    UsageLimits.restriction_copy(:subtitle_translation, :additional_languages),
+                    :help,
+                    gettext("Generate extra languages on demand.")
+                  )}
+                </.info_hover>
+              </div>
+              <div
+                :if={@current_space.automatic_subtitles_enabled}
+                id="subtitle-vocabulary-setting"
+                class="mt-1 flex items-baseline gap-2 text-xs text-stone-400"
+              >
+                <span>{gettext("Custom vocabulary")}</span>
+                <.dash_button
+                  id="edit-subtitle-vocabulary"
+                  variant="link"
+                  type="button"
+                  class="!py-0 !text-xs"
+                  aria-label={gettext("Edit custom vocabulary")}
+                  phx-click="open_modal"
+                  phx-value-modal="subtitle_vocabulary"
+                  phx-target={@myself}
+                >
+                  {gettext("Edit")}
+                </.dash_button>
+              </div>
+            </div>
+            <:actions>
+              <div class="p-4">
+                <.toggle
+                  id="automatic-subtitles-toggle"
+                  enabled={@current_space.automatic_subtitles_enabled}
+                  phx-click="toggle_automatic_subtitles"
                   phx-target={@myself}
                 />
               </div>
@@ -356,6 +408,45 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
         </.data_table>
       </div>
 
+      <.modal
+        :if={@current_space.automatic_subtitles_enabled}
+        id="subtitle-vocabulary-modal"
+        show={@vocabulary_editor != nil}
+        title={gettext("Custom vocabulary")}
+        on_cancel={JS.push("close_modal", value: %{modal: "subtitle_vocabulary"}, target: @myself)}
+      >
+        <.form
+          :if={@vocabulary_editor}
+          for={@vocabulary_editor}
+          id="subtitle-vocabulary-form"
+          phx-submit="save_subtitle_vocabulary"
+          phx-target={@myself}
+        >
+          <.info_box>
+            {gettext(
+              "Help AI subtitles recognize names. If you say “mave” and the subtitles show “Maeve”, enter “mave” below."
+            )}
+          </.info_box>
+          <div class="mt-8">
+            <.input
+              type="textarea"
+              field={@vocabulary_editor[:terms]}
+              label={gettext("Correct spellings")}
+              rows="7"
+              placeholder="mave"
+              aria-describedby="subtitle-vocabulary-help"
+              class="w-full rounded-md bg-white p-3 text-sm text-stone-700 ring-1 ring-inset ring-stone-200 focus:ring-blue-400"
+            />
+          </div>
+          <p id="subtitle-vocabulary-help" class="mt-2 text-xs text-stone-500">
+            {gettext("One name or term per line. Up to 25 entries.")}
+          </p>
+          <div class="mt-10 flex justify-end">
+            <.dash_button type="submit" variant="primary">{gettext("Save")}</.dash_button>
+          </div>
+        </.form>
+      </.modal>
+
       <%!-- Link Domain Modal --%>
       <.modal
         id="link-domain-modal"
@@ -493,6 +584,38 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
     {:noreply, toggle_modal(socket, modal, false)}
   end
 
+  def handle_event("save_subtitle_vocabulary", %{"vocabulary" => %{"terms" => text}}, socket) do
+    case Spaces.update_subtitle_vocabulary(socket.assigns.current_space, text) do
+      {:ok, space} ->
+        {:noreply,
+         socket
+         |> assign(:vocabulary_editor, nil)
+         |> notify_parent(space)
+         |> assign(:current_space, space)
+         |> reload_state()}
+
+      {:error, :invalid_vocabulary} ->
+        form =
+          to_form(%{"terms" => text},
+            as: :vocabulary,
+            errors: [
+              terms:
+                {gettext(
+                   "Use up to 25 names or terms, each at most 80 characters, using letters, numbers and common name punctuation."
+                 ), []}
+            ]
+          )
+
+        {:noreply, assign(socket, :vocabulary_editor, form)}
+
+      {:error, :disabled} ->
+        {:noreply,
+         socket
+         |> assign(:vocabulary_editor, nil)
+         |> put_flash(:error, gettext("AI subtitles are turned off for this space."))}
+    end
+  end
+
   def handle_event("submit_link_domain", %{"domain" => params}, socket) do
     case Spaces.create_domain(socket.assigns.current_space, params) do
       {:ok, _domain} ->
@@ -545,6 +668,21 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
 
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, gettext("Could not update hotlink protection."))}
+    end
+  end
+
+  def handle_event("toggle_automatic_subtitles", _params, socket) do
+    space = socket.assigns.current_space
+
+    case Spaces.update_space_features(space, %{
+           automatic_subtitles_enabled: !space.automatic_subtitles_enabled
+         }) do
+      {:ok, updated} ->
+        {:noreply,
+         socket |> notify_parent(updated) |> assign(:current_space, updated) |> reload_state()}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Could not update automatic subtitles."))}
     end
   end
 
@@ -740,6 +878,18 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
   defp new_domain_form do
     to_form(Spaces.change_domain(%Domain{}, %{}), as: :domain)
   end
+
+  defp toggle_modal(socket, "subtitle_vocabulary", true) do
+    form =
+      to_form(%{"terms" => Enum.join(socket.assigns.current_space.subtitle_vocabulary, "\n")},
+        as: :vocabulary
+      )
+
+    assign(socket, :vocabulary_editor, form)
+  end
+
+  defp toggle_modal(socket, "subtitle_vocabulary", false),
+    do: assign(socket, :vocabulary_editor, nil)
 
   defp toggle_modal(socket, "link_domain", visible),
     do: assign(socket, :show_link_domain, visible)

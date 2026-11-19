@@ -9,6 +9,8 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
   """
   @behaviour MaveCore.Flow.Step
 
+  alias MaveCore.AudioDescription
+  alias MaveCore.Transcription.SubtitleDocument
   alias MaveCore.Embeds.SettingsSerializer
   alias MaveCore.Flow.Steps.Support, as: StepSupport
   alias MaveCore.Languages
@@ -17,7 +19,23 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
   alias MaveCore.Transcription.SubtitleCues
 
   @impl true
-  def run(step_definition, context) do
+  def run(step, %{run_input: %{"automatic_subtitles_enabled" => false} = input} = context) do
+    if AudioDescription.requested?(input) do
+      transcribe(step, context)
+    else
+      {:ok,
+       %{
+         "step_id" => step["id"] || "transcribe_audio",
+         "step_type" => "ai.transcribe_audio",
+         "status" => "skipped",
+         "reason" => "automatic subtitles disabled"
+       }, []}
+    end
+  end
+
+  def run(step, context), do: transcribe(step, context)
+
+  defp transcribe(step_definition, context) do
     run_input = Map.get(context, :run_input, %{})
     params = Map.get(step_definition, "params", %{})
     source_output = Map.get(Map.get(context, :dependency_outputs, %{}), "source", %{})
@@ -66,8 +84,85 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
              transcode_audio_output,
              transcription_text
            ),
-         label = normalize_label(Map.get(run_input, "transcription_label"), language),
-         {:ok, key} <- build_subtitle_key(embed_hash, version, language),
+         label = normalize_label(Map.get(run_input, "transcription_label"), language) do
+      output =
+        mode_meta
+        |> Map.merge(%{
+          "status" => "ok",
+          "step_type" => "ai.transcribe_audio",
+          "step_id" => step_id,
+          "mode" => mode,
+          "language" => language,
+          "transcription_language" => language,
+          "transcription_language_source" => language_source,
+          "transcription_language_detection_attempted" => detection_attempted?
+        })
+
+      if run_input["automatic_subtitles_enabled"] == false do
+        store_ad_transcript(
+          storage_adapter,
+          bucket,
+          embed_hash,
+          version,
+          region,
+          subtitle_json,
+          subtitle_body,
+          output
+        )
+      else
+        publish_subtitles(
+          storage_adapter,
+          bucket,
+          space_hash,
+          embed_hash,
+          version,
+          region,
+          language,
+          label,
+          subtitle_body,
+          subtitle_json,
+          output
+        )
+      end
+    end
+    |> case do
+      {:error, reason} when strict? -> {:error, {:ai_transcribe_audio_failed, reason}}
+      {:error, reason} -> {:ok, unavailable_output(step_id, reason), []}
+      result -> result
+    end
+  end
+
+  defp store_ad_transcript(storage, bucket, hash, version, region, json, vtt, output) do
+    key =
+      "#{AudioDescription.work_prefix(hash, StepSupport.normalize_version(version))}/transcript.json"
+
+    with {:ok, json} <- transcript_json(json, vtt),
+         {:ok, _} <- storage.put(bucket, key, json, "application/json", region) do
+      {:ok, Map.put(output, "ad_transcript_key", key), []}
+    end
+  end
+
+  defp transcript_json(json, _) when is_binary(json), do: {:ok, json}
+
+  defp transcript_json(nil, vtt) do
+    with {:ok, doc} <- SubtitleDocument.parse(vtt),
+         do: {:ok, SubtitleDocument.transcript_json(doc, %{})}
+  end
+
+  defp publish_subtitles(
+         storage_adapter,
+         bucket,
+         space_hash,
+         embed_hash,
+         version,
+         region,
+         language,
+         label,
+         subtitle_body,
+         subtitle_json,
+         output
+       ) do
+    with {:ok, key} <- build_subtitle_key(embed_hash, version, language),
          {:ok, uri} <- put_subtitle(storage_adapter, bucket, key, subtitle_body, region),
          {:ok, json_output} <-
            maybe_put_subtitle_json(
@@ -91,25 +186,14 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
       }
 
       output =
-        %{
-          "status" => "ok",
-          "step_type" => "ai.transcribe_audio",
-          "mode" => mode,
-          "step_id" => step_id,
-          "language" => language,
+        output
+        |> Map.merge(json_output)
+        |> Map.merge(%{
           "subtitle_key" => key,
           "subtitle_uri" => uri,
-          "subtitle_json_key" => json_output["subtitle_json_key"],
-          "subtitle_json_uri" => json_output["subtitle_json_uri"],
-          "subtitle_default_json_key" => json_output["subtitle_default_json_key"],
-          "subtitle_default_json_uri" => json_output["subtitle_default_json_uri"],
           "subtitle" => subtitle,
           "subtitles" => [subtitle]
-        }
-        |> Map.merge(mode_meta)
-        |> Map.put("transcription_language", language)
-        |> Map.put("transcription_language_source", language_source)
-        |> Map.put("transcription_language_detection_attempted", detection_attempted?)
+        })
 
       artifacts =
         [
@@ -129,12 +213,6 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
         ] ++ subtitle_json_artifacts(json_output, language, size, space_hash, embed_hash, version)
 
       {:ok, output, artifacts}
-    else
-      {:error, reason} when strict? ->
-        {:error, {:ai_transcribe_audio_failed, reason}}
-
-      {:error, reason} ->
-        {:ok, unavailable_output(step_id, reason), []}
     end
   end
 
@@ -180,7 +258,8 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
           transcription_provider,
           bucket,
           region,
-          requested_language
+          language: requested_language,
+          vocabulary: run_input["subtitle_vocabulary"] || []
         )
     end
   end
@@ -192,7 +271,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
          transcription_provider,
          bucket,
          region,
-         requested_language
+         provider_options
        ) do
     with {:ok, audio_key} <- transcode_audio_key(transcode_audio_output),
          {:ok, transcription, transcription_input} <-
@@ -202,7 +281,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
              bucket,
              audio_key,
              region,
-             requested_language
+             provider_options
            ),
          {:ok, vtt_body} <- transcription_to_vtt(transcription, inspect_output),
          {:ok, subtitle_json} <- transcription_to_json(transcription, inspect_output) do
@@ -223,13 +302,14 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
          bucket,
          audio_key,
          region,
-         requested_language
+         provider_options
        ) do
-    opts = [
-      filename: Path.basename(audio_key),
-      content_type: content_type_for_path(audio_key),
-      language: requested_language
-    ]
+    opts =
+      provider_options ++
+        [
+          filename: Path.basename(audio_key),
+          content_type: content_type_for_path(audio_key)
+        ]
 
     case transcribe_audio_url(transcription_provider, bucket, audio_key, opts) do
       {:ok, transcription} ->

@@ -46,11 +46,40 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.AudioDescriptionSettingTest do
     assert has_element?(view, "#audio-description-feature")
     refute has_element?(view, "#audio-description-notice")
 
+    assert space.automatic_subtitles_enabled
+    refute space.audio_description_enabled
+    view |> element("#automatic-subtitles-toggle") |> render_click()
+    refute Repo.get!(Space, space.id).automatic_subtitles_enabled
+
     view |> element("#audio-description-toggle") |> render_click()
     assert Repo.get!(Space, space.id).audio_description_enabled
+    refute Repo.get!(Space, space.id).automatic_subtitles_enabled
 
     view |> element("#audio-description-toggle") |> render_click()
     refute Repo.get!(Space, space.id).audio_description_enabled
+  end
+
+  test "edits custom vocabulary for this space while AI subtitles are enabled", %{conn: conn} do
+    {conn, space} = authenticated_conn(conn)
+    {:ok, view, _} = live(conn, "/settings")
+    view |> element("#edit-subtitle-vocabulary") |> render_click()
+
+    form = fn text ->
+      view |> form("#subtitle-vocabulary-form", vocabulary: %{terms: text}) |> render_submit()
+    end
+
+    form.("Open Science\nKB\n kb ")
+    assert Repo.get!(Space, space.id).subtitle_vocabulary == ["Open Science", "KB"]
+    view |> element("#edit-subtitle-vocabulary") |> render_click()
+    assert has_element?(view, "#subtitle-vocabulary-form textarea", "Open Science")
+    form.(String.duplicate("x", 81))
+    assert has_element?(view, "#subtitle-vocabulary-form", "up to 25")
+    assert Repo.get!(Space, space.id).subtitle_vocabulary == ["Open Science", "KB"]
+    form.("")
+    assert Repo.get!(Space, space.id).subtitle_vocabulary == []
+    view |> element("#automatic-subtitles-toggle") |> render_click()
+    refute has_element?(view, "#edit-subtitle-vocabulary")
+    assert {:error, :disabled} = MaveCore.Spaces.update_subtitle_vocabulary(space, "Example")
   end
 
   test "shows the host's notice and keeps the toggle off when not allowed", %{conn: conn} do

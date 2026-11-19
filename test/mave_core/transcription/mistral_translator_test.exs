@@ -15,11 +15,7 @@ defmodule MaveCore.Transcription.MistralTranslatorTest do
             "choices" => [
               %{
                 "message" => %{
-                  "content" =>
-                    Jason.encode!([
-                      %{"id" => 0, "text" => "Hello world"},
-                      %{"id" => 1, "text" => "Another sentence"}
-                    ])
+                  "content" => Jason.encode!(%{"1" => "Another sentence", "0" => "Hello world"})
                 }
               }
             ]
@@ -91,7 +87,8 @@ defmodule MaveCore.Transcription.MistralTranslatorTest do
     assert body["model"] == "mistral-medium-latest"
     assert body["temperature"] == 0.1
     assert [%{"role" => "user", "content" => prompt}] = body["messages"]
-    assert prompt =~ "Source language: nl"
+    assert get_in(body, ["response_format", "json_schema", "schema", "required"]) == ["0", "1"]
+    assert prompt =~ "Source language hint: Dutch"
     assert prompt =~ "Hallo wereld"
     assert req.options[:receive_timeout] == 10 * 60 * 1000
     assert req.options[:finch][:pool_timeout] == 30_000

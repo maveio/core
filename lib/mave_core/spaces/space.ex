@@ -11,6 +11,8 @@ defmodule MaveCore.Spaces.Space do
     field :region, :string
     field :public_sharing_enabled, :boolean
     field :hotlink_protection_enabled, :boolean
+    field :subtitle_vocabulary, {:array, :string}, default: []
+    field :automatic_subtitles_enabled, :boolean, default: true
     field :audio_description_enabled, :boolean, default: false
     field :default_flow_template, :string
     field :deleted_at, :utc_datetime_usec
@@ -37,7 +39,7 @@ defmodule MaveCore.Spaces.Space do
 
   def features_changeset(space, attrs) do
     space
-    |> cast(attrs, [:hotlink_protection_enabled, :audio_description_enabled])
+    |> cast(attrs, [:hotlink_protection_enabled, :automatic_subtitles_enabled, :audio_description_enabled])
     |> validate_shared_storage_features()
   end
 
