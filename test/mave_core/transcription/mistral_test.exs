@@ -92,6 +92,37 @@ defmodule MaveCore.Transcription.MistralTest do
     assert req.options[:max_retries] == 3
   end
 
+  test "sends vocabulary as context_bias" do
+    Req.default_options(adapter: RequestAdapter)
+
+    assert {:ok, _transcription} =
+             Mistral.transcribe_url("https://example.com/audio.mp3",
+               context: ["Mave", "Hovercraft"]
+             )
+
+    assert_receive {:mistral_request, req}
+    assert Jason.decode!(req.body)["context_bias"] == ["Mave", "Hovercraft"]
+
+    assert {:ok, _transcription} =
+             Mistral.transcribe_url("https://example.com/audio.mp3", context: [])
+
+    assert_receive {:mistral_request, req}
+    refute Map.has_key?(Jason.decode!(req.body), "context_bias")
+  end
+
+  test "transcribes without vocabulary when the provider rejects it" do
+    Req.default_options(adapter: RetryAdapter, retry_delay: fn _ -> 0 end, retry_log_level: false)
+    Process.put(:mistral_responses, [422])
+
+    assert {:ok, %{text: "Hello world"}} =
+             Mistral.transcribe_url("https://example.com/audio.mp3", context: ["Mave"])
+
+    assert_receive {:retry_request, rejected}
+    assert_receive {:mistral_request, accepted}
+    assert Jason.decode!(rejected.body)["context_bias"] == ["Mave"]
+    refute Map.has_key?(Jason.decode!(accepted.body), "context_bias")
+  end
+
   test "URL transcription recovers after transient HTTP and transport failures" do
     Req.default_options(adapter: RetryAdapter, retry_delay: fn _ -> 0 end, retry_log_level: false)
     Process.put(:mistral_responses, [503, 429, %Req.TransportError{reason: :timeout}])

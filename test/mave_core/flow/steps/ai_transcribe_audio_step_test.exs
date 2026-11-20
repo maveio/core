@@ -235,6 +235,51 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
     assert output["subtitle_key"] == "LeDE9v86ye/subtitle_en.vtt"
   end
 
+  test "passes the step's vocabulary to the provider" do
+    Application.put_env(
+      :mave_core,
+      :transcription_provider,
+      __MODULE__.UrlTranscriptionProviderStub
+    )
+
+    original_public_cdn_host = Application.get_env(:mave_core, :public_cdn_host)
+    Application.put_env(:mave_core, :public_cdn_host, "video-dns.com")
+    on_exit(fn -> restore_env(:public_cdn_host, original_public_cdn_host) end)
+
+    step_definition = %{
+      "id" => "transcribe_audio",
+      "type" => "ai.transcribe_audio",
+      "params" => %{"context" => "Mave, Hovercraft Studio\nmave"}
+    }
+
+    context = %{
+      run_input: %{"space_hash" => "ubg50", "embed_hash" => "LeDE9v86ye", "version" => 0},
+      dependency_outputs: %{
+        "inspect_media" => %{"duration" => 8.0},
+        "transcode_audio" => %{"key" => "LeDE9v86ye/audio.mp3"}
+      }
+    }
+
+    assert {:ok, output, _artifacts} = AiTranscribeAudioStep.run(step_definition, context)
+    assert_receive {:transcribe_url_called, _url, opts}
+
+    assert opts[:context] == ["Mave", "Hovercraft", "Studio"]
+    assert output["transcription_context_terms"] == 3
+  end
+
+  test "sends no vocabulary unless the step has a context" do
+    assert AiTranscribeAudioStep.context_terms(%{}) == []
+    assert AiTranscribeAudioStep.context_terms(%{"context" => "  "}) == []
+    assert AiTranscribeAudioStep.context_terms(%{"context" => 42}) == []
+
+    terms =
+      AiTranscribeAudioStep.context_terms(%{
+        "context" => Enum.map_join(1..150, ", ", &"term#{&1}")
+      })
+
+    assert length(terms) == 100
+  end
+
   test "falls back to the default audio track language when provider omits language" do
     step_definition = %{
       "id" => "transcribe_audio",

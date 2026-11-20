@@ -10,7 +10,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.Index do
   alias MaveCore.Spaces.Domain
   alias MaveCore.Spaces.Events, as: SpaceEvents
   alias MaveCore.Spaces.Space
-  alias MaveCoreWeb.Dashboard.Settings.{DeveloperTab, GeneralTab, TeamTab}
+  alias MaveCoreWeb.Dashboard.Settings.{DeveloperTab, EncodingTab, GeneralTab, TeamTab}
   alias MaveCoreWeb.DashboardRoutes
 
   def mount(_params, _session, socket) do
@@ -114,6 +114,13 @@ defmodule MaveCoreWeb.Dashboard.Settings.Index do
             {gettext("Team")}
           </.menubar_item>
           <.menubar_item
+            icon="hero-adjustments-horizontal-solid"
+            path={DashboardRoutes.settings_path(@current_space, :encoding, scope: @route_scope)}
+            active={@live_action == :encoding}
+          >
+            {gettext("Encoding")}
+          </.menubar_item>
+          <.menubar_item
             :for={tab <- @extra_tabs}
             icon={tab.icon}
             path={DashboardRoutes.settings_path(@current_space, tab.id, scope: @route_scope)}
@@ -142,6 +149,15 @@ defmodule MaveCoreWeb.Dashboard.Settings.Index do
               <.live_component
                 module={TeamTab}
                 id="team-tab"
+                current_space={@current_space}
+                current_user={@current_user}
+                space_access_context={@space_access_context}
+                refresh_key={@settings_refresh_key}
+              />
+            <% :encoding -> %>
+              <.live_component
+                module={EncodingTab}
+                id="encoding-tab"
                 current_space={@current_space}
                 current_user={@current_user}
                 space_access_context={@space_access_context}

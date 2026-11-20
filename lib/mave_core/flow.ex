@@ -20,6 +20,7 @@ defmodule MaveCore.Flow do
     Events,
     ExecutionMetadata,
     FairQueue,
+    Pipelines,
     ProgressReporter,
     RetryPolicy,
     Run,
@@ -135,6 +136,7 @@ defmodule MaveCore.Flow do
       Template
       |> order_by([template], asc: template.name, asc: template.slug)
       |> Repo.all()
+      |> Enum.reject(&Pipelines.derived_slug?(&1.slug))
       |> Enum.map(fn template ->
         base = Map.get(preset_map, template.slug, %{})
 
@@ -187,6 +189,22 @@ defmodule MaveCore.Flow do
     |> Repo.preload([:flow_template, :flow_version, :step_runs, :artifact_refs])
   end
 
+  @doc """
+  The template and newest active version behind a slug or id. Built-in presets
+  are installed or updated first, as `start_run/3` does.
+  """
+  def fetch_active_version(template_selector) do
+    with :ok <- maybe_sync_builtin_preset(template_selector),
+         {:ok, template} <- fetch_template(template_selector),
+         {:ok, version} <- fetch_latest_active_version(template.id) do
+      {:ok, template, version}
+    end
+  end
+
+  @doc "Checksum that identifies a definition among the versions of a template."
+  def definition_checksum(definition) when is_map(definition),
+    do: checksum_for_definition(definition)
+
   def create_template(attrs) when is_map(attrs) do
     %Template{}
     |> Template.changeset(attrs)
@@ -234,6 +252,8 @@ defmodule MaveCore.Flow do
     with :ok <- maybe_sync_builtin_preset(template_selector),
          {:ok, template} <- fetch_template(template_selector),
          {:ok, version} <- fetch_version(template.id, opts) do
+      {template, version} = Pipelines.for_run(template, version, opts)
+
       Repo.transaction(fn -> create_started_run(template, version, input, enqueue?) end)
       |> unwrap_transaction()
       |> case do

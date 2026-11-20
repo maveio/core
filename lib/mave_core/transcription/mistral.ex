@@ -11,7 +11,10 @@ defmodule MaveCore.Transcription.Mistral do
     granularity = timestamp_granularity(model, opts)
 
     with {:ok, api_key} <- fetch_api_key(),
-         {:ok, response} <- request_transcription(audio_body, api_key, opts, model, granularity),
+         {:ok, response} <-
+           with_context_fallback(context_bias(opts), fn context ->
+             request_transcription(audio_body, api_key, opts, model, granularity, context)
+           end),
          {:ok, transcription} <- normalize_response(response.body, granularity) do
       {:ok, transcription}
     else
@@ -25,12 +28,39 @@ defmodule MaveCore.Transcription.Mistral do
     granularity = timestamp_granularity(model, opts)
 
     with {:ok, api_key} <- fetch_api_key(),
-         {:ok, response} <- request_transcription_url(file_url, api_key, model, granularity),
+         {:ok, response} <-
+           with_context_fallback(context_bias(opts), fn context ->
+             request_transcription_url(file_url, api_key, model, granularity, context)
+           end),
          {:ok, transcription} <- normalize_response(response.body, granularity) do
       {:ok, transcription}
     else
       {:error, _reason} = error ->
         error
+    end
+  end
+
+  # `:context` carries vocabulary terms (see the transcription step). Mistral
+  # accepts them as `context_bias`.
+  defp context_bias(opts) do
+    case Keyword.get(opts, :context) do
+      terms when is_list(terms) -> Enum.filter(terms, &(is_binary(&1) and &1 != ""))
+      _ -> []
+    end
+  end
+
+  # Vocabulary only improves spelling. When the provider rejects it, for
+  # example because the configured model has no context biasing, transcribe
+  # without it rather than losing the subtitles.
+  defp with_context_fallback([], request), do: request.([])
+
+  defp with_context_fallback(context, request) do
+    case request.(context) do
+      {:error, {:mistral_request_failed, status, _body}} when status in [400, 422] ->
+        request.([])
+
+      result ->
+        result
     end
   end
 
@@ -41,7 +71,7 @@ defmodule MaveCore.Transcription.Mistral do
     end
   end
 
-  defp request_transcription(audio_body, api_key, opts, model, granularity) do
+  defp request_transcription(audio_body, api_key, opts, model, granularity, context) do
     filename = Keyword.get(opts, :filename, "audio.mp3")
     content_type = Keyword.get(opts, :content_type, "audio/mpeg")
 
@@ -50,17 +80,19 @@ defmodule MaveCore.Transcription.Mistral do
         {"file", {audio_body, filename: filename, content_type: content_type}},
         {"model", model},
         {"timestamp_granularities", granularity}
-      ]
+      ] ++ Enum.map(context, &{"context_bias", &1})
 
     request(multipart, api_key, :form_multipart)
   end
 
-  defp request_transcription_url(file_url, api_key, model, granularity) do
+  defp request_transcription_url(file_url, api_key, model, granularity, context) do
     body = %{
       "file_url" => file_url,
       "model" => model,
       "timestamp_granularities" => [granularity]
     }
+
+    body = if context == [], do: body, else: Map.put(body, "context_bias", context)
 
     request(body, api_key, :json)
   end

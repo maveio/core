@@ -262,6 +262,7 @@ defmodule MaveCoreWeb.Router do
       live "/settings", Dashboard.Settings.Index, :general
       live "/settings/developer", Dashboard.Settings.Index, :developer
       live "/settings/team", Dashboard.Settings.Index, :team
+      live "/settings/encoding", Dashboard.Settings.Index, :encoding
       live "/settings/:tab", Dashboard.Settings.Index, :custom_tab
     end
   end
@@ -292,6 +293,7 @@ defmodule MaveCoreWeb.Router do
       live "/:space_id/settings", Dashboard.Settings.Index, :general
       live "/:space_id/settings/developer", Dashboard.Settings.Index, :developer
       live "/:space_id/settings/team", Dashboard.Settings.Index, :team
+      live "/:space_id/settings/encoding", Dashboard.Settings.Index, :encoding
       live "/:space_id/settings/:tab", Dashboard.Settings.Index, :custom_tab
     end
   end

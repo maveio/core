@@ -6,6 +6,10 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
   - `run_input["transcription_vtt"]` can provide raw VTT
   - `run_input["transcription_text"]` generates a simple single-cue VTT
   - `run_input["transcription_segments"]` can provide a list of `%{"start","end","text"}`
+
+  The `context` step parameter holds names and terms (for example a company
+  name) that the provider should spell correctly. Providers receive them as the
+  `:context` option and may ignore it.
   """
   @behaviour MaveCore.Flow.Step
 
@@ -57,7 +61,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
              transcription_provider,
              bucket,
              region,
-             requested_language
+             %{language: requested_language, context: context_terms(params)}
            ),
          {language, language_source, detection_attempted?} =
            subtitle_language(
@@ -146,7 +150,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
          transcription_provider,
          bucket,
          region,
-         requested_language
+         %{language: requested_language} = request
        ) do
     cond do
       is_binary(run_input["transcription_vtt"]) and run_input["transcription_vtt"] != "" ->
@@ -180,7 +184,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
           transcription_provider,
           bucket,
           region,
-          requested_language
+          request
         )
     end
   end
@@ -192,7 +196,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
          transcription_provider,
          bucket,
          region,
-         requested_language
+         request
        ) do
     with {:ok, audio_key} <- transcode_audio_key(transcode_audio_output),
          {:ok, transcription, transcription_input} <-
@@ -202,7 +206,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
              bucket,
              audio_key,
              region,
-             requested_language
+             request
            ),
          {:ok, vtt_body} <- transcription_to_vtt(transcription, inspect_output),
          {:ok, subtitle_json} <- transcription_to_json(transcription, inspect_output) do
@@ -212,6 +216,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
         transcription
         |> provider_mode_meta(transcription_provider)
         |> Map.put("transcription_input", transcription_input)
+        |> Map.put("transcription_context_terms", length(request.context))
 
       {:ok, vtt_body, subtitle_json, "mistral", meta, language, transcription[:text]}
     end
@@ -223,12 +228,13 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
          bucket,
          audio_key,
          region,
-         requested_language
+         request
        ) do
     opts = [
       filename: Path.basename(audio_key),
       content_type: content_type_for_path(audio_key),
-      language: requested_language
+      language: request.language,
+      context: request.context
     ]
 
     case transcribe_audio_url(transcription_provider, bucket, audio_key, opts) do
@@ -242,6 +248,27 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
         end
     end
   end
+
+  @max_context_terms 100
+  @max_context_term_length 60
+
+  @doc """
+  Vocabulary terms from the step's `context` parameter.
+
+  The text is split into single words, since transcription providers bias
+  towards individual spellings; duplicates and overly long words are dropped
+  and at most #{@max_context_terms} terms are kept.
+  """
+  def context_terms(%{"context" => context}) when is_binary(context) do
+    context
+    |> String.split(~r/[\s,;]+/u, trim: true)
+    |> Enum.map(&String.trim(&1, "\"'.()[]"))
+    |> Enum.filter(&(&1 != "" and String.length(&1) <= @max_context_term_length))
+    |> Enum.uniq_by(&String.downcase/1)
+    |> Enum.take(@max_context_terms)
+  end
+
+  def context_terms(_params), do: []
 
   defp transcribe_audio_url(transcription_provider, bucket, audio_key, opts) do
     if function_exported?(transcription_provider, :transcribe_url, 2) do

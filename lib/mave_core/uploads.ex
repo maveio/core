@@ -266,7 +266,13 @@ defmodule MaveCore.Uploads do
              embed_hash,
              embed
            ),
-         {:ok, flow_run} <- start_run(template_selector, run_input, metadata) do
+         {:ok, flow_run} <-
+           start_run(
+             template_selector,
+             run_input,
+             metadata,
+             pipeline_space(upload_space(embed, space_hash), metadata)
+           ) do
       {:ok,
        %{
          flow_run_id: flow_run.id,
@@ -756,8 +762,17 @@ defmodule MaveCore.Uploads do
     end
   end
 
-  defp start_run(template_selector, run_input, metadata) do
-    opts = [enqueue: parse_enqueue(present(metadata, "enqueue"))]
+  # An upload that names its own template is an explicit override and runs that
+  # template as is; otherwise the space's pipeline applies.
+  defp pipeline_space(space, metadata) do
+    if present(metadata, "template") || present(metadata, "template_slug"), do: nil, else: space
+  end
+
+  defp start_run(template_selector, run_input, metadata, pipeline_space) do
+    opts = [
+      enqueue: parse_enqueue(present(metadata, "enqueue")),
+      space_pipeline: pipeline_space
+    ]
 
     case Flow.start_run(template_selector, run_input, opts) do
       {:ok, flow_run} ->
