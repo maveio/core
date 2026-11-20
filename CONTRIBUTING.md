@@ -197,6 +197,8 @@ Technical reference, as needed:
 - [Encoding boosters](deploy/encoding-booster/README.md): optional remote compute;
   not needed for the single-host installation.
 - [Analytics benchmarks](docs/analytics-benchmarks.md): tooling and its limitations.
+- [Encoding benchmarks](docs/encoding-benchmarks.md): compare encoder settings on
+  quality, size, time and playback compatibility.
 
 Media parsers in the Docker images require Linux Landlock and seccomp. Native
 macOS development has no OS parser sandbox; use Docker for untrusted uploads.
