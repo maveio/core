@@ -1,0 +1,6 @@
+# Takes precedence over the pull request's own .dockerignore, which is
+# untrusted and excludes the tests and Git history the sandbox needs.
+/_build/
+/deps/
+/assets/node_modules/
+/priv/static/assets/

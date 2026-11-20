@@ -1,0 +1,88 @@
+# Runtime topology for AI pull-request testing: the sandbox and the throwaway
+# services its tests need share one internal network without a route to the
+# internet or the host. Nothing here mounts host paths, publishes ports or
+# receives credentials; the service passwords are the public test defaults.
+#
+# Pull-request code can reach the services, so they are confined like the
+# sandbox itself: unprivileged users, no capabilities, no privilege escalation.
+name: mave-ai-sandbox
+
+x-confined: &confined
+  networks: [sandbox]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: "no"
+
+services:
+  postgres:
+    <<: *confined
+    image: postgres:17.11-alpine3.23
+    user: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    tmpfs: ["/var/lib/postgresql/data:uid=70,gid=70,mode=0700", "/var/run/postgresql:uid=70,gid=70"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  clickhouse:
+    <<: *confined
+    image: clickhouse/clickhouse-server:25.8.33-alpine
+    user: "101:101"
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: password
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--password", "password", "--query", "SELECT 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  minio:
+    <<: *confined
+    image: ${AI_SANDBOX_MINIO_IMAGE:-mave-ai-sandbox-minio}
+    user: "10002:10002"
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    tmpfs: ["/data:uid=10002,gid=10002"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:9000/minio/health/live"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  sandbox:
+    <<: *confined
+    image: ${AI_SANDBOX_IMAGE:-mave-ai-sandbox-pr}
+    runtime: ${AI_SANDBOX_RUNTIME:-runc}
+    user: sandbox
+    working_dir: /app
+    init: true
+    command: ["sleep", "infinity"]
+    pids_limit: 4096
+    mem_limit: ${AI_SANDBOX_MEMORY:-8g}
+    environment:
+      MIX_ENV: test
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      CLICKHOUSE_HOST: clickhouse
+      S3_ENDPOINT: http://minio:9000
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: us-east-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+networks:
+  sandbox:
+    internal: true

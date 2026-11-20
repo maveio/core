@@ -1,0 +1,45 @@
+[
+  {
+    "say": "The checkout is the pull request head with its history",
+    "tool": "run_command",
+    "input": {"command": "git rev-parse HEAD && git log --oneline -1 && test -s /sandbox/prepare.log"},
+    "expect_exit": 0
+  },
+  {
+    "say": "The pull request compiles and a database-backed test passes without network access",
+    "tool": "run_command",
+    "input": {"command": "mix test test/mave_core/legacy_short_uuid_test.exs 2>&1 | tail -5", "timeout_seconds": 600},
+    "expect_exit": 0,
+    "expect_output": "passed"
+  },
+  {
+    "say": "Files can be written and run inside the sandbox",
+    "tool": "write_file",
+    "input": {"path": "/tmp/selftest.exs", "content": "IO.puts(\"sandbox selftest \" <> Integer.to_string(6 * 7))\n"}
+  },
+  {
+    "tool": "run_command",
+    "input": {"command": "elixir /tmp/selftest.exs"},
+    "expect_exit": 0,
+    "expect_output": "sandbox selftest 42"
+  },
+  {
+    "say": "Commands are stopped at their time limit",
+    "tool": "run_command",
+    "input": {"command": "sleep 30", "timeout_seconds": 2},
+    "expect_output": "timed out after 2s"
+  },
+  {
+    "tool": "submit_report",
+    "input": {
+      "verdict": "no_issues_found",
+      "summary": "Scripted self-test of the sandbox: the pull request checkout compiles, a database-backed test passes offline, files can be written and commands are time-limited.",
+      "checks": [
+        {"name": "Database-backed test without network", "command": "mix test test/mave_core/legacy_short_uuid_test.exs", "result": "pass", "details": "Ran inside the sandbox against its own services."},
+        {"name": "Command time limit", "command": "sleep 30", "result": "pass", "details": "Stopped after the two-second limit."}
+      ],
+      "findings": [],
+      "limitations": ["No model was involved; this run only exercises the sandbox plumbing."]
+    }
+  }
+]
