@@ -18,6 +18,7 @@ defmodule MaveCore.Uploads do
   alias MaveCore.Spaces
   alias MaveCore.Spaces.Key
   alias MaveCore.Spaces.Space
+  alias MaveCore.Transcription.Vocabulary
   alias MaveCore.Uploads.Events
   alias MaveCore.UsageLimits
 
@@ -726,7 +727,7 @@ defmodule MaveCore.Uploads do
           present(metadata, "callback_url") ||
             present(metadata, "webhook_url") ||
             present(metadata, "notify_webhook_url"),
-        "subtitle_vocabulary" => MaveCore.Transcription.Vocabulary.snapshot(space),
+        "subtitle_vocabulary" => Vocabulary.snapshot(space),
         "automatic_subtitles_enabled" =>
           !match?(%Space{automatic_subtitles_enabled: false}, space),
         "audio_description" => AudioDescription.run_input(space)

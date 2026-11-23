@@ -24,7 +24,9 @@ defmodule MaveCore.SpaceCreation do
 
   @callback group_picker_spaces([MaveCore.Spaces.Space.t()]) :: [MaveCore.Spaces.Space.t()]
 
-  @optional_callbacks group_picker_spaces: 1, can_create_space_for_user?: 2, standalone_description: 0
+  @optional_callbacks group_picker_spaces: 1,
+                      can_create_space_for_user?: 2,
+                      standalone_description: 0
 
   def backend do
     Application.get_env(:mave_core, :space_creation_backend, Accounts)

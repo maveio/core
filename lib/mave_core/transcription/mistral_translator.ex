@@ -1,6 +1,8 @@
 defmodule MaveCore.Transcription.MistralTranslator do
   @moduledoc false
 
+  alias MaveCore.Transcription.Vocabulary
+
   @endpoint "https://api.mistral.ai/v1/chat/completions"
   @default_model "mistral-medium-latest"
   @segment_batch_size 10
@@ -75,7 +77,7 @@ defmodule MaveCore.Transcription.MistralTranslator do
       end)
 
     hints =
-      MaveCore.Transcription.Vocabulary.matching(opts[:vocabulary], Enum.map(batch, & &1.text))
+      Vocabulary.matching(opts[:vocabulary], Enum.map(batch, & &1.text))
 
     opts = Keyword.put(opts, :matched_terms, hints)
 
@@ -133,7 +135,7 @@ defmodule MaveCore.Transcription.MistralTranslator do
     text
     |> chunk_text()
     |> Enum.reduce_while({:ok, []}, fn chunk, {:ok, acc} ->
-      hints = MaveCore.Transcription.Vocabulary.matching(opts[:vocabulary], [chunk])
+      hints = Vocabulary.matching(opts[:vocabulary], [chunk])
       opts = Keyword.put(opts, :matched_terms, hints)
 
       case request_chat(

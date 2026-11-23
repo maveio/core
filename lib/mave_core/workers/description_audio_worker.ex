@@ -6,9 +6,11 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
   alias MaveCore.{Assets, Embeds, Repo, Spaces}
   alias MaveCore.Assets.AudioDescription
   alias MaveCore.AudioDescription.EditorAudio
+  alias MaveCore.AudioDescription.Publication
   alias MaveCore.Embeds.{Embed, Events}
   alias MaveCore.Flow.{Run, StepRun}
   alias MaveCore.Flow.Steps.AudioDescriptionSupport, as: AD
+  alias MaveCore.Transcription.SubtitleDocument
 
   @impl true
   def perform(%Oban.Job{args: args} = job) do
@@ -30,24 +32,7 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
           :ok
 
         {:error, reason} ->
-          terminal =
-            match?({:description_does_not_fit, _}, reason) or
-              reason in [:generation_disabled, :stale_document, :insufficient_ad_credit] or
-              job.attempt >= job.max_attempts
-
-          if terminal do
-            mark_failed(description.id, id, reason)
-
-            Events.broadcast_updated(embed.space_id, embed.id, %{
-              "description_audio" => "failed",
-              "insufficient_credit" => reason == :insufficient_ad_credit,
-              "render_id" => id
-            })
-
-            {:cancel, "Description audio could not be updated"}
-          else
-            {:error, :description_audio_unavailable}
-          end
+          handle_render_error(job, embed, description, id, reason)
       end
     else
       %AudioDescription{audio_origin: :uploaded, text_draft: %{"render_id" => ^id}} = description ->
@@ -56,6 +41,27 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
 
       _obsolete ->
         :ok
+    end
+  end
+
+  defp handle_render_error(job, embed, description, id, reason) do
+    terminal =
+      match?({:description_does_not_fit, _}, reason) or
+        reason in [:generation_disabled, :stale_document, :insufficient_ad_credit] or
+        job.attempt >= job.max_attempts
+
+    if terminal do
+      mark_failed(description.id, id, reason)
+
+      Events.broadcast_updated(embed.space_id, embed.id, %{
+        "description_audio" => "failed",
+        "insufficient_credit" => reason == :insufficient_ad_credit,
+        "render_id" => id
+      })
+
+      {:cancel, "Description audio could not be updated"}
+    else
+      {:error, :description_audio_unavailable}
     end
   end
 
@@ -85,7 +91,7 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
              |> Map.put(:outputs, outputs)
              |> Map.put(
                :before_speech,
-               &MaveCore.AudioDescription.Publication.reserve_edit(
+               &Publication.reserve_edit(
                  embed,
                  description,
                  render_id,
@@ -109,7 +115,7 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
   defp render_lines(%{vtt_basis: true} = editor) do
     ends =
       Map.new(
-        MaveCore.Transcription.SubtitleDocument.cues(editor.document),
+        SubtitleDocument.cues(editor.document),
         &{&1.id, &1.end_seconds}
       )
 
@@ -164,29 +170,33 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
            current.audio_filename == original.audio_filename &&
            current.vtt_filename == original.vtt_filename &&
            fresh.asset.current_video_id == original.video_id do
-        with {:ok, _} <-
-               current
-               |> AudioDescription.changeset(attrs)
-               |> Ecto.Changeset.put_change(:text_draft, nil)
-               |> Repo.update(),
-             :ok <- Assets.refresh_audio_outputs(fresh),
-             :ok <-
-               MaveCore.AudioDescription.Publication.published(
-                 fresh,
-                 original.video_id,
-                 original.language,
-                 :edit,
-                 render_id,
-                 characters
-               ) do
-          :published
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
+        publish_current!(fresh, current, original, attrs, characters, render_id)
       else
         :obsolete
       end
     end)
+  end
+
+  defp publish_current!(fresh, current, original, attrs, characters, render_id) do
+    with {:ok, _} <-
+           current
+           |> AudioDescription.changeset(attrs)
+           |> Ecto.Changeset.put_change(:text_draft, nil)
+           |> Repo.update(),
+         :ok <- Assets.refresh_audio_outputs(fresh),
+         :ok <-
+           Publication.published(
+             fresh,
+             original.video_id,
+             original.language,
+             :edit,
+             render_id,
+             characters
+           ) do
+      :published
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
   end
 
   defp mark_failed(description_id, render_id, reason) do
@@ -195,17 +205,7 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
              from(d in AudioDescription, where: d.id == ^description_id, lock: "FOR UPDATE")
            ) do
         %AudioDescription{text_draft: %{"render_id" => ^render_id} = draft} = description ->
-          draft =
-            case reason do
-              {:description_does_not_fit, details} ->
-                Map.merge(draft, %{"render_status" => "does_not_fit", "fit_error" => details})
-
-              :insufficient_ad_credit ->
-                Map.put(draft, "render_status", "insufficient_credit")
-
-              _ ->
-                Map.put(draft, "render_status", "failed")
-            end
+          draft = failed_draft(draft, reason)
 
           description
           |> Ecto.Changeset.change(text_draft: draft)
@@ -216,4 +216,12 @@ defmodule MaveCore.Workers.DescriptionAudioWorker do
       end
     end)
   end
+
+  defp failed_draft(draft, {:description_does_not_fit, details}),
+    do: Map.merge(draft, %{"render_status" => "does_not_fit", "fit_error" => details})
+
+  defp failed_draft(draft, :insufficient_ad_credit),
+    do: Map.put(draft, "render_status", "insufficient_credit")
+
+  defp failed_draft(draft, _reason), do: Map.put(draft, "render_status", "failed")
 end

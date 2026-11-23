@@ -4,6 +4,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   use MaveCoreWeb, :live_view
   import MaveCoreWeb.DashboardComponents, except: [icon: 1]
 
+  alias MaveCore.AudioDescription.Publication
   alias MaveCore.Embeds
   alias MaveCore.Embeds.Embed
   alias MaveCore.Embeds.Events, as: EmbedEvents
@@ -13,6 +14,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
   alias MaveCore.Spaces
   alias MaveCore.Uploads.Token
   alias MaveCore.UsageLimits
+  alias MaveCore.Workers.SubtitleTranslationWorker
   alias MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent
   alias MaveCoreWeb.DashboardRoutes
   alias MaveCoreWeb.Formatter
@@ -165,7 +167,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
       "failed" ->
         message =
           if event["insufficient_credit"],
-            do: MaveCore.AudioDescription.Publication.unavailable_notice()
+            do: Publication.unavailable_notice()
 
         {:noreply,
          put_flash(
@@ -186,7 +188,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
     if Enum.any?(video.subtitles, &(&1.language == language)) do
       {:noreply, socket}
     else
-      row = MaveCore.Workers.SubtitleTranslationWorker.pending_row(language, state)
+      row = SubtitleTranslationWorker.pending_row(language, state)
 
       video =
         update_in(
@@ -753,7 +755,11 @@ defmodule MaveCoreWeb.Dashboard.Videos.Show do
             do: video_path(space, Embeds.dashboard_embed_id(parent), tab, scope),
             else: videos_path(space, tab, scope)
 
-        message = if deleted.type == :collection, do: gettext("Folder deleted"), else: gettext("Video deleted")
+        message =
+          if deleted.type == :collection,
+            do: gettext("Folder deleted"),
+            else: gettext("Video deleted")
+
         {:noreply, socket |> put_flash(:info, message) |> push_navigate(to: destination)}
 
       {:error, _reason} ->

@@ -5,8 +5,8 @@ defmodule MaveCoreWeb.Dashboard.Settings.Index do
   import MaveCoreWeb.DashboardComponents, except: [icon: 1]
   import Ecto.Query, only: [from: 2]
 
-  alias MaveCore.SpaceCreation
   alias MaveCore.Repo
+  alias MaveCore.SpaceCreation
   alias MaveCore.Spaces.Domain
   alias MaveCore.Spaces.Events, as: SpaceEvents
   alias MaveCore.Spaces.Space

@@ -1,6 +1,7 @@
 defmodule MaveCore.Transcription.SubtitleDocumentTest do
   use ExUnit.Case, async: true
 
+  alias MaveCore.AudioDescription.DescriptionDocument
   alias MaveCore.Transcription.SubtitleDocument
 
   @vtt "WEBVTT\nLanguage: en\n\nNOTE Keep this\n\nintro\n00:00:01.000 --> 00:00:03.000 align:start\n<v Speaker>Hello &amp; welcome</v>\n\n00:04.000 --> 00:06.000\nSecond line\n"
@@ -49,7 +50,7 @@ defmodule MaveCore.Transcription.SubtitleDocumentTest do
 
   test "inserting a subtitle splits its predecessor and preserves cue markup and settings" do
     {:ok, document} = SubtitleDocument.parse(@vtt)
-    [first, second] = MaveCore.AudioDescription.DescriptionDocument.from_vtt(document)
+    [first, second] = DescriptionDocument.from_vtt(document)
     new = %{"id" => "new", "start" => 2.5, "text" => "<new>"}
     assert {:ok, body} = SubtitleDocument.render_moments(document, [first, new, second], 12)
     assert body =~ "00:00:01.000 --> 00:00:02.500 align:start\n<v Speaker>Hello &amp; welcome</v>"
@@ -66,7 +67,7 @@ defmodule MaveCore.Transcription.SubtitleDocumentTest do
 
   test "an edited subtitle end controls playback and its published interval" do
     {:ok, document} = SubtitleDocument.parse(@vtt)
-    [first, second] = MaveCore.AudioDescription.DescriptionDocument.from_vtt(document)
+    [first, second] = DescriptionDocument.from_vtt(document)
     edited = Map.put(first, "end", 2.125)
     assert [%{end: 2.125}, _] = SubtitleDocument.windows(document, [edited, second], 12)
     assert {:ok, body} = SubtitleDocument.render_moments(document, [edited, second], 12)
@@ -121,7 +122,7 @@ defmodule MaveCore.Transcription.SubtitleDocumentTest do
   test "existing simultaneous subtitles remain editable" do
     source = String.replace(@vtt, "00:04.000", "00:01.000")
     {:ok, document} = SubtitleDocument.parse(source)
-    moments = MaveCore.AudioDescription.DescriptionDocument.from_vtt(document)
+    moments = DescriptionDocument.from_vtt(document)
     assert {:ok, ^source} = SubtitleDocument.render_moments(document, moments, 12)
   end
 

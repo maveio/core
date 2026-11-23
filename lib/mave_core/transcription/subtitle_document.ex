@@ -5,6 +5,9 @@ defmodule MaveCore.Transcription.SubtitleDocument do
 
   @timing ~r/^(?:\d{2,9}:)?[0-5]\d:[0-5]\d\.\d{3}[ \t]+-->[ \t]+(?:\d{2,9}:)?[0-5]\d:[0-5]\d\.\d{3}(?:\s.*)?$/
 
+  alias MaveCore.AudioDescription.DescriptionDocument
+  alias MaveCore.Transcription.SubtitleCues
+
   def parse(body) when is_binary(body) do
     if String.valid?(body) and byte_size(body) <= 2_000_000 do
       parse_blocks(body)
@@ -41,7 +44,7 @@ defmodule MaveCore.Transcription.SubtitleDocument do
           {:cont, has_cue}
 
         Regex.match?(~r/\A(?:NOTE(?:[ \t\n]|\z)|STYLE\n|REGION\n)/, block) ->
-          if String.contains?(block, "-->"), do: {:halt, false}, else: {:cont, has_cue}
+          upload_metadata_result(block, has_cue)
 
         valid_upload_cue?(block) ->
           {:cont, true}
@@ -50,6 +53,10 @@ defmodule MaveCore.Transcription.SubtitleDocument do
           {:halt, false}
       end
     end)
+  end
+
+  defp upload_metadata_result(block, has_cue) do
+    if String.contains?(block, "-->"), do: {:halt, false}, else: {:cont, has_cue}
   end
 
   defp valid_upload_cue?(block) do
@@ -77,7 +84,7 @@ defmodule MaveCore.Transcription.SubtitleDocument do
          moments =
            Enum.map(cues, &%{"id" => &1.id, "start" => &1.start_seconds, "text" => &1.text}),
          {:ok, _} <-
-           MaveCore.AudioDescription.DescriptionDocument.validate(
+           DescriptionDocument.validate(
              moments,
              duration,
              if(kind == :subtitle, do: 100_000, else: 500)
@@ -90,7 +97,7 @@ defmodule MaveCore.Transcription.SubtitleDocument do
                  not String.contains?(String.replace_prefix(&1.raw, &1.prefix, ""), "-->"))
            ),
          :ok <-
-           MaveCore.AudioDescription.DescriptionDocument.validate_time_labels(
+           DescriptionDocument.validate_time_labels(
              moments,
              if(kind == :subtitle, do: original_starts(document), else: %{})
            ) do
@@ -158,7 +165,7 @@ defmodule MaveCore.Transcription.SubtitleDocument do
         %{start: cue.start_seconds, end: cue.end_seconds, text: cue.text}
       end)
 
-    segments = MaveCore.Transcription.SubtitleCues.json_segments(cues)
+    segments = SubtitleCues.json_segments(cues)
 
     segments =
       Enum.map(segments, fn segment ->
@@ -197,10 +204,9 @@ defmodule MaveCore.Transcription.SubtitleDocument do
     [_, start_time, end_time] = Regex.run(~r/^(\S+)\s+-->\s+(\S+)/, timing)
 
     [start_time, end_time]
-    |> Enum.map(fn time ->
+    |> Enum.map_join(" – ", fn time ->
       time |> String.replace(~r/^00:(?=\d{2}:)/, "") |> String.replace_suffix(".000", "")
     end)
-    |> Enum.join(" – ")
   end
 
   def texts(document), do: Map.new(cues(document), &{&1.id, &1.text})
@@ -232,33 +238,40 @@ defmodule MaveCore.Transcription.SubtitleDocument do
       next = List.first(following)
       limit = if next, do: next["start"], else: duration
 
-      stop =
-        cond do
-          is_number(moment["end"]) ->
-            moment["end"]
-
-          source && source.start_seconds == start ->
-            if next && limit > start &&
-                 Map.get(originals[next["id"]] || %{}, :start_seconds) != limit,
-               do: min(source.end_seconds, limit),
-               else: source.end_seconds
-
-          source ->
-            min(start + source.end_seconds - source.start_seconds, limit)
-
-          true ->
-            min(start + 2, limit)
-        end
+      stop = window_stop(moment, source, start, next, limit, originals)
 
       %{id: moment["id"], start: start, end: stop}
     end)
+  end
+
+  defp window_stop(moment, source, start, next, limit, originals) do
+    cond do
+      is_number(moment["end"]) ->
+        moment["end"]
+
+      source && source.start_seconds == start ->
+        unedited_window_stop(source, start, next, limit, originals)
+
+      source ->
+        min(start + source.end_seconds - source.start_seconds, limit)
+
+      true ->
+        min(start + 2, limit)
+    end
+  end
+
+  defp unedited_window_stop(source, start, next, limit, originals) do
+    if next && limit > start &&
+         Map.get(originals[next["id"]] || %{}, :start_seconds) != limit,
+       do: min(source.end_seconds, limit),
+       else: source.end_seconds
   end
 
   def original_starts(document), do: Map.new(cues(document), &{&1.id, &1.start_seconds})
 
   def validate_moments(moments, duration) do
     with {:ok, normalized} <-
-           MaveCore.AudioDescription.DescriptionDocument.validate(moments, duration, 100_000) do
+           DescriptionDocument.validate(moments, duration, 100_000) do
       valid_ends =
         Enum.all?(moments, fn moment ->
           stop = moment["end"]

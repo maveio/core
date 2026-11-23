@@ -1,6 +1,8 @@
 defmodule MaveCore.Transcription.Mistral do
   @moduledoc false
 
+  alias MaveCore.Transcription.Vocabulary
+
   @endpoint "https://api.mistral.ai/v1/audio/transcriptions"
   @default_model "voxtral-mini-2602"
   @pool_timeout_ms 30_000
@@ -75,7 +77,7 @@ defmodule MaveCore.Transcription.Mistral do
   defp vocabulary(opts, model) do
     terms = opts[:vocabulary] || []
 
-    if MaveCore.Transcription.Vocabulary.valid?(terms) do
+    if Vocabulary.valid?(terms) do
       encode_vocabulary(terms, model)
     else
       []

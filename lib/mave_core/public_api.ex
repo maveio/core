@@ -15,6 +15,7 @@ defmodule MaveCore.PublicApi do
   alias MaveCore.PublicHttpUrl
   alias MaveCore.Repo
   alias MaveCore.Spaces.Space
+  alias MaveCore.Transcription.Vocabulary
 
   @default_per_page 15
   @max_per_page 100
@@ -881,7 +882,7 @@ defmodule MaveCore.PublicApi do
       "source_content_type" => Map.get(params, "filetype") || Map.get(params, "content_type"),
       "language" => Map.get(params, "language"),
       "priority" => input_url_priority(space, params),
-      "subtitle_vocabulary" => MaveCore.Transcription.Vocabulary.snapshot(space),
+      "subtitle_vocabulary" => Vocabulary.snapshot(space),
       "automatic_subtitles_enabled" => space.automatic_subtitles_enabled,
       "durable_source_required" => true,
       "version" => current_video_version(embed)

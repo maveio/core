@@ -10,6 +10,7 @@ defmodule MaveCore.EmbedsTest do
   alias MaveCore.Flow.{Run, StepRun}
   alias MaveCore.Spaces.Space
   alias MaveCore.TestSupport.FlowStorageAdapterStub
+  alias MaveCore.Workers.TimecodeThumbnailWorker
 
   defmodule TimecodeThumbnailImageProcessor do
     def process(_space_hash, _embed_hash, seconds, opts) do
@@ -668,10 +669,10 @@ defmodule MaveCore.EmbedsTest do
       )
 
     assert [older, latest] = jobs
-    assert :ok = MaveCore.Workers.TimecodeThumbnailWorker.perform(older)
-    assert {:error, :not_found} = MaveCore.Workers.TimecodeThumbnailWorker.perform(latest)
+    assert :ok = TimecodeThumbnailWorker.perform(older)
+    assert {:error, :not_found} = TimecodeThumbnailWorker.perform(latest)
     Process.delete(:thumbnail_source_missing)
-    assert :ok = MaveCore.Workers.TimecodeThumbnailWorker.perform(latest)
+    assert :ok = TimecodeThumbnailWorker.perform(latest)
 
     for format <- ["jpg", "webp", "avif"] do
       body = "thumbnail #{format} at 14.0"

@@ -190,28 +190,29 @@ defmodule MaveCore.AudioDescription.SpeechFit do
   end
 
   defp rewrite_and_fit(cue, budget, max_words, speak, rewrite, retries, measured) do
-    with {:ok, text} <- request_rewrite(rewrite, cue.text, budget, max_words, measured) do
-      text = String.trim(text)
+    case request_rewrite(rewrite, cue.text, budget, max_words, measured) do
+      {:ok, text} ->
+        text = String.trim(text)
 
-      result =
-        if valid_rewrite?(cue, text, max_words),
-          do: measure_rewrite(%{cue | text: text}, budget, speak),
-          else: {:skip, "no_fitting_rewrite"}
+        result =
+          if valid_rewrite?(cue, text, max_words),
+            do: measure_rewrite(%{cue | text: text}, budget, speak),
+            else: {:skip, "no_fitting_rewrite"}
 
-      case result do
-        {:too_long, measured} when retries > 0 and max_words > 1 ->
-          next_limit =
-            min(max_words - 1, max(1, floor(budget * measured["words_per_second"] * 0.9)))
+        case result do
+          {:too_long, measured} when retries > 0 and max_words > 1 ->
+            next_limit =
+              min(max_words - 1, max(1, floor(budget * measured["words_per_second"] * 0.9)))
 
-          rewrite_and_fit(cue, budget, next_limit, speak, rewrite, retries - 1, measured)
+            rewrite_and_fit(cue, budget, next_limit, speak, rewrite, retries - 1, measured)
 
-        {:too_long, _} ->
-          {:skip, "speech_too_long"}
+          {:too_long, _} ->
+            {:skip, "speech_too_long"}
 
-        _ ->
-          result
-      end
-    else
+          _ ->
+            result
+        end
+
       {:skip, "rewrite_" <> reason} when retries > 0 ->
         rewrite_and_fit(
           cue,

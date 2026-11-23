@@ -6,6 +6,7 @@ defmodule MaveCore.Flow.Steps.AiTranslateDescriptionsStep do
   @behaviour MaveCore.Flow.Step
 
   alias MaveCore.AudioDescription.{Cues, Prompts}
+  alias MaveCore.AudioDescription.Publication
   alias MaveCore.Flow.Steps.AudioDescriptionSupport, as: AD
 
   @step_type "ai.translate_descriptions"
@@ -25,7 +26,7 @@ defmodule MaveCore.Flow.Steps.AiTranslateDescriptionsStep do
 
   defp translate(ctx, source, language) do
     with :ok <-
-           MaveCore.AudioDescription.Publication.reserve_flow(ctx, language, source["duration"]),
+           Publication.reserve_flow(ctx, language, source["duration"]),
          {:ok, json} <- AD.get_json(ctx, source["cues_key"]),
          cues = Cues.from_json(json),
          {instruction, input} = Prompts.translation_request(cues, language),

@@ -15,6 +15,7 @@ defmodule MaveCore.Spaces do
   alias MaveCore.Repo
   alias MaveCore.SharedStorageSpace
   alias MaveCore.StorageProfiles
+  alias MaveCore.Transcription.Vocabulary
   alias MaveCore.UsageLimits
 
   alias MaveCore.Spaces.{
@@ -624,7 +625,7 @@ defmodule MaveCore.Spaces do
   end
 
   def update_subtitle_vocabulary(%Space{id: id}, text) do
-    with {:ok, terms} <- MaveCore.Transcription.Vocabulary.parse(text) do
+    with {:ok, terms} <- Vocabulary.parse(text) do
       case Repo.update_all(
              from(s in Space, where: s.id == ^id and s.automatic_subtitles_enabled, select: s),
              set: [subtitle_vocabulary: terms]
