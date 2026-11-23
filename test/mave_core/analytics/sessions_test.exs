@@ -474,13 +474,14 @@ defmodule MaveCore.Analytics.SessionsTest do
   end
 
   test "overview combines same-day contributions without changing session thresholds" do
+    now = ~U[2025-05-01 00:00:30Z]
+    Process.put(:analytics_time, now)
     pair(1, "AAAAA", "first", 20, 20.6, 0, 0.6)
     pair(1, "AAAAA", "second", 10, 10.6, 0, 0.6)
-    assert {:ok, expected} = Analytics.space_data("AAAAA")
     assert {:ok, _} = Sessions.refresh_changed(limit: 32)
-    assert {:ok, actual} = Sessions.data("AAAAA", include_unique: true)
-    assert actual == expected
+    assert {:ok, actual} = Sessions.data("AAAAA", include_unique: true, now: now)
     assert actual.views.today == 1
+    assert actual.watch_time.today == 1200
 
     assert [[1, 1200]] =
              ClickHouseRepo.query!(

@@ -73,23 +73,8 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
     refute html =~ "font-family: 'Sofia'"
   end
 
-  test "/data switches period and compares with the previous period", %{
-    conn: conn,
-    db_name: db_name
-  } do
-    {conn, space} = authenticated_conn(conn)
-
-    sql = """
-    INSERT INTO #{db_name}.events
-    (timestamp, name, session_id, space_hash, embed_hash, video_time, duration, source_url, browser, browser_version, os, os_version, device, device_brand)
-    VALUES
-    (addSeconds(now64(6), -108000), 'play',  '00000000-0000-0000-0000-000000001102', '#{space.hash}', 'BBBBBBBBBB', 0.0, 10, 'https://example.com/a', 'Safari', '17', 'Mac', '14', 'Mobile', 'Apple'),
-    (addSeconds(now64(6), -107997), 'pause', '00000000-0000-0000-0000-000000001102', '#{space.hash}', 'BBBBBBBBBB', 3.0, 10, 'https://example.com/a', 'Safari', '17', 'Mac', '14', 'Mobile', 'Apple'),
-    (addSeconds(now64(6), -30), 'play',  '00000000-0000-0000-0000-000000001103', '#{space.hash}', 'CCCCCCCCCC', 0.0, 10, 'https://example.com/b', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple'),
-    (addSeconds(now64(6), -28), 'pause', '00000000-0000-0000-0000-000000001103', '#{space.hash}', 'CCCCCCCCCC', 2.0, 10, 'https://example.com/b', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple')
-    """
-
-    {:ok, _} = ClickHouseRepo.query(sql)
+  test "/data switches to today's period", %{conn: conn} do
+    {conn, _space} = authenticated_conn(conn)
 
     {:ok, view, _html} = live(conn, "/data")
     _ = render_async(view, 5_000)
@@ -98,12 +83,42 @@ defmodule MaveCoreWeb.Live.Dashboard.Data.IndexTest do
     assert_patch(view, "/data?period=today")
     _ = render_async(view, 5_000)
 
-    kpis = view |> element("#data-kpis") |> render()
-    # One view today against one in the elapsed part of yesterday.
-    assert kpis =~ ~s(title="vs yesterday at the same time")
-    assert kpis =~ "± 0,0%"
     assert has_element?(view, ~s(#data-period-switch a[aria-current="page"]), "Today")
     assert has_element?(view, ~s(a[href="/data/top?period=today"]))
+  end
+
+  test "today's KPIs compare with the elapsed part of yesterday", %{conn: conn, db_name: db_name} do
+    {_conn, space} = authenticated_conn(conn)
+    now = ~U[2025-05-01 00:00:30Z]
+
+    timestamps = [
+      ~U[2025-04-30 00:00:05Z],
+      ~U[2025-04-30 00:00:08Z],
+      ~U[2025-05-01 00:00:05Z],
+      ~U[2025-05-01 00:00:07Z]
+    ]
+
+    sql = """
+    INSERT INTO #{db_name}.events
+    (timestamp, name, session_id, space_hash, embed_hash, video_time, duration, source_url, browser, browser_version, os, os_version, device, device_brand)
+    VALUES
+    ({$0:DateTime64(6)}, 'play',  '00000000-0000-0000-0000-000000001102', '#{space.hash}', 'BBBBBBBBBB', 0.0, 10, 'https://example.com/a', 'Safari', '17', 'Mac', '14', 'Mobile', 'Apple'),
+    ({$1:DateTime64(6)}, 'pause', '00000000-0000-0000-0000-000000001102', '#{space.hash}', 'BBBBBBBBBB', 3.0, 10, 'https://example.com/a', 'Safari', '17', 'Mac', '14', 'Mobile', 'Apple'),
+    ({$2:DateTime64(6)}, 'play',  '00000000-0000-0000-0000-000000001103', '#{space.hash}', 'CCCCCCCCCC', 0.0, 10, 'https://example.com/b', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple'),
+    ({$3:DateTime64(6)}, 'pause', '00000000-0000-0000-0000-000000001103', '#{space.hash}', 'CCCCCCCCCC', 2.0, 10, 'https://example.com/b', 'Chrome', '100', 'Mac', '14', 'Desktop', 'Apple')
+    """
+
+    {:ok, _} = ClickHouseRepo.query(sql, timestamps)
+
+    assert {:ok, overview} = Overview.space_overview(space.hash, "today", now)
+    assert overview.current.views == 1
+    assert overview.previous.views == 1
+
+    kpis =
+      render_component(&OverviewComponents.kpis/1, overview: async_ok(overview), period: "today")
+
+    assert kpis =~ ~s(title="vs yesterday at the same time")
+    assert kpis =~ "± 0,0%"
   end
 
   test "/data formats analytics counts with dot thousands separators" do
