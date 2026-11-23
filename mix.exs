@@ -48,7 +48,7 @@ defmodule MaveCore.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
-      {:phoenix, "~> 1.8.16"},
+      {:phoenix, "~> 1.8.17"},
       # Keep downstream applications on the patched token/error boundary.
       {:plug_crypto, ">= 2.2.1 and < 3.0.0"},
       {:phoenix_ecto, "~> 4.5"},
@@ -57,7 +57,7 @@ defmodule MaveCore.MixProject do
       {:decimal, "~> 3.1", override: true},
       {:phoenix_html, "~> 4.4"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
-      {:phoenix_live_view, "~> 1.2.13"},
+      {:phoenix_live_view, "~> 1.2.14"},
       {:lazy_html, ">= 0.1.13", only: :test},
       {:phoenix_live_dashboard, "~> 0.8.3"},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
@@ -69,7 +69,7 @@ defmodule MaveCore.MixProject do
        app: false,
        compile: false,
        depth: 1},
-      {:swoosh, "~> 1.27"},
+      {:swoosh, "~> 1.30"},
       {:gen_smtp, "~> 1.3"},
       {:req, "~> 0.7.5"},
       # Finch 0.24 closes abandoned HTTP/1 connections with Mint 1.11.
@@ -95,7 +95,7 @@ defmodule MaveCore.MixProject do
       {:nebulex_distributed, "~> 3.0"},
       {:cors_plug, "~> 3.0"},
       {:phoenix_storybook, "~> 1.3", only: [:dev, :test]},
-      {:hackney, "~> 4.9.1", override: true},
+      {:hackney, "~> 4.11.1", override: true},
       # Enforce the hostname verification fix for downstream dependency resolution.
       {:ssl_verify_fun, "~> 1.1.9"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
