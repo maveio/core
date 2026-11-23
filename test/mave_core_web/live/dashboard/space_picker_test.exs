@@ -159,12 +159,20 @@ defmodule MaveCoreWeb.Live.Dashboard.SpacePickerTest do
   test "space picker marks the current space with an opaque icon instead of a blue row", %{
     conn: conn
   } do
-    {conn, _user} = authenticated_conn(conn, "space-picker-current-icon")
+    {conn, user} = authenticated_conn(conn, "space-picker-current-icon")
+    current_space_id = user.current_space_membership.space.id
+    {:ok, user} = Accounts.create_space_for_user(user)
+    other_space_id = user.current_space_membership.space.id
+    {:ok, _user} = Accounts.set_current_space_by_id(user, current_space_id)
 
-    {:ok, _view, html} = live(conn, "/videos")
+    {:ok, view, _html} = live(conn, "/videos")
 
-    assert html =~ "w-6 h-6 transition-opacity duration-150 opacity-100"
-    refute html =~ "bg-blue-500 text-white ring-blue-400"
+    current = ~s(#spacepicker [phx-click="switch_space"][phx-value-id="#{current_space_id}"])
+    other = ~s(#spacepicker [phx-click="switch_space"][phx-value-id="#{other_space_id}"])
+
+    assert has_element?(view, current <> " .hero-square-2-stack:not(.opacity-60)")
+    assert has_element?(view, other <> " .hero-square-2-stack.opacity-60")
+    refute has_element?(view, current <> ".bg-blue-500")
   end
 
   test "space picker truncates a long current domain before extra actions", %{conn: conn} do
