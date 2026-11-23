@@ -377,6 +377,10 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.IndexTest do
 
     {:ok, view, _html} = live(conn, "/videos")
 
+    assert has_element?(view, "#video-row-#{video.id}[draggable=true]")
+    assert has_element?(view, "#video-row-#{video.id} a[draggable=false]", "Move Me")
+    refute has_element?(view, "#video-row-#{video.id} a:not([draggable=false])")
+
     html = render_hook(view, "drop_embed", %{"id" => video.id, "to" => folder.id})
 
     assert html =~ "Item moved"
