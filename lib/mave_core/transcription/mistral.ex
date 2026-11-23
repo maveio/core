@@ -52,7 +52,7 @@ defmodule MaveCore.Transcription.Mistral do
         {"timestamp_granularities", granularity}
       ]
 
-    bias = Enum.map(vocabulary(opts), &{"context_bias", &1})
+    bias = Enum.map(vocabulary(opts, model), &{"context_bias", &1})
     request(multipart ++ bias, api_key, :form_multipart)
   end
 
@@ -64,7 +64,7 @@ defmodule MaveCore.Transcription.Mistral do
     }
 
     body =
-      case vocabulary(opts) do
+      case vocabulary(opts, model) do
         [] -> body
         terms -> Map.put(body, "context_bias", terms)
       end
@@ -72,10 +72,21 @@ defmodule MaveCore.Transcription.Mistral do
     request(body, api_key, :json)
   end
 
-  defp vocabulary(opts) do
+  defp vocabulary(opts, model) do
     terms = opts[:vocabulary] || []
-    if MaveCore.Transcription.Vocabulary.valid?(terms), do: terms, else: []
+
+    if MaveCore.Transcription.Vocabulary.valid?(terms) do
+      encode_vocabulary(terms, model)
+    else
+      []
+    end
   end
+
+  # Voxtral 2 requires underscores in multi-word context bias entries.
+  defp encode_vocabulary(terms, model) when model in [@default_model, "voxtral-mini-latest"],
+    do: Enum.map(terms, &String.replace(&1, ~r/ +/, "_"))
+
+  defp encode_vocabulary(terms, _model), do: terms
 
   defp request(body, api_key, body_option) do
     options =
