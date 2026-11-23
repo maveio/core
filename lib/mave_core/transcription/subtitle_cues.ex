@@ -18,6 +18,12 @@ defmodule MaveCore.Transcription.SubtitleCues do
   @reading_speed 17.0
   @cue_gap 0.04
 
+  @doc "Longest line, in characters, a generated cue aims for."
+  def line_length, do: @line_length
+
+  @doc "Reading speed, in characters per second, a generated cue aims for."
+  def reading_speed, do: @reading_speed
+
   def build(segments) when is_list(segments) do
     segments
     |> Enum.filter(&is_map/1)

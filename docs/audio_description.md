@@ -245,7 +245,9 @@ languages and HLS/MP3/VTT formats under **Audio descriptions** in Settings and
 **Audio** in Info, where descriptions are marked `(AD)`.
 
 The file menu on audio tracks, audio descriptions and subtitles provides file
-downloads and replacement. Removing a track asks for confirmation.
+downloads and replacement. Removing a track asks for confirmation. For
+subtitles, **Edit text** opens an editor to correct the text and timing of each
+cue next to the video and publish the result.
 
 Under **Settings → Audio descriptions**, tracks can be uploaded, renamed,
 retagged with a language, replaced, or removed. Upload a complete MP3 mix with

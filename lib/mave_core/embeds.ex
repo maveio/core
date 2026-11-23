@@ -521,6 +521,48 @@ defmodule MaveCore.Embeds do
     )
   end
 
+  @doc """
+  What a dashboard editing tool needs to play the current video next to its
+  controls: the name, duration, playable sources in order of preference, a
+  poster and the preview frames. Unlike the dashboard payload it reads no analytics.
+  """
+  @spec video_editing_preview(Space.t(), Embed.t()) :: map() | nil
+  def video_editing_preview(%Space{} = space, %Embed{} = video_embed) do
+    video_embed = preload_dashboard_embed(video_embed, false)
+
+    case current_video_from_embed(video_embed) do
+      %Video{} = video ->
+        version = current_video_version(video)
+        flow_run = latest_flow_run(space.hash, video_embed.hash)
+        duration = max(video.duration || 0.0, 0.0)
+        audio_only? = audio_only_source?(video, flow_run, version, audio_tracks_for(video))
+        original_src = original_preview_src(space, video_embed, version)
+
+        sources =
+          if audio_only?,
+            do: [original_src],
+            else: [hls_preview_src(video, space, video_embed, flow_run), original_src]
+
+        %{
+          id: dashboard_embed_id(video_embed),
+          name: embed_name(video_embed),
+          duration: duration,
+          audio_only: audio_only?,
+          aspect_ratio: aspect_ratio_value(video),
+          sources: sources |> Enum.filter(&is_binary/1) |> Enum.uniq(),
+          poster: thumbnail_url(space, video_embed, thumbnail_cache_buster(video.id)),
+          frames:
+            if(audio_only?,
+              do: [],
+              else: preview_frame_srcs(space, video_embed, duration, version)
+            )
+        }
+
+      _ ->
+        nil
+    end
+  end
+
   @spec refresh_video_dashboard_processing_payload(Space.t(), Embed.t(), map()) :: map()
   def refresh_video_dashboard_processing_payload(
         %Space{} = space,
