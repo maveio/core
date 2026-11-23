@@ -10,8 +10,8 @@ defmodule MaveCore.Accounts do
   alias MaveCore.Embeds.Embed
   alias MaveCore.Repo
   alias MaveCore.Spaces
-  alias MaveCore.Spaces.Events
   alias MaveCore.Spaces.{Domain, Membership, MembershipInvite, Space}
+  alias MaveCore.Spaces.Events
   alias MaveCore.StorageProfiles
   alias MaveCore.Workers.AccountDeletionWorker
 

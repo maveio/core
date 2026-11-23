@@ -1,6 +1,7 @@
 defmodule MaveCore.AudioDescription.EditorAudio do
   @moduledoc "Renders the editor's literal text at its selected times using reusable private speech clips."
 
+  alias MaveCore.AudioDescription.SpeechFit
   alias MaveCore.AudioDescription.Wav
   alias MaveCore.Flow.Steps.{AiSpeakDescriptionsStep, MediaMixAudioDescriptionStep}
   alias MaveCore.Flow.Steps.AudioDescriptionSupport, as: AD
@@ -73,14 +74,7 @@ defmodule MaveCore.AudioDescription.EditorAudio do
     |> Enum.reduce_while({:ok, [], 0}, fn {[line | following], index}, {:ok, rows, cursor} ->
       start = max(cursor, round(line["start"] * Wav.sample_rate()))
 
-      next_start = if following == [], do: duration, else: hd(following)["start"]
-
-      {boundary, stop_time} =
-        cond do
-          is_number(line["end"]) and line["end"] < next_start -> {"cue_end", line["end"]}
-          is_number(line["end"]) and following != [] -> {"next_description", next_start}
-          true -> {"video_end", duration}
-        end
+      {boundary, stop_time} = line_stop(line, following, duration)
 
       stop = round(stop_time * Wav.sample_rate())
 
@@ -115,6 +109,16 @@ defmodule MaveCore.AudioDescription.EditorAudio do
     end
   end
 
+  defp line_stop(line, following, duration) do
+    next_start = if following == [], do: duration, else: hd(following)["start"]
+
+    cond do
+      is_number(line["end"]) and line["end"] < next_start -> {"cue_end", line["end"]}
+      is_number(line["end"]) and following != [] -> {"next_description", next_start}
+      true -> {"video_end", duration}
+    end
+  end
+
   defp check_fit(_time, length, available, _)
        when length > 0 and length <= available + 12 and available > 0, do: :ok
 
@@ -140,18 +144,22 @@ defmodule MaveCore.AudioDescription.EditorAudio do
 
       if pace == :moderate and samples > available and
            (cache[fast] ||
-              samples <= available * MaveCore.AudioDescription.SpeechFit.max_speedup()) do
-        with {:ok, faster, fast_key} <- load_clip(ctx, text, language, :fast, prefix, fast, cache) do
-          if byte_size(faster) < byte_size(pcm) and
-               (cache[fast] ||
-                  byte_size(pcm) <=
-                    byte_size(faster) * MaveCore.AudioDescription.SpeechFit.max_speedup()),
-             do: {:ok, faster, fast_key},
-             else: {:ok, pcm, key}
-        end
+              samples <= available * SpeechFit.max_speedup()) do
+        faster_clip(ctx, text, language, prefix, fast, cache, {:ok, pcm, key})
       else
         {:ok, pcm, key}
       end
+    end
+  end
+
+  defp faster_clip(ctx, text, language, prefix, fast, cache, {:ok, pcm, key}) do
+    with {:ok, faster, fast_key} <- load_clip(ctx, text, language, :fast, prefix, fast, cache) do
+      if byte_size(faster) < byte_size(pcm) and
+           (cache[fast] ||
+              byte_size(pcm) <=
+                byte_size(faster) * SpeechFit.max_speedup()),
+         do: {:ok, faster, fast_key},
+         else: {:ok, pcm, key}
     end
   end
 

@@ -9,7 +9,10 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   import MaveCoreWeb.DashboardComponents.States, only: [progress_bar: 1]
 
   alias MaveCore.Assets
+  alias MaveCore.AudioDescription.Cues
   alias MaveCore.AudioDescription.DescriptionDocument
+  alias MaveCore.AudioDescription.Publication
+  alias MaveCore.AudioDescription.SpeechTiming
   alias MaveCore.Embeds
   alias MaveCore.Embeds.Embed
   alias MaveCore.Embeds.SettingsSerializer
@@ -19,6 +22,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
   alias MaveCore.Spaces.Space
   alias MaveCore.Transcription.SubtitleDocument
   alias MaveCore.Uploads.Token
+  alias MaveCore.Workers.SubtitleTranslationWorker
   alias MaveCoreWeb.DashboardRoutes
   alias MaveCoreWeb.Plugs.Maintenance
   alias Phoenix.LiveView.JS
@@ -127,7 +131,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
              Map.get(assigns.video, :audio_descriptions, []) || [],
              &(&1.language == skipped.language)
            ) do
-        MaveCore.AudioDescription.Publication.generation_notice(
+        Publication.generation_notice(
           assigns.current_space,
           assigns.current_user,
           assigns[:space_access_context],
@@ -458,7 +462,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
     result =
       source &&
-        MaveCore.Workers.SubtitleTranslationWorker.enqueue(
+        SubtitleTranslationWorker.enqueue(
           socket.assigns.embed,
           source.id,
           target
@@ -470,7 +474,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         {:noreply, assign(socket, :subtitle_form, nil)}
 
       {:error, :automatic_subtitles_disabled} ->
-        {:noreply, put_flash(socket, :error, gettext("AI subtitles are turned off for this space."))}
+        {:noreply,
+         put_flash(socket, :error, gettext("AI subtitles are turned off for this space."))}
 
       {:error, {:unavailable, message}} when is_binary(message) ->
         {:noreply, put_flash(socket, :error, message)}
@@ -677,12 +682,14 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
     editor = socket.assigns.subtitle_editor
 
     payload =
-      with {:ok, moments} when is_list(moments) <- Jason.decode(json) do
-        if editor && editor.vtt_basis,
-          do: editor_webvtt(%{editor | moments: moments}),
-          else: {:ok, moments}
-      else
-        _ -> {:error, :invalid_moments}
+      case Jason.decode(json) do
+        {:ok, moments} when is_list(moments) ->
+          if editor && editor.vtt_basis,
+            do: editor_webvtt(%{editor | moments: moments}),
+            else: {:ok, moments}
+
+        _ ->
+          {:error, :invalid_moments}
       end
 
     save_editor_document(socket, payload)
@@ -3202,12 +3209,18 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
             </div>
 
             <button
-              :if={@source && MaveCore.Workers.SubtitleTranslationWorker.available?(@current_space)}
+              :if={@source && SubtitleTranslationWorker.available?(@current_space)}
               id="generate-subtitle-translation"
               type="button"
               phx-click="translate_subtitle"
               phx-target={@myself}
-              disabled={blank_to_nil(@subtitle_form.language) == nil or Enum.any?(@subtitles ++ @generated_tracks, &(&1.language == @subtitle_form.language))}
+              disabled={
+                blank_to_nil(@subtitle_form.language) == nil or
+                  Enum.any?(
+                    @subtitles ++ @generated_tracks,
+                    &(&1.language == @subtitle_form.language)
+                  )
+              }
               title={gettext("Translate from %{language}", language: @source.label)}
               aria-label={gettext("Translate from %{language}", language: @source.label)}
               class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-sm bg-stone-800 text-stone-400 hover:bg-stone-600 disabled:pointer-events-none disabled:opacity-50"
@@ -3872,7 +3885,8 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         aria-controls={"#{@id}-panel"}
         class="w-full h-6 items-center justify-between rounded-sm bg-stone-800 px-2 text-sm text-stone-400 cursor-pointer focus-visible:ring-1 focus-visible:ring-blue-500"
       >
-        <span class="min-w-0 truncate text-left">{Languages.spoken_language(@value) || blank_to_nil(@value) || gettext("Language")}</span>
+        <span class="min-w-0 truncate text-left">{Languages.spoken_language(@value) ||
+          blank_to_nil(@value) || gettext("Language")}</span>
         <.icon name="hero-chevron-down" class="h-3 w-3 shrink-0" />
       </button>
       <div
@@ -4042,56 +4056,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
          {:ok, contents} <- payload,
          {:ok, saved} <-
            save.(socket.assigns.embed, editor.subtitle_id, editor.revision, contents) do
-      case editor.kind do
-        :subtitle ->
-          {_subtitle, body} = saved
-          {:ok, document} = SubtitleDocument.parse(body)
-          moments = DescriptionDocument.from_vtt(document)
-          raw = if editor.webvtt_view, do: body
-
-          editor = %{
-            editor
-            | revision: :crypto.hash(:sha256, body),
-              document: document,
-              moments: moments,
-              initial_moments: moments,
-              initial_document: document,
-              raw_vtt: raw,
-              opening_vtt: raw,
-              texts: SubtitleDocument.texts(document),
-              document_version: editor.document_version + 1,
-              error: nil
-          }
-
-          notify_parent(:subtitles_updated)
-
-          {:noreply,
-           socket
-           |> assign(:subtitle_editor, editor)
-           |> put_flash(:info, gettext("Subtitle text saved."))}
-
-        :audio_description ->
-          editor = if editor.webvtt_view, do: elem(import_webvtt(editor), 1), else: editor
-          moments = saved.text_draft["moments"] || editor.moments
-          {source, _} = editor.revision
-          status = saved.text_draft["render_status"] || "draft"
-
-          socket =
-            assign(socket, :subtitle_editor, %{
-              editor
-              | revision: {source, saved.text_draft},
-                render_status: status,
-                moments: moments,
-                initial_moments: moments,
-                initial_document: editor.document,
-                opening_vtt: editor.raw_vtt,
-                error: nil
-            })
-
-          if status == "queued",
-            do: {:noreply, socket},
-            else: {:noreply, put_flash(socket, :info, gettext("Description draft saved."))}
-      end
+      finish_editor_save(socket, editor, saved)
     else
       {:error, reason} ->
         {:noreply,
@@ -4100,6 +4065,57 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       _ ->
         {:noreply, socket}
     end
+  end
+
+  defp finish_editor_save(socket, %{kind: :subtitle} = editor, saved) do
+    {_subtitle, body} = saved
+    {:ok, document} = SubtitleDocument.parse(body)
+    moments = DescriptionDocument.from_vtt(document)
+    raw = if editor.webvtt_view, do: body
+
+    editor = %{
+      editor
+      | revision: :crypto.hash(:sha256, body),
+        document: document,
+        moments: moments,
+        initial_moments: moments,
+        initial_document: document,
+        raw_vtt: raw,
+        opening_vtt: raw,
+        texts: SubtitleDocument.texts(document),
+        document_version: editor.document_version + 1,
+        error: nil
+    }
+
+    notify_parent(:subtitles_updated)
+
+    {:noreply,
+     socket
+     |> assign(:subtitle_editor, editor)
+     |> put_flash(:info, gettext("Subtitle text saved."))}
+  end
+
+  defp finish_editor_save(socket, %{kind: :audio_description} = editor, saved) do
+    editor = if editor.webvtt_view, do: elem(import_webvtt(editor), 1), else: editor
+    moments = saved.text_draft["moments"] || editor.moments
+    {source, _} = editor.revision
+    status = saved.text_draft["render_status"] || "draft"
+
+    socket =
+      assign(socket, :subtitle_editor, %{
+        editor
+        | revision: {source, saved.text_draft},
+          render_status: status,
+          moments: moments,
+          initial_moments: moments,
+          initial_document: editor.document,
+          opening_vtt: editor.raw_vtt,
+          error: nil
+      })
+
+    if status == "queued",
+      do: {:noreply, socket},
+      else: {:noreply, put_flash(socket, :info, gettext("Description draft saved."))}
   end
 
   defp import_webvtt(%{raw_vtt: body, opening_vtt: body} = editor), do: {:ok, editor}
@@ -4129,7 +4145,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
     gettext(
       "At %{time}, the voice needs %{needed} s. There are %{available} s before %{boundary}.",
-      time: MaveCore.AudioDescription.Cues.format_timestamp(details["start"]),
+      time: Cues.format_timestamp(details["start"]),
       needed: Float.round(details["needed"], 2),
       available: Float.round(details["available"], 2),
       boundary: boundary
@@ -4228,11 +4244,7 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
         seconds = window.end - window.start,
         seconds > 0,
         speed =
-          round(
-            String.length(
-              MaveCore.AudioDescription.SpeechTiming.editor_spoken_text(texts[window.id])
-            ) / seconds
-          ),
+          round(String.length(SpeechTiming.editor_spoken_text(texts[window.id])) / seconds),
         speed > 20 do
       %{
         after_id: window.id,

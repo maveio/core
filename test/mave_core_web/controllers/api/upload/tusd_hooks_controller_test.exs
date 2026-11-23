@@ -17,6 +17,7 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
   alias MaveCore.Spaces.Space
   alias MaveCore.TestSupport.FlowStorageAdapterStub
   alias MaveCore.Uploads.Token
+  alias MaveCore.Workers.DescriptionAudioWorker
 
   defmodule UploadSizeBlockedUsageLimits do
     @behaviour MaveCore.UsageLimits
@@ -1660,7 +1661,7 @@ defmodule MaveCoreWeb.Api.Upload.TusdHooksControllerTest do
     replaced_vtt |> Ecto.Changeset.change(text_draft: legacy_draft) |> Repo.update!()
 
     assert :ok =
-             MaveCore.Workers.DescriptionAudioWorker.perform(%Oban.Job{
+             DescriptionAudioWorker.perform(%Oban.Job{
                args: %{
                  "embed_id" => embed.id,
                  "description_id" => first_id,

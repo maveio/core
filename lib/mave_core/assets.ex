@@ -9,7 +9,11 @@ defmodule MaveCore.Assets do
   alias MaveCore.AudioDescription.{Budget, DescriptionDocument}
   alias MaveCore.Embeds
   alias MaveCore.Embeds.{Embed, ManifestPublisher, SettingsSerializer}
+  alias MaveCore.Embeds.Events
   alias MaveCore.EncodingBooster
+  alias MaveCore.Workers.DescriptionAudioWorker
+  alias MaveCore.Workers.SubtitleJsonWorker
+  alias MaveCore.Workers.TimecodeThumbnailWorker
 
   alias MaveCore.Flow.Steps.{
     AudioDescriptionSupport,
@@ -202,7 +206,7 @@ defmodule MaveCore.Assets do
                render_id: render_id,
                speech_config: config
              }
-             |> MaveCore.Workers.DescriptionAudioWorker.new()
+             |> DescriptionAudioWorker.new()
              |> Oban.insert() do
         {:ok, updated}
       else
@@ -347,7 +351,7 @@ defmodule MaveCore.Assets do
            {:ok, updated} <- update_subtitle_outputs(embed, subtitle, %{path: key}),
            {:ok, _job} <-
              %{embed_id: embed.id, subtitle_id: updated.id, path: key}
-             |> MaveCore.Workers.SubtitleJsonWorker.new()
+             |> SubtitleJsonWorker.new()
              |> Oban.insert() do
         {updated, body}
       else
@@ -373,7 +377,7 @@ defmodule MaveCore.Assets do
          {:ok, _} <- update_subtitle_outputs(embed, subtitle, %{path: key}),
          {:ok, _} <-
            %{embed_id: embed.id, subtitle_id: subtitle.id, path: key}
-           |> MaveCore.Workers.SubtitleJsonWorker.new()
+           |> SubtitleJsonWorker.new()
            |> Oban.insert() do
       {:ok, subtitle}
     end
@@ -431,16 +435,19 @@ defmodule MaveCore.Assets do
     with {:ok, previous} <- previous_subtitle_json(bucket, key, region) do
       body = SubtitleDocument.transcript_json(document, previous)
 
-      result =
-        Enum.reduce_while(keys, :ok, fn path, :ok ->
-          case storage_adapter().put_public(bucket, path, body, "application/json", region) do
-            {:ok, _} -> {:cont, :ok}
-            error -> {:halt, error}
-          end
-        end)
+      result = store_subtitle_json(bucket, keys, body, region)
 
       with :ok <- result, do: CdnCache.purge_best_effort(embed.space, region, keys)
     end
+  end
+
+  defp store_subtitle_json(bucket, keys, body, region) do
+    Enum.reduce_while(keys, :ok, fn path, :ok ->
+      case storage_adapter().put_public(bucket, path, body, "application/json", region) do
+        {:ok, _} -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
   end
 
   defp default_audio_language(video_id) do
@@ -895,7 +902,7 @@ defmodule MaveCore.Assets do
              video.status in ["uploading", "preparing", "playable"] ->
         with {:ok, _job} <-
                %{embed_id: embed.id, video_id: video.id, seconds: seconds}
-               |> MaveCore.Workers.TimecodeThumbnailWorker.new()
+               |> TimecodeThumbnailWorker.new()
                |> Oban.insert() do
           :ok
         end
@@ -913,7 +920,7 @@ defmodule MaveCore.Assets do
            {:timecode, ^seconds} <- selected_thumbnail_action(embed),
            :ok <- publish_timecode_thumbnail(embed, seconds),
            {:ok, _manifest} <- ManifestPublisher.publish(embed) do
-        MaveCore.Embeds.Events.broadcast_updated(embed.space_id, embed.id, %{
+        Events.broadcast_updated(embed.space_id, embed.id, %{
           "action" => "settings_published"
         })
 

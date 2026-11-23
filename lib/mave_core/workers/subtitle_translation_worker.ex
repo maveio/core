@@ -69,45 +69,51 @@ defmodule MaveCore.Workers.SubtitleTranslationWorker do
         "quantity" => quantity
       }
 
-      Repo.transaction(fn ->
-        with {:ok, job} <- Oban.insert(new(args)),
-             :ok <- observe(:reserve_translation, [embed, job]) do
-          job
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
+      reserve_translation(embed, args)
     else
       :disabled -> {:error, :automatic_subtitles_disabled}
       _ -> {:error, :invalid_translation}
     end
   end
 
+  defp reserve_translation(embed, args) do
+    Repo.transaction(fn ->
+      with {:ok, job} <- Oban.insert(new(args)),
+           :ok <- observe(:reserve_translation, [embed, job]) do
+        job
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
   @impl true
   def perform(%Oban.Job{args: args} = job) do
-    with %Embed{deleted_at: nil} = embed <- Repo.get(Embed, args["embed_id"]) do
-      embed = Repo.preload(embed, [:space, asset: :current_video])
-      result = generate(embed, job)
+    case Repo.get(Embed, args["embed_id"]) do
+      %Embed{deleted_at: nil} = embed ->
+        embed = Repo.preload(embed, [:space, asset: :current_video])
+        result = generate(embed, job)
 
-      cond do
-        result == :ok ->
-          Events.broadcast_updated(embed.space_id, embed.id, %{
-            "subtitle_translation" => "published"
-          })
+        cond do
+          result == :ok ->
+            Events.broadcast_updated(embed.space_id, embed.id, %{
+              "subtitle_translation" => "published"
+            })
 
-        match?({:cancel, _}, result) or job.attempt == job.max_attempts ->
-          Events.broadcast_updated(embed.space_id, embed.id, %{
-            "subtitle_translation" => "failed",
-            "language" => args["target"]
-          })
+          match?({:cancel, _}, result) or job.attempt == job.max_attempts ->
+            Events.broadcast_updated(embed.space_id, embed.id, %{
+              "subtitle_translation" => "failed",
+              "language" => args["target"]
+            })
 
-        true ->
-          :ok
-      end
+          true ->
+            :ok
+        end
 
-      result
-    else
-      _ -> {:cancel, :embed_missing}
+        result
+
+      _ ->
+        {:cancel, :embed_missing}
     end
   end
 
@@ -148,25 +154,7 @@ defmodule MaveCore.Workers.SubtitleTranslationWorker do
          texts =
            Map.new(Enum.zip(cues, translated), fn {cue, segment} -> {cue.id, segment.text} end),
          {:ok, body} <- SubtitleDocument.render(editor.document, texts) do
-      Repo.transaction(fn ->
-        Repo.one!(from(v in Video, where: v.id == ^id, lock: "FOR UPDATE"))
-        if target_exists?(id, target), do: Repo.rollback(:obsolete)
-
-        with {:ok, current} <- Assets.load_subtitle_document(embed, args["source_id"]),
-             true <- current.revision == editor.revision and current.language == editor.language,
-             {:ok, _} <- Assets.publish_translated_subtitle(embed, video, target, body),
-             :ok <- observe(:translation_published, [embed, job]) do
-          :ok
-        else
-          false -> Repo.rollback(:obsolete)
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
-      |> case do
-        {:ok, :ok} -> :ok
-        {:error, :obsolete} -> {:cancel, :obsolete}
-        error -> error
-      end
+      publish_translation(embed, video, editor, target, body, job)
     else
       :disabled ->
         {:cancel, :translation_disabled}
@@ -214,5 +202,29 @@ defmodule MaveCore.Workers.SubtitleTranslationWorker do
          function_exported?(observer, callback, length(args)),
        do: apply(observer, callback, args),
        else: :ok
+  end
+
+  defp publish_translation(embed, video, editor, target, body, %{args: args} = job) do
+    id = video.id
+
+    Repo.transaction(fn ->
+      Repo.one!(from(v in Video, where: v.id == ^id, lock: "FOR UPDATE"))
+      if target_exists?(id, target), do: Repo.rollback(:obsolete)
+
+      with {:ok, current} <- Assets.load_subtitle_document(embed, args["source_id"]),
+           true <- current.revision == editor.revision and current.language == editor.language,
+           {:ok, _} <- Assets.publish_translated_subtitle(embed, video, target, body),
+           :ok <- observe(:translation_published, [embed, job]) do
+        :ok
+      else
+        false -> Repo.rollback(:obsolete)
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, :ok} -> :ok
+      {:error, :obsolete} -> {:cancel, :obsolete}
+      error -> error
+    end
   end
 end

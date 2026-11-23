@@ -2,6 +2,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
   use ExUnit.Case, async: false
 
   alias MaveCore.Flow.Steps.AiTranscribeAudioStep
+  alias MaveCore.Flow.Steps.AiTranslateSubtitlesStep
   alias MaveCore.TestSupport.FlowStorageAdapterStub
 
   setup do
@@ -47,7 +48,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStepTest do
     ctx = %{run_input: Map.put(input, "audio_description", %{"languages" => ["original"]})}
 
     assert {:ok, %{"status" => "skipped"}, []} =
-             MaveCore.Flow.Steps.AiTranslateSubtitlesStep.run(step, ctx)
+             AiTranslateSubtitlesStep.run(step, ctx)
 
     assert {:ok, output, []} = AiTranscribeAudioStep.run(step, ctx)
     assert output["language"] == "nl"

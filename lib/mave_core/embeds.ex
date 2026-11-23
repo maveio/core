@@ -10,6 +10,7 @@ defmodule MaveCore.Embeds do
   alias MaveCore.Assets.{Asset, AudioDescription, AudioTrack, Video}
   alias MaveCore.Collections.{Collection, CollectionEmbed}
   alias MaveCore.EmbedId
+  alias MaveCore.Workers.SubtitleTranslationWorker
 
   alias MaveCore.Embeds.{
     Embed,
@@ -538,6 +539,31 @@ defmodule MaveCore.Embeds do
     )
   end
 
+  defp original_media_language(current_video, audio_tracks) do
+    current_video &&
+      (Languages.normalize_media_language(current_video.language) ||
+         Enum.find_value(audio_tracks, &(&1.default && &1.language)))
+  end
+
+  defp ordered_subtitles(space, embed, video, version, original_language) do
+    space
+    |> subtitles_for(embed, video, version)
+    |> Enum.sort_by(&(&1.language != original_language or is_nil(original_language)))
+  end
+
+  defp add_pending_translations(pending_media, current_video, subtitles) do
+    translations =
+      current_video
+      |> SubtitleTranslationWorker.pending()
+      |> Enum.reject(fn row -> Enum.any?(subtitles, &(&1.language == row.language)) end)
+
+    Map.update!(
+      pending_media,
+      :subtitles,
+      &Enum.uniq_by(&1 ++ translations, fn row -> row.language end)
+    )
+  end
+
   defp build_video_dashboard_payload(
          space,
          video_embed,
@@ -555,15 +581,10 @@ defmodule MaveCore.Embeds do
     audio_descriptions =
       audio_descriptions_for(space, video_embed, current_video, current_version)
 
-    original_language =
-      current_video &&
-        (Languages.normalize_media_language(current_video.language) ||
-           Enum.find_value(audio_tracks, &(&1.default && &1.language)))
+    original_language = original_media_language(current_video, audio_tracks)
 
     subtitles =
-      space
-      |> subtitles_for(video_embed, current_video, current_version)
-      |> Enum.sort_by(&(&1.language != original_language or is_nil(original_language)))
+      ordered_subtitles(space, video_embed, current_video, current_version, original_language)
 
     pending_media =
       PendingMedia.for_run(flow_run, current_version, %{
@@ -572,17 +593,7 @@ defmodule MaveCore.Embeds do
         subtitles: subtitles
       })
 
-    translations =
-      current_video
-      |> MaveCore.Workers.SubtitleTranslationWorker.pending()
-      |> Enum.reject(fn row -> Enum.any?(subtitles, &(&1.language == row.language)) end)
-
-    pending_media =
-      Map.update!(
-        pending_media,
-        :subtitles,
-        &Enum.uniq_by(&1 ++ translations, fn row -> row.language end)
-      )
+    pending_media = add_pending_translations(pending_media, current_video, subtitles)
 
     audio_tracks = PendingMedia.audio_tracks_for_run(audio_tracks, flow_run, current_version)
 
@@ -624,16 +635,7 @@ defmodule MaveCore.Embeds do
       component_config_required: SettingsSerializer.component_config_required?(),
       component_config_json: SettingsSerializer.component_config_json(),
       processing_player_ready: processing_player_ready_for_version?(flow_run, current_version),
-      original: %{
-        language: original_language,
-        audio_only: audio_only?,
-        width: int_or_zero(current_video && current_video.max_width),
-        height: int_or_zero(current_video && current_video.max_height),
-        file_size: int_or_zero(current_video && current_video.original_file_size),
-        duration: current_video && current_video.duration,
-        fps: fps_value(current_video) || 0,
-        bitrate: bitrate_mbit(current_video && current_video.max_bitrate)
-      },
+      original: original_video_metadata(current_video, original_language, audio_only?),
       thumbnail_preview:
         thumbnail_preview(
           space,
@@ -651,6 +653,19 @@ defmodule MaveCore.Embeds do
         PendingMedia.skipped_description(flow_run, current_video && current_video.id),
       renditions: renditions_for(current_video, flow_run),
       flow: flow_summary_for(flow_run)
+    }
+  end
+
+  defp original_video_metadata(current_video, original_language, audio_only?) do
+    %{
+      language: original_language,
+      audio_only: audio_only?,
+      width: int_or_zero(current_video && current_video.max_width),
+      height: int_or_zero(current_video && current_video.max_height),
+      file_size: int_or_zero(current_video && current_video.original_file_size),
+      duration: current_video && current_video.duration,
+      fps: fps_value(current_video) || 0,
+      bitrate: bitrate_mbit(current_video && current_video.max_bitrate)
     }
   end
 

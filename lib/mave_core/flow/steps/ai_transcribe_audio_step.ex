@@ -10,13 +10,13 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
   @behaviour MaveCore.Flow.Step
 
   alias MaveCore.AudioDescription
-  alias MaveCore.Transcription.SubtitleDocument
   alias MaveCore.Embeds.SettingsSerializer
   alias MaveCore.Flow.Steps.Support, as: StepSupport
   alias MaveCore.Languages
   alias MaveCore.Media.Storage
   alias MaveCore.Transcription.LanguageDetector
   alias MaveCore.Transcription.SubtitleCues
+  alias MaveCore.Transcription.SubtitleDocument
 
   @impl true
   def run(step, %{run_input: %{"automatic_subtitles_enabled" => false} = input} = context) do
@@ -76,15 +76,17 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
              bucket,
              region,
              requested_language
-           ),
-         {language, language_source, detection_attempted?} =
-           subtitle_language(
-             detected_language,
-             requested_language,
-             transcode_audio_output,
-             transcription_text
-           ),
-         label = normalize_label(Map.get(run_input, "transcription_label"), language) do
+           ) do
+      {language, language_source, detection_attempted?} =
+        subtitle_language(
+          detected_language,
+          requested_language,
+          transcode_audio_output,
+          transcription_text
+        )
+
+      label = normalize_label(Map.get(run_input, "transcription_label"), language)
+
       output =
         mode_meta
         |> Map.merge(%{
@@ -111,16 +113,9 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
         )
       else
         publish_subtitles(
-          storage_adapter,
-          bucket,
-          space_hash,
-          embed_hash,
-          version,
-          region,
-          language,
-          label,
-          subtitle_body,
-          subtitle_json,
+          {storage_adapter, bucket, region},
+          {space_hash, embed_hash, version},
+          {language, label, subtitle_body, subtitle_json},
           output
         )
       end
@@ -150,16 +145,9 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
   end
 
   defp publish_subtitles(
-         storage_adapter,
-         bucket,
-         space_hash,
-         embed_hash,
-         version,
-         region,
-         language,
-         label,
-         subtitle_body,
-         subtitle_json,
+         {storage_adapter, bucket, region},
+         {space_hash, embed_hash, version},
+         {language, label, subtitle_body, subtitle_json},
          output
        ) do
     with {:ok, key} <- build_subtitle_key(embed_hash, version, language),
@@ -227,7 +215,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
          requested_language
        ) do
     cond do
-      is_binary(run_input["transcription_vtt"]) and run_input["transcription_vtt"] != "" ->
+      provided_text?(run_input["transcription_vtt"]) ->
         {:ok, run_input["transcription_vtt"], nil, "input_vtt", %{}, requested_language, nil}
 
       is_list(run_input["transcription_segments"]) ->
@@ -236,7 +224,7 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
           {:ok, vtt_body, nil, "input_segments", %{}, requested_language, transcript_text}
         end
 
-      is_binary(run_input["transcription_text"]) and run_input["transcription_text"] != "" ->
+      provided_text?(run_input["transcription_text"]) ->
         duration =
           parse_float(run_input["duration"]) ||
             parse_float(inspect_output["duration"]) ||
@@ -263,6 +251,8 @@ defmodule MaveCore.Flow.Steps.AiTranscribeAudioStep do
         )
     end
   end
+
+  defp provided_text?(value), do: is_binary(value) and value != ""
 
   defp build_provider_subtitle_body(
          transcode_audio_output,

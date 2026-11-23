@@ -13,6 +13,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
   alias MaveCore.Flow
   alias MaveCore.Flow.Run
   alias MaveCore.Flow.StepRun
+  alias MaveCore.Flow.Steps.AiSpeakDescriptionsStep
   alias MaveCore.Media.Storage
   alias MaveCore.Repo
   alias MaveCore.Spaces
@@ -2955,7 +2956,7 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
       )
 
     fingerprint =
-      MaveCore.Flow.Steps.AiSpeakDescriptionsStep.speech_fingerprint(
+      AiSpeakDescriptionsStep.speech_fingerprint(
         %{run_input: %{}},
         "One.",
         "en",
@@ -3855,7 +3856,10 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     {:ok, view, _} = live(conn, "/#{space.id}/videos/#{video.id}")
     render_click(element(view, "#video-actions .cursor-pointer", "delete"))
     destination = "/#{space.id}/videos/#{inner.id}"
-    assert {:error, {:live_redirect, %{to: ^destination}}} = render_click(element(view, "#dialog button", "confirm"))
+
+    assert {:error, {:live_redirect, %{to: ^destination}}} =
+             render_click(element(view, "#dialog button", "confirm"))
+
     assert Repo.get!(Embed, video.id).deleted_at
   end
 

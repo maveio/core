@@ -123,7 +123,7 @@ defmodule MaveCore.AudioDescription.DescriptionDocument do
           {cursor, late?, spoken?}
         else
           seconds = estimated_seconds(moment, sources, language)
-          next = max(cursor + if(spoken?, do: @breath, else: 0), moment["start"] - @earlier)
+          next = max(cursor + breath(spoken?), moment["start"] - @earlier)
           {next + seconds, late? or next > moment["start"] + @later, true}
         end
       end)
@@ -176,4 +176,7 @@ defmodule MaveCore.AudioDescription.DescriptionDocument do
         )
     end
   end
+
+  defp breath(true), do: @breath
+  defp breath(false), do: 0
 end

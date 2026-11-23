@@ -11,6 +11,7 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
   require Logger
 
   alias MaveCore.AudioDescription.{Budget, Cues, Observations, Script, Timeline}
+  alias MaveCore.AudioDescription.Publication
   alias MaveCore.Embeds.SettingsSerializer
   alias MaveCore.Flow.Steps.AudioDescriptionSupport, as: AD
   alias MaveCore.Flow.Steps.Support, as: StepSupport
@@ -33,7 +34,7 @@ defmodule MaveCore.Flow.Steps.AiDescribeVideoStep do
     with {:ok, document} <- AD.get_json(ctx, scenes_output["scenes_key"]),
          duration = document["duration"] * 1.0,
          :ok <-
-           MaveCore.AudioDescription.Publication.reserve_flow(ctx, AD.language(ctx), duration),
+           Publication.reserve_flow(ctx, AD.language(ctx), duration),
          {:ok, transcript} <- speech(ctx, duration),
          speech = transcript.intervals,
          scenes = intervals(document["scenes"]),

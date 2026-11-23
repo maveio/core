@@ -8,9 +8,11 @@ defmodule MaveCore.Flow do
   alias Ecto.Adapters.SQL
   alias MaveCore.Assets
   alias MaveCore.Assets.{Asset, AudioDescription, AudioTrack, Rendition, Subtitle, Video}
+  alias MaveCore.AudioDescription.Publication
   alias MaveCore.Embeds
   alias MaveCore.Embeds.{Embed, ManifestPublisher, PlayerPublisher}
   alias MaveCore.Embeds.Events, as: EmbedEvents
+  alias MaveCore.Embeds.PendingMedia
   alias MaveCore.EncodingBooster
   alias MaveCore.GpuEncodingBooster
 
@@ -295,7 +297,7 @@ defmodule MaveCore.Flow do
            true <- Spaces.audio_description_active?(current.space),
            %Run{id: ^expected_run_id} = run <-
              Embeds.latest_flow_run(current.space.hash, current.hash, lock: true),
-           %{} = skipped <- MaveCore.Embeds.PendingMedia.skipped_description(run, video_id),
+           %{} = skipped <- PendingMedia.skipped_description(run, video_id),
            false <-
              Repo.exists?(
                from(d in AudioDescription,
@@ -306,7 +308,7 @@ defmodule MaveCore.Flow do
              ),
            true <- description_subtree?(run, skipped.step_id),
            :ok <-
-             MaveCore.AudioDescription.Publication.reserve_flow(
+             Publication.reserve_flow(
                %{
                  space_hash: current.space.hash,
                  embed_hash: current.hash,
@@ -5334,8 +5336,7 @@ defmodule MaveCore.Flow do
                  durable_original
                ),
              {:ok, promoted_run} <- promote_durable_source(run, durable_original) do
-          if current_run_video?(embed, video),
-            do: report_published_descriptions(embed, video, run.id, step_runs)
+          maybe_report_descriptions(embed, video, run.id, step_runs)
 
           maybe_make_upload_private(promoted_run, durable_original, space_hash, embed_hash)
         else
@@ -5352,6 +5353,11 @@ defmodule MaveCore.Flow do
     end
   end
 
+  defp maybe_report_descriptions(embed, video, run_id, step_runs) do
+    if current_run_video?(embed, video),
+      do: report_published_descriptions(embed, video, run_id, step_runs)
+  end
+
   defp report_published_descriptions(embed, video, run_id, steps) do
     for %StepRun{
           step_type: "media.mix_audio_description",
@@ -5366,7 +5372,7 @@ defmodule MaveCore.Flow do
            duration when is_number(duration) and duration > 0 <-
              Repo.get!(Video, video.id).duration do
         :ok =
-          MaveCore.AudioDescription.Publication.published(
+          Publication.published(
             embed,
             video.id,
             language,

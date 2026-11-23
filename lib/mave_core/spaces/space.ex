@@ -40,7 +40,11 @@ defmodule MaveCore.Spaces.Space do
 
   def features_changeset(space, attrs) do
     space
-    |> cast(attrs, [:hotlink_protection_enabled, :automatic_subtitles_enabled, :audio_description_enabled])
+    |> cast(attrs, [
+      :hotlink_protection_enabled,
+      :automatic_subtitles_enabled,
+      :audio_description_enabled
+    ])
     |> validate_shared_storage_features()
   end
 
