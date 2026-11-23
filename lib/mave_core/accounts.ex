@@ -10,6 +10,7 @@ defmodule MaveCore.Accounts do
   alias MaveCore.Embeds.Embed
   alias MaveCore.Repo
   alias MaveCore.Spaces
+  alias MaveCore.Spaces.Events
   alias MaveCore.Spaces.{Domain, Membership, MembershipInvite, Space}
   alias MaveCore.StorageProfiles
   alias MaveCore.Workers.AccountDeletionWorker
@@ -218,6 +219,49 @@ defmodule MaveCore.Accounts do
     end)
   end
 
+  def can_delete_personal_account?(%User{id: user_id}) do
+    if Repo.exists?(from(m in Membership, where: m.user_id == ^user_id and m.role == "owner")),
+      do: {:error, :owns_spaces},
+      else: :ok
+  end
+
+  def delete_personal_account(%User{id: user_id}) do
+    result =
+      Repo.transaction(fn ->
+        memberships = from(m in Membership, where: m.user_id == ^user_id)
+
+        with {:ok, user} <- lock_active_user(user_id),
+             rows = Repo.all(from(m in memberships, lock: "FOR UPDATE")),
+             false <- Enum.any?(rows, &(&1.role == "owner")),
+             {:ok, deleted_user} <- anonymize_and_delete_user(user) do
+          Repo.delete_all(memberships)
+          {deleted_user, Enum.map(rows, & &1.space_id)}
+        else
+          true -> Repo.rollback(:owns_spaces)
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:ok, {deleted_user, space_ids}} ->
+        Enum.each(space_ids, &Events.broadcast_updated/1)
+        Events.broadcast_access_changed()
+        {:ok, deleted_user}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp lock_active_user(user_id) do
+    case Repo.one(
+           from(u in User, where: u.id == ^user_id and is_nil(u.deleted_at), lock: "FOR UPDATE")
+         ) do
+      %User{} = user -> {:ok, user}
+      nil -> {:error, :user_not_found}
+    end
+  end
+
   def login_or_register_with_google(attrs) when is_map(attrs) do
     uid = map_get(attrs, :uid)
     email = map_get(attrs, :email)
@@ -253,9 +297,7 @@ defmodule MaveCore.Accounts do
         end
 
       nil ->
-        with {:ok, space} <- create_space(default_space_attrs()),
-             {:ok, membership} <- create_membership(user, space, "owner"),
-             {:ok, updated_user} <- set_current_space_membership(user, membership) do
+        with {:ok, updated_user} <- create_space_for_user(user, default_space_attrs()) do
           {:ok, Repo.preload(updated_user, current_space_membership: [space: [:domains]])}
         end
     end
@@ -288,7 +330,8 @@ defmodule MaveCore.Accounts do
 
   def create_space_for_user(%User{} = user, attrs \\ %{}) when is_map(attrs) do
     Repo.transaction(fn ->
-      with {:ok, space} <- create_space(attrs),
+      with {:ok, user} <- lock_active_user(user.id),
+           {:ok, space} <- create_space(attrs),
            {:ok, _domain} <- maybe_create_domain(space, attrs),
            {:ok, membership} <- create_membership(user, space, "owner"),
            {:ok, updated_user} <- set_current_space_membership(user, membership) do

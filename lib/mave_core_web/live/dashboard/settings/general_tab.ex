@@ -403,14 +403,31 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
           <.data_table_row :for={{action, reason} <- @deletion_rows}>
             <div>
               <div>{deletion_title(action)}</div>
-              <div :if={reason} id={"delete-#{action}-reason"} class="mt-1 text-xs text-stone-400">{reason}</div>
+              <div :if={reason} id={"delete-#{action}-reason"} class="mt-1 text-xs text-stone-400">
+                {reason}
+              </div>
+              <div
+                :if={!reason && action == :account && @deletion_action == :account}
+                class="mt-1 text-xs text-stone-500"
+              >
+                {deletion_description(@deletion_action)}
+              </div>
             </div>
-            <.info_hover :if={!reason} color="red">{deletion_description(action)}</.info_hover>
+            <.info_hover :if={!reason && action == :space} color="red">
+              {deletion_description(action)}
+            </.info_hover>
             <:actions>
               <div class="py-2 px-4 whitespace-nowrap">
-                <.dash_button id={"settings-delete-#{action}-button"} variant="danger" icon="close"
-                  disabled={reason != nil} aria-describedby={reason && "delete-#{action}-reason"}
-                  phx-click="open_modal" phx-value-modal="delete_account" phx-target={@myself}>
+                <.dash_button
+                  id={"settings-delete-#{action}-button"}
+                  variant="danger"
+                  icon="close"
+                  disabled={reason != nil}
+                  aria-describedby={reason && "delete-#{action}-reason"}
+                  phx-click="open_modal"
+                  phx-value-modal="delete_account"
+                  phx-target={@myself}
+                >
                   {deletion_title(action)}
                 </.dash_button>
               </div>
@@ -488,7 +505,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
 
       <%!-- Delete Account Modal --%>
       <.modal
-        :if={@show_delete_account}
+        :if={@show_delete_account && @deletion_action != :hidden}
         id="delete-account-modal"
         show={true}
         title={deletion_title(@deletion_action)}
@@ -526,11 +543,22 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
             </svg>
           </div>
           {deletion_description(@deletion_action)}
-          <ul class="list-disc pl-5 my-2 text-sm">
-            <li :if={@deletion_action == :account}>{gettext("You own only this space and are its only team member.")}</li>
-            <li :if={@deletion_action == :space}>{gettext("Remove team members and pending invitations first.")}</li>
+          <ul :if={@deletion_action != :account_only} class="list-disc pl-5 my-2 text-sm">
+            <li :if={@deletion_action == :account}>
+              {gettext(
+                "You are the owner and only team member of this space, and you do not belong to any other space."
+              )}
+            </li>
+            <li :if={@deletion_action == :space}>
+              {gettext("Remove team members and pending invitations first.")}
+            </li>
             <li>{gettext("Remove all videos first.")}</li>
-            <li :for={requirement <- @account_deletion_requirements} :if={@deletion_action == :account}>{requirement}</li>
+            <li
+              :for={requirement <- @account_deletion_requirements}
+              :if={@deletion_action == :account}
+            >
+              {requirement}
+            </li>
           </ul>
         </div>
         <.info_box>
@@ -569,7 +597,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
 
       <%!-- Confirm Delete Account Dialog --%>
       <.dialog
-        :if={@show_confirm_delete}
+        :if={@show_confirm_delete && @deletion_action != :hidden}
         id="confirm-delete-account-dialog"
         show={true}
         on_confirm={JS.push("confirmed_account_deletion", target: @myself)}
@@ -780,6 +808,9 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
           :space ->
             :ok
 
+          :account_only ->
+            Accounts.can_delete_personal_account?(socket.assigns.current_user)
+
           _ ->
             {:error, :not_authorized}
         end
@@ -824,6 +855,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
     result =
       case action do
         :account -> Accounts.delete_account_and_space(user, space, require_empty: true)
+        :account_only -> Accounts.delete_personal_account(user)
         :space -> AccountDeletion.delete_subspace(user, space)
       end
 
@@ -835,9 +867,14 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
          |> redirect(to: MaveCoreWeb.DashboardRoutes.settings_path(parent))}
 
       {:ok, _user} ->
+        message =
+          if action == :account_only,
+            do: gettext("Your account has been deleted."),
+            else: gettext("Your account and space have been deleted.")
+
         {:noreply,
          socket
-         |> put_flash(:info, gettext("Your account and space have been deleted."))
+         |> put_flash(:info, message)
          |> redirect(to: "/login")}
 
       {:error, reason} ->
@@ -883,10 +920,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
     |> assign(:current_region, current_space.region)
     |> assign(:region_cards, dashboard_region_cards(current_space))
     |> assign(:region_help, dashboard_region_help(current_space))
-    |> assign(
-      :deletion_action,
-      AccountDeletion.settings_action(socket.assigns.current_user, current_space)
-    )
+    |> assign(:deletion_action, deletion_action(socket.assigns.current_user, current_space))
     |> assign_deletion_rows()
     |> assign(:account_deletion_requirements, AccountDeletion.requirements())
     |> assign(:google_oauth_enabled, GoogleOAuth.enabled?())
@@ -955,7 +989,8 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
   defp toggle_modal(socket, "link_domain", visible),
     do: assign(socket, :show_link_domain, visible)
 
-  defp toggle_modal(socket, "delete_account", true) do
+  defp toggle_modal(%{assigns: %{deletion_action: action}} = socket, "delete_account", true)
+       when action in [:account, :account_only, :space] do
     socket
     |> assign(:show_delete_account, true)
     |> assign(:delete_target, nil)
@@ -974,6 +1009,16 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
     do: assign(socket, :show_confirm_delete, visible)
 
   defp toggle_modal(socket, _modal, _visible), do: socket
+
+  defp deletion_action(user, space) do
+    case Accounts.can_delete_personal_account?(user) do
+      :ok -> :account_only
+      {:error, :owns_spaces} -> AccountDeletion.settings_action(user, space)
+    end
+  end
+
+  defp assign_deletion_rows(%{assigns: %{deletion_action: :account_only}} = socket),
+    do: assign(socket, :deletion_rows, account: nil)
 
   defp assign_deletion_rows(socket) do
     %{current_user: user, current_space: space, deletion_action: action} = socket.assigns
@@ -1012,9 +1057,16 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
   defp deletion_description(:space),
     do: gettext("Delete this subspace. Your login and main space stay active.")
 
-  defp deletion_description(_), do: gettext("Delete your personal login and this space together.")
+  defp deletion_description(:account_only),
+    do: gettext("Delete your account. This space and its videos will stay.")
+
+  defp deletion_description(:account),
+    do: gettext("Permanently delete your account and this space together.")
 
   defp delete_account_error(:videos_exist), do: gettext("Remove the videos in this space first.")
+
+  defp delete_account_error(:owns_spaces),
+    do: gettext("You still own a space. Use its settings to manage account deletion.")
 
   defp delete_account_error("Memberships exist"),
     do:
