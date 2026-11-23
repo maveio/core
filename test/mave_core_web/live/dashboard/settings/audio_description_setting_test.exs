@@ -64,6 +64,14 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.AudioDescriptionSettingTest do
     {:ok, view, _} = live(conn, "/settings")
     view |> element("#edit-subtitle-vocabulary") |> render_click()
 
+    assert has_element?(
+             view,
+             "#subtitle-vocabulary-form",
+             "model may still choose a different spelling"
+           )
+
+    assert has_element?(view, "#subtitle-vocabulary-help", "Up to 100 entries.")
+
     form = fn text ->
       view |> form("#subtitle-vocabulary-form", vocabulary: %{terms: text}) |> render_submit()
     end
@@ -73,8 +81,17 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.AudioDescriptionSettingTest do
     view |> element("#edit-subtitle-vocabulary") |> render_click()
     assert has_element?(view, "#subtitle-vocabulary-form textarea", "Open Science")
     form.(String.duplicate("x", 81))
-    assert has_element?(view, "#subtitle-vocabulary-form", "up to 25")
+    assert has_element?(view, "#subtitle-vocabulary-form", "up to 100")
     assert Repo.get!(Space, space.id).subtitle_vocabulary == ["Open Science", "KB"]
+
+    terms = for index <- 1..100, do: "Example term #{index}"
+    form.(Enum.join(terms ++ ["Extra term"], "\n"))
+    assert has_element?(view, "#subtitle-vocabulary-form", "up to 100")
+    assert Repo.get!(Space, space.id).subtitle_vocabulary == ["Open Science", "KB"]
+
+    form.(Enum.join(terms, "\n"))
+    assert Repo.get!(Space, space.id).subtitle_vocabulary == terms
+    view |> element("#edit-subtitle-vocabulary") |> render_click()
     form.("")
     assert Repo.get!(Space, space.id).subtitle_vocabulary == []
     view |> element("#automatic-subtitles-toggle") |> render_click()

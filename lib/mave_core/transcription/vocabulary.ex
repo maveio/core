@@ -1,8 +1,12 @@
 defmodule MaveCore.Transcription.Vocabulary do
   @moduledoc "Space-specific spelling hints for subtitle generation."
+  @max_entries 100
+  @max_input_bytes 40_000
   @term ~r/\A[\p{L}\p{N}][\p{L}\p{M}\p{N} &'’.+()\/®™#‐‑–-]*\z/u
 
-  def parse(text) when is_binary(text) and byte_size(text) <= 16_000 do
+  def max_entries, do: @max_entries
+
+  def parse(text) when is_binary(text) and byte_size(text) <= @max_input_bytes do
     terms =
       text
       |> String.split(~r/\r\n|\n|\r/u)
@@ -15,7 +19,7 @@ defmodule MaveCore.Transcription.Vocabulary do
 
   def parse(_), do: {:error, :invalid_vocabulary}
 
-  def valid?(terms) when is_list(terms) and length(terms) <= 25 do
+  def valid?(terms) when is_list(terms) and length(terms) <= @max_entries do
     Enum.all?(terms, fn term ->
       is_binary(term) and String.valid?(term) and String.length(term) <= 80 and
         Regex.match?(@term, term)

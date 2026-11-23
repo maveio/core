@@ -15,7 +15,7 @@ defmodule MaveCore.Transcription.VocabularyTest do
     assert {:ok, ["C++", "AT&T"]} = Vocabulary.parse("C++\nAT&T")
 
     assert {:error, :invalid_vocabulary} =
-             Vocabulary.parse(Enum.map_join(1..26, "\n", &"Name #{&1}"))
+             Vocabulary.parse(Enum.map_join(1..101, "\n", &"Name #{&1}"))
 
     assert {:error, :invalid_vocabulary} = Vocabulary.parse("<instruction>")
   end

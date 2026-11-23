@@ -225,9 +225,31 @@ defmodule MaveCore.Transcription.MistralTest do
   test "model overrides keep segment requests unless word timestamps are explicitly requested" do
     Req.default_options(adapter: RequestAdapter)
     System.put_env("MISTRAL_TRANSCRIPTION_MODEL", "voxtral-mini-transcribe-3-0")
-    assert {:ok, _} = Mistral.transcribe_url("https://example.com/audio.mp3")
+
+    assert {:ok, _} =
+             Mistral.transcribe_url("https://example.com/audio.mp3",
+               vocabulary: ["Example dashboard"]
+             )
+
     assert_receive {:mistral_request, req}
-    assert Jason.decode!(req.body)["timestamp_granularities"] == ["segment"]
+
+    assert %{"timestamp_granularities" => ["segment"], "context_bias" => ["Example dashboard"]} =
+             Jason.decode!(req.body)
+  end
+
+  test "Voxtral 2 sends underscored phrase hints and preserves single words in both transports" do
+    Req.default_options(adapter: RequestAdapter)
+    opts = [vocabulary: ["Example", "Example dashboard"]]
+
+    assert {:ok, _} = Mistral.transcribe_url("https://example.com/audio.mp3", opts)
+    assert_receive {:mistral_request, url_request}
+    assert Jason.decode!(url_request.body)["context_bias"] == ["Example", "Example_dashboard"]
+
+    assert {:ok, _} = Mistral.transcribe("synthetic audio", opts)
+    assert_receive {:mistral_request, multipart_request}
+    body = IO.iodata_to_binary(multipart_request.body)
+    assert body =~ "name=\"context_bias\"\r\n\r\nExample\r\n"
+    assert body =~ "name=\"context_bias\"\r\n\r\nExample_dashboard\r\n"
   end
 
   test "callers can explicitly retain segment timing on V2" do

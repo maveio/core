@@ -9,6 +9,7 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
   alias MaveCore.Spaces
   alias MaveCore.Spaces.Domain
   alias MaveCore.Spaces.Space
+  alias MaveCore.Transcription.Vocabulary
   alias MaveCore.UsageLimits
   alias Phoenix.LiveView.JS
 
@@ -452,14 +453,14 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
         >
           <.info_box>
             {gettext(
-              "Help AI subtitles recognize names. If you say “mave” and the subtitles show “Maeve”, enter “mave” below."
+              "Give AI subtitles spelling hints for names, technical terms, and phrases. Hints work best in English, and the model may still choose a different spelling."
             )}
           </.info_box>
           <div class="mt-8">
             <.input
               type="textarea"
               field={@vocabulary_editor[:terms]}
-              label={gettext("Correct spellings")}
+              label={gettext("Words and phrases")}
               rows="7"
               placeholder="mave"
               aria-describedby="subtitle-vocabulary-help"
@@ -467,7 +468,9 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
             />
           </div>
           <p id="subtitle-vocabulary-help" class="mt-2 text-xs text-stone-500">
-            {gettext("One name or term per line. Up to 25 entries.")}
+            {gettext("One word or phrase per line. Up to %{count} entries.",
+              count: Vocabulary.max_entries()
+            )}
           </p>
           <div class="mt-10 flex justify-end">
             <.dash_button type="submit" variant="primary">{gettext("Save")}</.dash_button>
@@ -640,7 +643,8 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
             errors: [
               terms:
                 {gettext(
-                   "Use up to 25 names or terms, each at most 80 characters, using letters, numbers and common name punctuation."
+                   "Use up to %{count} words or phrases, each at most 80 characters, using letters, numbers and common punctuation.",
+                   count: Vocabulary.max_entries()
                  ), []}
             ]
           )
