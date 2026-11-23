@@ -65,12 +65,18 @@ defmodule MaveCoreWeb.DashboardComponents.Media do
       ]}
       {@rest}
     >
-      <.link :if={@navigate} navigate={@navigate} class="flex-none w-24 aspect-video py-2 z-0">
+      <.link
+        :if={@navigate}
+        navigate={@navigate}
+        draggable={if @draggable, do: "false"}
+        class="flex-none w-24 aspect-video py-2 z-0"
+      >
         <.media_thumbnail type={@type} thumbnail={@thumbnail} />
       </.link>
       <.link
         :if={!@navigate and @patch}
         patch={@patch}
+        draggable={if @draggable, do: "false"}
         class="flex-none w-24 aspect-video py-2 z-0"
       >
         <.media_thumbnail type={@type} thumbnail={@thumbnail} />
@@ -82,6 +88,7 @@ defmodule MaveCoreWeb.DashboardComponents.Media do
       <.link
         :if={@navigate}
         navigate={@navigate}
+        draggable={if @draggable, do: "false"}
         class={[
           "flex-grow px-4 ml-1",
           @empty_video && "flex items-center",
@@ -105,6 +112,7 @@ defmodule MaveCoreWeb.DashboardComponents.Media do
       <.link
         :if={!@navigate and @patch}
         patch={@patch}
+        draggable={if @draggable, do: "false"}
         class={[
           "flex-grow px-4 ml-1",
           @empty_video && "flex items-center",
