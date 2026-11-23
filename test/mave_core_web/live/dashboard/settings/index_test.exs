@@ -222,11 +222,15 @@ defmodule MaveCoreWeb.Live.Dashboard.Settings.IndexTest do
 
     {:ok, view, _html} = live(conn, "/settings")
 
+    assert render(view) =~ "Permanently delete your account and this space together."
+    assert {:error, :owns_spaces} = Accounts.delete_personal_account(user)
+
     view
     |> element("#settings-delete-account-button")
     |> render_click()
 
     refute render(view) =~ "active subscription"
+    assert render(view) =~ "you do not belong to any other space"
 
     view
     |> element("#delete_confirmation")
