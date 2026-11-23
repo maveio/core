@@ -38,7 +38,16 @@ defmodule MaveCore.AudioDescription.ScriptEventsTest do
     }
 
   test "writer sees each spoken passage once and leaves scheduling fields to the scheduler" do
-    frame = %{"id" => 1, "time" => 1, "spoken_context" => [%{"text" => "An explanation."}]}
+    element = %{"text" => "Contact", "role" => "title_card", "prominence" => "primary"}
+
+    frame = %{
+      "id" => 1,
+      "time" => 1,
+      "spoken_context" => [%{"text" => "An explanation."}],
+      "visible_text" => ["Contact", "example.org"],
+      "text_elements" => [element]
+    }
+
     Process.put(:event_script, script([]))
 
     assert {:ok, _} =
@@ -52,11 +61,14 @@ defmodule MaveCore.AudioDescription.ScriptEventsTest do
 
     assert_received {:writer_input, input, schema}
     assert input["transcript"] == "An explanation."
-    refute Map.has_key?(hd(input["observations"]), "spoken_context")
+    assert [observation] = input["observations"]
+    refute Map.has_key?(observation, "spoken_context")
+    assert observation["visible_text"] == ["example.org"]
+    assert observation["text_elements"] == [element]
     assert_received {:writer_options, opts}
     assert opts[:reasoning_effort] == "low"
 
-    for field <- ~w(shot pause max_words) do
+    for field <- ~w(start end shot pause max_words) do
       refute Map.has_key?(get_in(schema, ["properties", "cues", "items", "properties"]), field)
     end
   end
@@ -128,7 +140,8 @@ defmodule MaveCore.AudioDescription.ScriptEventsTest do
     ]
 
     frames = [%{"id" => 1, "time" => 1}, %{"id" => 2, "time" => 4}, %{"id" => 3, "time" => 7}]
-    Process.put(:event_script, script([event(0, 6, "A cyclist crosses a bridge.", [1, 2])]))
+    cue = event(0, 6, "A cyclist crosses a bridge.", [1, 2]) |> Map.drop(~w(start end))
+    Process.put(:event_script, script([cue]))
 
     assert {:ok, result} =
              Script.write(
@@ -141,7 +154,10 @@ defmodule MaveCore.AudioDescription.ScriptEventsTest do
 
     assert_received {:writer_input, input, _}
     assert Enum.map(input["shots"], & &1["estimated_words_in_longest_pause"]) == [5, 7, 13]
-    assert [%{"visual_window" => %{"start" => 0, "end" => 6}}] = result["cues"]
+    assert Enum.map(input["observations"], & &1["shot_id"]) == [0, 1, 2]
+
+    assert [%{"start" => 0, "end" => 6, "visual_window" => %{"start" => 0, "end" => 6}}] =
+             result["cues"]
   end
 
   test "successive steps in a single continuous shot retain their own speaking windows" do
@@ -196,8 +212,8 @@ defmodule MaveCore.AudioDescription.ScriptEventsTest do
 
     assert_received {:writer_input, input, schema}
 
-    assert input["observation_windows"] ==
-             Enum.map(1..3, &%{"observation_id" => &1, "start" => 0, "end" => 12})
+    assert Enum.map(input["observations"], & &1["shot_id"]) == [0, 0, 0]
+    assert [%{"shot_id" => 0, "start" => 0, "end" => 12}] = input["shots"]
 
     assert "event_start" in get_in(schema, ["properties", "cues", "items", "required"])
   end

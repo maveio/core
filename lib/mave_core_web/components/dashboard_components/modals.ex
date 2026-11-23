@@ -36,10 +36,23 @@ defmodule MaveCoreWeb.DashboardComponents.Modals do
       id={@id}
       hidden
       phx-mounted={JS.remove_attribute("hidden")}
+      phx-remove={
+        @interactive_background &&
+          JS.hide(
+            to: "##{@id}-panel",
+            transition: {"transition ease-out duration-200", "translate-x-0", "translate-x-full"},
+            time: 200
+          )
+          |> JS.hide(
+            transition: {"transition ease-out duration-200", "opacity-100", "opacity-0"},
+            time: 200
+          )
+      }
       class={[
-        @static && "relative w-full h-96 flex flex-cols bg-stone-900/50",
+        @static && "relative w-full h-96 flex flex-cols",
         !@static && "fixed top-0 left-0 w-full h-full flex flex-cols z-60",
-        if(@interactive_background, do: "pointer-events-none", else: "bg-stone-900/50"),
+        !@interactive_background && "bg-stone-900/50",
+        @interactive_background && "pointer-events-none starting:opacity-0",
         "transition ease-out duration-200",
         @show && "opacity-100",
         !@show && "opacity-0 pointer-events-none"
@@ -49,11 +62,11 @@ defmodule MaveCoreWeb.DashboardComponents.Modals do
     >
       <div class="flex-grow"></div>
       <div
-        id={@resizable && "#{@id}-panel"}
+        id={(@resizable || @interactive_background) && "#{@id}-panel"}
         phx-hook={@resizable && "modal_resize"}
         class={[
           "border-l shadow-lg",
-          @interactive_background && "pointer-events-auto",
+          @interactive_background && "pointer-events-auto starting:translate-x-full",
           if(@compact, do: "flex h-full min-h-0 flex-col overflow-hidden", else: "overflow-scroll"),
           @theme == "light" && "bg-white border-stone-200 border-opacity-70",
           @theme == "dark" && "bg-stone-900 border-stone-800 text-stone-200",
