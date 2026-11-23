@@ -19,6 +19,10 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
      |> assign(assigns)
      |> MaveCoreWeb.SpaceLiveAuth.attach_component()
      |> assign(:show_flow_settings, @show_flow_settings)
+     |> assign(
+       :audio_description_settings_component,
+       Application.get_env(:mave_core, :audio_description_settings_component)
+     )
      |> assign_new(:vocabulary_editor, fn -> nil end)
      |> assign_new(:show_link_domain, fn -> false end)
      |> assign_new(:show_delete_account, fn -> false end)
@@ -264,6 +268,18 @@ defmodule MaveCoreWeb.Dashboard.Settings.GeneralTab do
               </div>
             </:actions>
           </.data_table_row>
+          <.live_component
+            :if={
+              @features.audio_description_visible && @features.audio_description &&
+                @audio_description_settings_component
+            }
+            module={@audio_description_settings_component}
+            id="audio-description-settings"
+            current_space={@current_space}
+            current_user={@current_user}
+            space_access_context={@space_access_context}
+            refresh_key={@refresh_key}
+          />
         </.data_table>
       </div>
 
