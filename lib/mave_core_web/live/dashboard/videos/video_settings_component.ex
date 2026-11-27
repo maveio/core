@@ -2798,11 +2798,19 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       ]
   end
 
-  defp subtitle_menu_items(subtitle, _space, _video_id) do
+  defp subtitle_menu_items(subtitle, space, video_id) do
     [
       menu_item("subtitle-edit-text-#{subtitle.id}", gettext("Edit text"), "hero-pencil-square",
         event: "edit_subtitle_text",
         value: %{id: subtitle.id}
+      ),
+      menu_item(
+        "subtitle-download-#{subtitle.id}",
+        gettext("Download text"),
+        "hero-arrow-down-tray",
+        href: DashboardRoutes.subtitle_download_path(space, video_id, subtitle.id),
+        filename: true,
+        format: "VTT"
       ),
       menu_item("replace-subtitle-#{subtitle.id}", gettext("Replace VTT"), "hero-arrow-up-tray",
         event: "replace_subtitle",
