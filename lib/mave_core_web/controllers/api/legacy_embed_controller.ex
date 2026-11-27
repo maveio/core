@@ -33,7 +33,7 @@ defmodule MaveCoreWeb.Api.LegacyEmbedController do
   def collection(conn, %{"token" => token} = params) do
     with {:ok, %{claims: claims, space: %Space{} = space}} <- Spaces.validate_api_jwt(token, true),
          root <- jwt_collection_root(claims),
-         {:ok, response} <- PublicApi.jwt_collection_response(space, root, params["embed"]) do
+         {:ok, response} <- PublicApi.jwt_collection_response(space, root, params) do
       json(conn, response)
     else
       {:error, "Invalid JWT (sub is required)"} ->

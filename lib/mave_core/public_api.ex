@@ -18,6 +18,7 @@ defmodule MaveCore.PublicApi do
   alias MaveCore.Transcription.Vocabulary
 
   @default_per_page 15
+  @collection_per_page 25
   @max_per_page 100
 
   def get_embed_by_hash(%Space{} = space, hash) when is_binary(hash) do
@@ -94,37 +95,80 @@ defmodule MaveCore.PublicApi do
     count_embeds(space, Keyword.put(opts, :types, [:collection]))
   end
 
-  def jwt_collection_response(%Space{} = space, root, embed_identifier \\ nil) do
+  def jwt_collection_response(%Space{} = space, root, params) do
     with {:ok, root} <- resolve_jwt_collection_root(space, root),
          {:ok, collection_root} <-
-           maybe_resolve_jwt_nested_collection(space, root, embed_identifier) do
-      items = list_jwt_collection_items(space, collection_root)
+           maybe_resolve_jwt_nested_collection(space, root, params["embed"]) do
+      page = normalize_page(collection_int(params["page"], 1))
+      per_page = normalize_per_page(collection_int(params["per_page"], @collection_per_page))
 
-      videos =
-        items
-        |> Enum.filter(&video_with_current_video?/1)
-        |> Enum.map(&video_response(space, &1))
+      opts = [
+        uploaded: true,
+        page: page,
+        per_page: per_page,
+        order: params["order"] || "newest"
+      ]
 
-      collections =
-        items
-        |> Enum.filter(&match?(%Embed{type: :collection}, &1))
-        |> Enum.map(&collection_response(space, &1))
+      {videos, count, folders} = jwt_collection_items(space, collection_root, opts)
+      folder_counts = Embeds.folder_video_counts(space, Enum.map(folders, & &1.id))
 
-      embeds =
-        items
-        |> Enum.filter(&video_with_current_video?/1)
-        |> Enum.map(&embed_payload(space, &1))
+      response =
+        page_metadata(page, per_page, count)
+        |> Map.merge(%{
+          name: jwt_collection_name(collection_root),
+          collections: Enum.map(folders, &collection_response(space, &1, folder_counts)),
+          metrics_key: nil
+        })
 
-      {:ok,
-       %{
-         name: jwt_collection_name(collection_root),
-         embeds: embeds,
-         videos: videos,
-         collections: collections,
-         metrics_key: nil
-       }}
+      {:ok, Map.merge(response, jwt_collection_videos(space, videos, params["view"]))}
     end
   end
+
+  defp jwt_collection_items(space, nil, opts), do: list_jwt_collection_items(space, nil, opts)
+
+  defp jwt_collection_items(space, %Embed{collection_id: id}, opts) when is_binary(id),
+    do: list_jwt_collection_items(space, id, opts)
+
+  defp jwt_collection_items(_space, _root, _opts), do: {[], 0, []}
+
+  defp list_jwt_collection_items(space, collection_id, opts) do
+    opts = Keyword.put(opts, :collection_id, collection_id)
+    count = count_videos(space, opts)
+
+    videos =
+      if opts[:page] <= pages(count, opts[:per_page]), do: list_videos(space, opts), else: []
+
+    {videos, count, list_jwt_collection_folders(space, collection_id)}
+  end
+
+  defp jwt_collection_videos(space, videos, "list") do
+    %{videos: Enum.map(videos, &collection_video_summary(space, &1))}
+  end
+
+  defp jwt_collection_videos(space, videos, _view) do
+    %{
+      videos: Enum.map(videos, &video_response(space, &1)),
+      embeds: Enum.map(videos, &embed_payload(space, &1))
+    }
+  end
+
+  defp collection_video_summary(space, embed) do
+    %{
+      id: public_embed_id(space, embed),
+      name: embed_name(embed),
+      created: maybe_unix(embed.inserted_at),
+      duration: current_video(embed).duration
+    }
+  end
+
+  defp collection_int(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {number, ""} when number > 0 -> number
+      _ -> default
+    end
+  end
+
+  defp collection_int(_value, default), do: default
 
   def jwt_scoped_video_deletable?(%Space{} = space, %Embed{type: :video} = embed, root) do
     case resolve_jwt_collection_root(space, root) do
@@ -204,8 +248,10 @@ defmodule MaveCore.PublicApi do
   end
 
   def collection_response(%Space{} = space, %Embed{type: :collection} = embed) do
-    counts = Embeds.folder_video_counts(space, [embed.id])
+    collection_response(space, embed, Embeds.folder_video_counts(space, [embed.id]))
+  end
 
+  defp collection_response(%Space{} = space, %Embed{type: :collection} = embed, counts) do
     %{
       id: public_embed_id(space, embed),
       name: folder_name(embed),
@@ -216,15 +262,17 @@ defmodule MaveCore.PublicApi do
   end
 
   def list_response(data, page, per_page, total_items) do
+    Map.merge(page_metadata(page, per_page, total_items), %{object: "list", data: data})
+  end
+
+  defp page_metadata(page, per_page, total_items) do
     total_pages = pages(total_items, per_page)
 
     %{
-      object: "list",
-      data: data,
       total_pages: total_pages,
       current_page: page,
       total_items: total_items,
-      has_more: page != total_pages
+      has_more: page < total_pages
     }
   end
 
@@ -282,25 +330,42 @@ defmodule MaveCore.PublicApi do
       end
 
     query
+    |> maybe_order_embeds(Keyword.get(opts, :order))
     |> offset(^((page - 1) * per_page))
     |> limit(^per_page)
     |> Repo.all()
   end
 
-  defp list_jwt_collection_items(%Space{} = space, nil) do
+  defp list_jwt_collection_folders(%Space{} = space, nil) do
     space
-    |> root_query(types: [:video, :collection], archived: false)
+    |> root_query(types: [:collection], archived: false)
     |> Repo.all()
   end
 
-  defp list_jwt_collection_items(%Space{} = space, %Embed{collection_id: collection_id})
-       when is_binary(collection_id) do
+  defp list_jwt_collection_folders(%Space{} = space, collection_id) do
     space
-    |> collection_query(collection_id, types: [:video, :collection], archived: false)
+    |> collection_query(collection_id, types: [:collection], archived: false)
     |> Repo.all()
   end
 
-  defp list_jwt_collection_items(_space, _root), do: []
+  defp maybe_order_embeds(query, nil), do: query
+
+  defp maybe_order_embeds(query, order) when order in ["az", "za"] do
+    direction = if order == "az", do: :asc, else: :desc
+
+    query
+    |> exclude(:order_by)
+    |> order_by([e, ..., a, v, _c, _s], [
+      {^direction,
+       fragment("lower(coalesce(nullif(?, ''), nullif(?, ''), 'Untitled'))", a.name, v.file_name)},
+      asc: e.id
+    ])
+  end
+
+  defp maybe_order_embeds(query, order) do
+    direction = if order == "oldest", do: :asc, else: :desc
+    query |> exclude(:order_by) |> order_by([e], [{^direction, e.inserted_at}, {:asc, e.id}])
+  end
 
   defp input_url_probe_options(input_url) do
     PublicHttpUrl.req_options(input_url,
@@ -720,11 +785,6 @@ defmodule MaveCore.PublicApi do
   end
 
   defp filetype(_video), do: nil
-
-  defp video_with_current_video?(%Embed{type: :video} = embed),
-    do: match?(%Video{}, current_video(embed))
-
-  defp video_with_current_video?(_embed), do: false
 
   defp resolve_jwt_collection_root(%Space{} = _space, nil), do: {:ok, nil}
   defp resolve_jwt_collection_root(%Space{} = _space, ""), do: {:ok, nil}
