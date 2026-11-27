@@ -182,6 +182,58 @@ defmodule MaveCoreWeb.Api.LegacyEmbedControllerTest do
     assert Enum.map(collections, & &1["id"]) == ["#{space.hash}#{child_folder.hash}"]
   end
 
+  test "paginates videos in the requested order and keeps folders available", %{
+    conn: conn,
+    key: key,
+    space: space,
+    folder: folder,
+    root_video: root_video
+  } do
+    ranked_videos =
+      for number <- 1..27 do
+        name = "Video " <> String.pad_leading(to_string(number), 2, "0")
+        {:ok, embed} = Embeds.create_video_embed(space, %{name: name})
+        attach_current_video(space, embed)
+      end
+
+    {:ok, _pending} = Embeds.create_video_embed(space, %{name: "Pending video"})
+    token = sign_jwt(key, %{"sub" => space.id})
+    path = ~p"/api/v1/collection/#{token}"
+    folder_id = space.hash <> folder.hash
+
+    assert %{
+             "videos" => videos,
+             "embeds" => embeds,
+             "collections" => [%{"id" => ^folder_id}],
+             "current_page" => 1,
+             "has_more" => true,
+             "total_items" => 28,
+             "total_pages" => 2
+           } = conn |> get(path) |> json_response(200)
+
+    assert length(videos) == 25
+    assert Enum.map(embeds, & &1["id"]) == Enum.map(videos, & &1["id"])
+
+    first = conn |> get(path, %{"order" => "az", "view" => "list"}) |> json_response(200)
+    refute Map.has_key?(first, "embeds")
+    assert [first_video | _] = first["videos"]
+    assert Map.keys(first_video) |> Enum.sort() == ~w(created duration id name)
+
+    second =
+      conn
+      |> get(path, %{"page" => 2, "order" => "az", "view" => "list"})
+      |> json_response(200)
+
+    assert %{
+             "collections" => [%{"id" => ^folder_id}],
+             "current_page" => 2,
+             "has_more" => false
+           } = second
+
+    expected_ids = Enum.map([root_video | ranked_videos], &(space.hash <> &1.hash))
+    assert Enum.map(first["videos"] ++ second["videos"], & &1["id"]) == expected_ids
+  end
+
   test "GET /api/v1/collection/:token accepts nested embed param", %{
     conn: conn,
     key: key,
