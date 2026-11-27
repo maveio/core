@@ -214,14 +214,11 @@ defmodule MaveCoreWeb.Api.LegacyEmbedControllerTest do
     assert length(videos) == 25
     assert Enum.map(embeds, & &1["id"]) == Enum.map(videos, & &1["id"])
 
-    first = conn |> get(path, %{"order" => "az", "compact" => "true"}) |> json_response(200)
-    refute Map.has_key?(first, "embeds")
-    assert [first_video | _] = first["videos"]
-    assert Map.keys(first_video) |> Enum.sort() == ~w(created duration id name)
+    first = conn |> get(path, %{"order" => "az"}) |> json_response(200)
 
     second =
       conn
-      |> get(path, %{"page" => 2, "order" => "az", "compact" => "true"})
+      |> get(path, %{"page" => 2, "order" => "az"})
       |> json_response(200)
 
     assert %{
@@ -232,6 +229,7 @@ defmodule MaveCoreWeb.Api.LegacyEmbedControllerTest do
 
     expected_ids = Enum.map([root_video | ranked_videos], &(space.hash <> &1.hash))
     assert Enum.map(first["videos"] ++ second["videos"], & &1["id"]) == expected_ids
+    assert Enum.map(first["embeds"] ++ second["embeds"], & &1["id"]) == expected_ids
   end
 
   test "GET /api/v1/collection/:token accepts nested embed param", %{
