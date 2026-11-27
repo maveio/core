@@ -214,14 +214,14 @@ defmodule MaveCoreWeb.Api.LegacyEmbedControllerTest do
     assert length(videos) == 25
     assert Enum.map(embeds, & &1["id"]) == Enum.map(videos, & &1["id"])
 
-    first = conn |> get(path, %{"order" => "az", "view" => "list"}) |> json_response(200)
+    first = conn |> get(path, %{"order" => "az", "compact" => "true"}) |> json_response(200)
     refute Map.has_key?(first, "embeds")
     assert [first_video | _] = first["videos"]
     assert Map.keys(first_video) |> Enum.sort() == ~w(created duration id name)
 
     second =
       conn
-      |> get(path, %{"page" => 2, "order" => "az", "view" => "list"})
+      |> get(path, %{"page" => 2, "order" => "az", "compact" => "true"})
       |> json_response(200)
 
     assert %{
