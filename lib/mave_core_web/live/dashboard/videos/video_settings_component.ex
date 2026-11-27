@@ -2800,10 +2800,6 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
 
   defp subtitle_menu_items(subtitle, space, video_id) do
     [
-      menu_item("subtitle-edit-text-#{subtitle.id}", gettext("Edit text"), "hero-pencil-square",
-        event: "edit_subtitle_text",
-        value: %{id: subtitle.id}
-      ),
       menu_item(
         "subtitle-download-#{subtitle.id}",
         gettext("Download text"),
@@ -2815,6 +2811,11 @@ defmodule MaveCoreWeb.Dashboard.Videos.VideoSettingsComponent do
       menu_item("replace-subtitle-#{subtitle.id}", gettext("Replace VTT"), "hero-arrow-up-tray",
         event: "replace_subtitle",
         value: %{id: subtitle.id}
+      ),
+      menu_item("subtitle-edit-text-#{subtitle.id}", gettext("Edit text"), "hero-pencil-square",
+        event: "edit_subtitle_text",
+        value: %{id: subtitle.id},
+        separator: true
       ),
       menu_item("delete-subtitle-#{subtitle.id}", gettext("Delete"), "hero-trash",
         event: "request_media_delete",
