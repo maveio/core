@@ -116,12 +116,13 @@ defmodule MaveCore.PublicApi do
         page_metadata(page, per_page, count)
         |> Map.merge(%{
           name: jwt_collection_name(collection_root),
+          videos: Enum.map(videos, &video_response(space, &1)),
+          embeds: Enum.map(videos, &embed_payload(space, &1)),
           collections: Enum.map(folders, &collection_response(space, &1, folder_counts)),
           metrics_key: nil
         })
 
-      {:ok,
-       Map.merge(response, jwt_collection_videos(space, videos, params["compact"] == "true"))}
+      {:ok, response}
     end
   end
 
@@ -140,26 +141,6 @@ defmodule MaveCore.PublicApi do
       if opts[:page] <= pages(count, opts[:per_page]), do: list_videos(space, opts), else: []
 
     {videos, count, list_jwt_collection_folders(space, collection_id)}
-  end
-
-  defp jwt_collection_videos(space, videos, true) do
-    %{videos: Enum.map(videos, &collection_video_summary(space, &1))}
-  end
-
-  defp jwt_collection_videos(space, videos, false) do
-    %{
-      videos: Enum.map(videos, &video_response(space, &1)),
-      embeds: Enum.map(videos, &embed_payload(space, &1))
-    }
-  end
-
-  defp collection_video_summary(space, embed) do
-    %{
-      id: public_embed_id(space, embed),
-      name: embed_name(embed),
-      created: maybe_unix(embed.inserted_at),
-      duration: current_video(embed).duration
-    }
   end
 
   defp collection_int(value, default) when is_binary(value) do
