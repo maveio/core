@@ -120,7 +120,8 @@ defmodule MaveCore.PublicApi do
           metrics_key: nil
         })
 
-      {:ok, Map.merge(response, jwt_collection_videos(space, videos, params["view"]))}
+      {:ok,
+       Map.merge(response, jwt_collection_videos(space, videos, params["compact"] == "true"))}
     end
   end
 
@@ -141,11 +142,11 @@ defmodule MaveCore.PublicApi do
     {videos, count, list_jwt_collection_folders(space, collection_id)}
   end
 
-  defp jwt_collection_videos(space, videos, "list") do
+  defp jwt_collection_videos(space, videos, true) do
     %{videos: Enum.map(videos, &collection_video_summary(space, &1))}
   end
 
-  defp jwt_collection_videos(space, videos, _view) do
+  defp jwt_collection_videos(space, videos, false) do
     %{
       videos: Enum.map(videos, &video_response(space, &1)),
       embeds: Enum.map(videos, &embed_payload(space, &1))
