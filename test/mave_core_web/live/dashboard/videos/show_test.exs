@@ -2379,10 +2379,15 @@ defmodule MaveCoreWeb.Live.Dashboard.Videos.ShowTest do
     assert html =~ "English"
     assert html =~ "add_subtitle"
     assert has_element?(view, "#subtitle-edit-text-#{subtitle.id}", "Edit text")
+
+    assert has_element?(
+             view,
+             ~s(#subtitle-files-#{subtitle.id} a[href="#{subtitle_download_path}"][download]),
+             "Download text"
+           )
+
     view |> element("#replace-subtitle-#{subtitle.id}", "Replace VTT") |> render_click()
     assert has_element?(view, "[id^='subtitle-picker-#{subtitle.id}-'] input[type=file]")
-    refute has_element?(view, ~s(a[href="#{subtitle_download_path}"]))
-    refute has_element?(view, ~s(a[href="#{subtitle_download_path}"][target]))
     assert html =~ ~s(id="delete-subtitle-#{subtitle.id}")
     assert html =~ "Delete"
     assert html =~ "file_menu"
